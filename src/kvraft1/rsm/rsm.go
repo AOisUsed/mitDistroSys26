@@ -3,8 +3,8 @@ package rsm
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"6.5840/debuglog"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
 	"6.5840/raft1"
@@ -97,15 +97,23 @@ func (rsm *RSM) readApply() {
 		// whenever getting new apply message, meaning that either a command or a snapshot has been commited, safe to execute on the server
 		if applyMsg.CommandValid { // if it's a command, let the respective Submit() rpc knows about it
 			commandId := applyMsg.CommandIndex
-			opMsg := applyMsg.Command.(Op)
+			var applyRes applyResult
+			if applyMsg.Command == nil {
+				// this is a raft no-op
+				applyRes = applyResult{
+					opId:  -1,
+					value: nil,
+				}
+			} else {
+				opMsg := applyMsg.Command.(Op)
+				debuglog.D4BPrintf("%v read apply op: %v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
 
-			D4BPrintf("%v read apply %v at %v \n", rsm.me, opMsg.Id, commandId)
+				result := rsm.sm.DoOp(opMsg.Req)
 
-			result := rsm.sm.DoOp(opMsg.Req)
-
-			res := applyResult{
-				opId:  opMsg.Id,
-				value: result,
+				applyRes = applyResult{
+					opId:  opMsg.Id,
+					value: result,
+				}
 			}
 
 			// if this server is the leader, wake up Submit()
@@ -115,14 +123,14 @@ func (rsm *RSM) readApply() {
 
 			// if a Submit is listening for it, send the result.
 			if exists {
-				ch <- res
+				ch <- applyRes
 			}
 		} else { // if it's a snapshot, todo: do later
 
 		}
 	}
 
-	D4BPrintf("%v applyCh closed", rsm.me)
+	debuglog.D4BPrintf("%v applyCh closed", rsm.me)
 	// let all pending Submit() know that the raft has shutdown, therefore not possible to push forward apply. and they should quit
 	close(rsm.stopSubmit)
 }
@@ -150,10 +158,10 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	}
 
 	rsm.mu.Lock()
-	D4BPrintf("%v start Submit %v\n", rsm.me, req)
-	defer D4BPrintf("%v done Submit %v\n", rsm.me, req)
+	//D4BPrintf("%v start Submit %v\n", rsm.me, req)
+	//defer D4BPrintf("%v done Submit %v\n", rsm.me, req)
 	logId, _, isLeader := rsm.Raft().Start(op)
-	D4BPrintf("rsm%v Start op %v: %v at %v\n", rsm.me, op.Id, op.Req, logId)
+	debuglog.D4BPrintf("rsm%v Start op %v: %v at %v\n", rsm.me, op.Id, op.Req, logId)
 
 	if !isLeader {
 		return rpc.ErrWrongLeader, nil
@@ -175,24 +183,34 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 	for {
 		select {
-		case <-time.After(time.Millisecond * 300):
-			_, isStillLeader := rsm.rf.GetState()
-			if !isStillLeader {
-				D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
-				rsm.mu.Lock()
-				delete(rsm.resultByLogId, logId)
-				rsm.mu.Unlock()
-				return rpc.ErrWrongLeader, nil
-			}
+		//case <-time.After(time.Millisecond * 300):
+		//	// N.B. problem with returning ErrWrongLeader immediately after its leadership expires:
+		//	// the server doesn't know whether the Command actually gets committed or not,
+		//	// if it returns ErrWrongLeader after losing leadership in the case that the Command actually got committed, this is wrong
+		//	// because client will retry the same Command, in believing that this Command never got consensus and executed on all raft servers, but it's actually done!
+		//	// despite that exact-once semantics can be achieved from the server side to cancel duplicate operations,
+		//	// but it doesn't mean that rsm should allow this happen.
+		//
+		//	_, isStillLeader := rsm.rf.GetState()
+		//	if !isStillLeader {
+		//		debuglog.D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
+		//		rsm.mu.Lock()
+		//		if _, exists := rsm.resultByLogId[logId]; !exists {
+		//
+		//		}
+		//		delete(rsm.resultByLogId, logId)
+		//		rsm.mu.Unlock()
+		//		return rpc.ErrWrongLeader, nil
+		//	}
 		case result := <-resultCh:
-			D4BPrintf("rsm%v Submit %v \n", rsm.me, op)
+			debuglog.D4BPrintf("rsm%v Submit %v \n", rsm.me, op)
 			rsm.mu.Lock()
 			delete(rsm.resultByLogId, logId)
 
 			// if the req at the specific log index is replaced by other request (identified by opId),
 			// it means that this server is no longer a leader. so it should stop serving the pending Submits
 			if result.opId != OpId {
-				D4BPrintf("%v req doesn't match: expect %v, get %v\n, will stop all pending submits", rsm.me, OpId, result.opId)
+				debuglog.D4BPrintf("%v req doesn't match: expect %v, get %v\n, will stop all pending submits", rsm.me, OpId, result.opId)
 				rsm.mu.Unlock()
 				return rpc.ErrWrongLeader, nil
 			}
@@ -201,7 +219,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		case <-stopSubmit: // whenever get notification of stop submit, quit the Submit immediately
 			// this case is triggered when applyCh from the raft is closed, meaning that the raft is shut down.
 			// so all pending submit wouldn't be able to finish and must quit quickly as well.
-			D4APrintf("rsm%v: Submit %v is stopped\n", rsm.me, op)
+			debuglog.D4APrintf("rsm%v: Submit %v is stopped\n", rsm.me, op)
 			rsm.mu.Lock()
 			delete(rsm.resultByLogId, logId)
 			rsm.mu.Unlock()

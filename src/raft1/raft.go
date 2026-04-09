@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"6.5840/debuglog"
 	"6.5840/labgob"
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
@@ -167,7 +168,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	D3DPrintf("%v: snapshot at %v, Is leader ? %v ", rf.me, index, rf.state == leader)
+	debuglog.D3DPrintf("%v: snapshot at %v, Is leader ? %v ", rf.me, index, rf.state == leader)
 
 	// truncate the log, after index (lastIncludedIndex)
 	truncatedLog := append([]*LogEntry{}, rf.Log[rf.physicalIndex(index):]...)
@@ -231,12 +232,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//converted to follower if getting higher AppendEntries
 	if rf.CurrentTerm < args.Term {
 		rf.becomeFollowerWithTerm(args.Term)
-		D3APrintf("%v at %v resets VotedFor upon receiving AppendEntries", rf.me, rf.CurrentTerm)
+		debuglog.D3APrintf("%v at %v resets VotedFor upon receiving AppendEntries", rf.me, rf.CurrentTerm)
 	} else if rf.CurrentTerm == args.Term { //if getting equal term AppendEntries,
 		if rf.state == candidate { // and is in election, step down to be a follower
 			rf.CurrentTerm = args.Term
 			rf.state = follower
-			D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
+			debuglog.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
 		}
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm
@@ -311,7 +312,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.Log = rf.Log[:rf.physicalIndex(args.PrevLogIndex+1+i)] //truncate the conflicting entry and all following ones
 		for j := i; j < len(args.Entries); j++ {
-			D3DPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
+			debuglog.D3DPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
 		}
 		rf.Log = append(rf.Log, args.Entries[i:]...) // append unvisited remaining logs from the leader entries to this raft's Log
 	}
@@ -440,24 +441,24 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if rf.CurrentTerm < args.Term {
 		if rf.state == candidate {
-			D3APrintf("%v candidate at %v -> follower for higher term RequestVote", rf.me, rf.CurrentTerm)
+			debuglog.D3APrintf("%v candidate at %v -> follower for higher term RequestVote", rf.me, rf.CurrentTerm)
 		}
 		rf.becomeFollowerWithTerm(args.Term)
-		D3APrintf("%v at %v resets VotedFor upon receiving RequestVote", rf.me, rf.CurrentTerm)
+		debuglog.D3APrintf("%v at %v resets VotedFor upon receiving RequestVote", rf.me, rf.CurrentTerm)
 	}
 
 	if args.Term >= rf.CurrentTerm && (rf.VotedFor == args.CandidateId || rf.VotedFor == -1) { // if receiver didn't vote for itself (it's not a candidate)
 		if args.LastLogTerm > rf.lastLogTerm() || // and if the candidate term is greater than the receiver,
 			(args.LastLogTerm == rf.lastLogTerm() && args.LastLogIndex >= rf.lastLogIndex()) { //or of the same term but candidate has number of entries >= to receiver
 			rf.lastHeartbeatTime = time.Now() // update lastHeartbeatTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
-			D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
+			debuglog.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
 			rf.state = follower
 		}
 	} else {
-		D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
+		debuglog.D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 	}
@@ -522,7 +523,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = rf.lastLogIndex()
 		term = rf.CurrentTerm
 		isLeader = true
-		D3BPrintf("%v Start(%v), CommandIndex: %v", rf.me, command, index)
+		debuglog.D3BPrintf("%v Start(%v), CommandIndex: %v", rf.me, command, index)
 		// signal replicationDispatcher, or no when there exists already one pending request
 		select {
 		case rf.logAppendedCh <- struct{}{}:
@@ -614,7 +615,7 @@ func (rf *Raft) advanceCommitIndex() {
 		}
 		if count > len(rf.peers)/2 {
 			rf.commitIndex = N
-			D3BPrintf("%v Advancing commit index to %d", rf.me, rf.commitIndex)
+			debuglog.D3BPrintf("%v Advancing commit index to %d", rf.me, rf.commitIndex)
 			//trigger applier
 			select {
 			case rf.applyReadyCh <- struct{}{}:
@@ -647,7 +648,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	}
 	// case where the leader doesn't have the log to send to the follower, send InstallSnapshot instead
 	if rf.LastIncludedIndex >= rf.nextIndex[i] {
-		D3DPrintf("%v-InstallSnapshot,lastIncluded:%v->%v", rf.me, rf.LastIncludedIndex, i)
+		debuglog.D3DPrintf("%v-InstallSnapshot,lastIncluded:%v->%v", rf.me, rf.LastIncludedIndex, i)
 		args := rf.newInstallSnapshotArgs()
 		rf.mu.Unlock()
 		reply := &InstallSnapshotReply{}
@@ -705,7 +706,7 @@ func (rf *Raft) replicateToFollower(i int) {
 		}
 		rf.matchIndex[i] = newMatchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
-		D3BPrintf("%v-updated AppendEntries->%v till %v", rf.me, i, rf.matchIndex[i])
+		debuglog.D3BPrintf("%v-updated AppendEntries->%v till %v", rf.me, i, rf.matchIndex[i])
 
 		//if there exists an N such that N > commitIndex,
 		//a majority of matchIndex[i]>=N,
@@ -757,7 +758,7 @@ func (rf *Raft) applier() {
 					// apply snapshot to state machine
 					rf.applyCh <- snapshotMsg
 					//log.Printf("%v apply snapshot: Index:%3d\n", rf.me, snapshotMsg.SnapshotIndex)
-					D3DPrintf("%v apply snapshot: Index:%3d\n", rf.me, snapshotMsg.SnapshotIndex)
+					debuglog.D3DPrintf("%v apply snapshot: Index:%3d\n", rf.me, snapshotMsg.SnapshotIndex)
 
 					// update lastApplied
 					rf.mu.Lock()
@@ -773,7 +774,7 @@ func (rf *Raft) applier() {
 
 					// apply log entry to state machine
 					rf.applyCh <- logMsg
-					D3DPrintf("%v apply log: command:%20d,  commandIndex:%3v\n", rf.me, logMsg.Command, logMsg.CommandIndex)
+					debuglog.D3DPrintf("%v apply log: command:%20d,  commandIndex:%3v\n", rf.me, logMsg.Command, logMsg.CommandIndex)
 
 					// update lastApplied
 					rf.mu.Lock()
@@ -815,7 +816,7 @@ func (rf *Raft) startElection() {
 	rf.state = candidate
 	rf.VotedFor = rf.me //vote for itself
 	rf.persist()
-	D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
+	debuglog.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
 
 	args := &RequestVoteArgs{
 		Term:         rf.CurrentTerm,
@@ -835,7 +836,7 @@ func (rf *Raft) startElection() {
 		//request vote to i
 		go func(i int) {
 			reply := &RequestVoteReply{}
-			D3APrintf("%v at %v: is to request vote from %v", rf.me, args.Term, i)
+			debuglog.D3APrintf("%v at %v: is to request vote from %v", rf.me, args.Term, i)
 			ok := rf.sendRequestVote(i, args, reply)
 			if !ok {
 				return
@@ -849,13 +850,13 @@ func (rf *Raft) startElection() {
 			}
 			if reply.VoteGranted {
 				if rf.state != candidate || reply.Term != rf.CurrentTerm {
-					D3APrintf("%v at %v <-stale vote- %v at %v", rf.me, args.Term, i, reply.Term)
+					debuglog.D3APrintf("%v at %v <-stale vote- %v at %v", rf.me, args.Term, i, reply.Term)
 					return
 				}
-				D3APrintf("%v at %v <-vote- %v", rf.me, args.Term, i)
+				debuglog.D3APrintf("%v at %v <-vote- %v", rf.me, args.Term, i)
 				voteCount++
 				if voteCount > len(rf.peers)/2 {
-					D3APrintf("%v at %v wins ", rf.me, args.Term)
+					debuglog.D3APrintf("%v at %v wins ", rf.me, args.Term)
 					rf.state = leader
 					//reinitialise volatile state on leaders
 					for j := range rf.nextIndex {
@@ -863,6 +864,14 @@ func (rf *Raft) startElection() {
 					}
 					for j := range rf.matchIndex {
 						rf.matchIndex[j] = 0
+					}
+					// append a no-op log
+					rf.Log = append(rf.Log, &LogEntry{Term: rf.CurrentTerm, Command: nil})
+					rf.persist()
+
+					select {
+					case rf.logAppendedCh <- struct{}{}:
+					default:
 					}
 				}
 			}
@@ -939,7 +948,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.snapshotPending = false
 	rf.kill = make(chan struct{})
 
-	D3APrintf("%v starts as a follower", rf.me)
+	debuglog.D3APrintf("%v starts as a follower", rf.me)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())

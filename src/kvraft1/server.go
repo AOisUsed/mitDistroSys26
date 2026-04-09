@@ -3,6 +3,7 @@ package kvraft
 import (
 	"sync"
 
+	"6.5840/debuglog"
 	"6.5840/kvraft1/rsm"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
@@ -32,48 +33,57 @@ type KVServer struct {
 func (kv *KVServer) DoOp(req any) any {
 	// Your code here
 
+	var reply any
 	switch typedReq := req.(type) {
 	case rpc.GetArgs:
-		rsm.D4BPrintf("server%v: DoOp: Get req %v, key:%s \n", kv.me, req, typedReq.Key)
 		kv.rwMu.RLock()
 		verVal, exists := kv.kvm[typedReq.Key]
 		kv.rwMu.RUnlock()
 		if !exists {
-			return rpc.GetReply{
+			reply = rpc.GetReply{
 				Err: rpc.ErrNoKey,
 			}
+		} else {
+			reply = rpc.GetReply{
+				Value:   verVal.Value,
+				Version: verVal.Version,
+				Err:     rpc.OK,
+			}
 		}
-		return rpc.GetReply{
-			Value:   verVal.Value,
-			Version: verVal.Version,
-			Err:     rpc.OK,
-		}
+		debuglog.D4BPrintf("server%v: DoOp: Get req %v, key:%s, reply:%v \n", kv.me, req, typedReq.Key, reply)
 	case rpc.PutArgs:
-		rsm.D4BPrintf("server%v: DoOp: Put req %v, %v-%v \n", kv.me, req, typedReq.Key, typedReq.Value)
-		reply := rpc.PutReply{}
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 		if v, exists := kv.kvm[typedReq.Key]; exists {
 			if v.Version == typedReq.Version { //version matches
 				kv.kvm[typedReq.Key].Value = typedReq.Value
 				kv.kvm[typedReq.Key].Version += 1
-				reply.Err = rpc.OK
+				reply = rpc.PutReply{
+					Err: rpc.OK,
+				}
 			} else { //has the key, version doesn't match
-				reply.Err = rpc.ErrVersion
+				reply = rpc.PutReply{
+					Err: rpc.ErrVersion,
+				}
 			}
 		} else {
 			if typedReq.Version == 0 {
 				kv.kvm[typedReq.Key] = &VersionedValue{Value: typedReq.Value, Version: 1}
-				reply.Err = rpc.OK
+				reply = rpc.PutReply{
+					Err: rpc.OK,
+				}
 			} else { //doesn't have the key, and the version isn't correct either
-				reply.Err = rpc.ErrNoKey
+				reply = rpc.PutReply{
+					Err: rpc.ErrNoKey,
+				}
 			}
 		}
-		return reply
+		debuglog.D4BPrintf("server%v: DoOp: Put req %v, %v-%v, reply:%v \n", kv.me, req, typedReq.Key, typedReq.Value, reply)
 	default:
-		rsm.D4BPrintf("DoOp: Unknown req type %T\n", req)
-		return nil // it's neither Get, nor Put.
+		debuglog.D4BPrintf("DoOp: Unknown req type %T\n", req)
+		reply = nil // it's neither Get, nor Put.
 	}
+	return reply
 }
 
 func (kv *KVServer) Snapshot() []byte {
@@ -97,7 +107,7 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 		reply.Err = rpcErr
 	}
 
-	rsm.D4BPrintf("server%v:Get %v, reply: %v, %v, %v \n", kv.me, args.Key, reply.Value, reply.Version, reply.Err)
+	debuglog.D4BPrintf("server%v:Get %v, reply: %v, %v, %v \n", kv.me, args.Key, reply.Value, reply.Version, reply.Err)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
@@ -114,7 +124,7 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	} else { // if rpc isn't ok, meaning this server is not the leader,
 		reply.Err = rpcErr
 	}
-	rsm.D4BPrintf("server%v: Put %v:%v, reply: %v \n", kv.me, args.Key, args.Value, reply.Err)
+	debuglog.D4BPrintf("server%v: Put %v:%v, reply: %v \n", kv.me, args.Key, args.Value, reply.Err)
 }
 
 // StartKVServer() and MakeRSM() must return quickly, so they should
