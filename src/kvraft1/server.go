@@ -1,6 +1,10 @@
 package kvraft
 
 import (
+	"bytes"
+	"fmt"
+	"log"
+	"strings"
 	"sync"
 
 	"6.5840/debug"
@@ -50,7 +54,7 @@ func (kv *KVServer) DoOp(req any) any {
 				Err:     rpc.OK,
 			}
 		}
-		debug.D4BPrintf("server%v: DoOp: Get req %v, key:%s, reply:%v \n", kv.me, req, typedReq.Key, reply)
+		debug.D4BPrintf("server%v: DoOp: Get req %v, reply:%v \n", kv.me, req, reply)
 	case rpc.PutArgs:
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
@@ -78,7 +82,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			}
 		}
-		debug.D4BPrintf("server%v: DoOp: Put req %v, %v-%v, reply:%v \n", kv.me, req, typedReq.Key, typedReq.Value, reply)
+		debug.D4BPrintf("server%v: DoOp: Put req %v, reply:%v \n", kv.me, req, reply)
 	default:
 		debug.D4BPrintf("DoOp: Unknown req type %T\n", req)
 		reply = nil // it's neither Get, nor Put.
@@ -88,11 +92,59 @@ func (kv *KVServer) DoOp(req any) any {
 
 func (kv *KVServer) Snapshot() []byte {
 	// Your code here
-	return nil
+
+	//debug.D4CPrintf("server%v: Snapshot()\n", kv.me)
+	// make a copy of kv
+	kv.rwMu.RLock()
+	var snapshot = make(map[string]*VersionedValue)
+	for k, v := range kv.kvm {
+		copiedV := &VersionedValue{
+			Value:   v.Value,
+			Version: v.Version,
+		}
+		snapshot[k] = copiedV
+	}
+	kv.rwMu.RUnlock()
+
+	// encode copied snapshot
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	err := e.Encode(snapshot)
+	if err != nil {
+		log.Fatal(err)
+		return nil
+	}
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
 	// Your code here
+	if data == nil || len(data) < 1 {
+		return
+	}
+
+	//debug.D4CPrintf("server%v: Restore()\n", kv.me)
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var kvm map[string]*VersionedValue
+	err := d.Decode(&kvm)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	var sb strings.Builder
+	for k, v := range kvm {
+		s := fmt.Sprintf("%v-%v\t", k, v)
+		sb.WriteString(s)
+	}
+
+	debug.D4CPrintf("server%v: Restored from snapshot:%v\n", kv.me, sb.String())
+
+	kv.rwMu.Lock()
+	defer kv.rwMu.Unlock()
+	kv.kvm = kvm
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -124,7 +176,7 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	} else { // if rpc isn't ok, meaning this server is not the leader,
 		reply.Err = rpcErr
 	}
-	debug.D4BPrintf("server%v: Put %v:%v, reply: %v \n", kv.me, args.Key, args.Value, reply.Err)
+	debug.D4BPrintf("server%v: Put %v:%v,version:%v, reply: %v \n", kv.me, args.Key, args.Value, args.Version, reply.Err)
 }
 
 // StartKVServer() and MakeRSM() must return quickly, so they should
@@ -140,7 +192,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 	// You may need initialization code here.
-	kv.kvm = make(map[string]*VersionedValue)
+
+	// only make kvm when it's nil because after reboot, its kvm will be restored from raft snapshot (state machine),
+	// and it should not be overwritten.
+	if kv.kvm == nil {
+		kv.kvm = make(map[string]*VersionedValue)
+	}
 	return []any{kv, kv.rsm.Raft()}
 }
 

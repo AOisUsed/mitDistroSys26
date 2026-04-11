@@ -1,6 +1,7 @@
 package rsm
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -79,6 +80,13 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		opId:          0,
 		stopSubmit:    make(chan struct{}),
 	}
+
+	snapshot := persister.ReadSnapshot()
+	if snapshot != nil && len(snapshot) > 0 {
+		debug.D4CPrintf("rsm%v restores Snapshot from persister\n", rsm.me)
+		rsm.sm.Restore(snapshot)
+	}
+
 	if !useRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
@@ -99,14 +107,15 @@ func (rsm *RSM) readApply() {
 			commandId := applyMsg.CommandIndex
 			var applyRes applyResult
 			if applyMsg.Command == nil {
-				// this is a raft no-op
+				// this is a no-op command from raft
 				applyRes = applyResult{
 					opId:  -1,
 					value: nil,
 				}
 			} else {
+				// this is a real command from client
 				opMsg := applyMsg.Command.(Op)
-				debug.D4BPrintf("%v read apply op: %v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
+				debug.D4BPrintf("%v read apply with opId%v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
 
 				result := rsm.sm.DoOp(opMsg.Req)
 
@@ -125,8 +134,18 @@ func (rsm *RSM) readApply() {
 			if exists {
 				ch <- applyRes
 			}
-		} else { // if it's a snapshot, todo: do later
 
+			// check whether raftstate exceeds the maxraftstate. if so, snapshot
+			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
+				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v,need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
+				snapshot := rsm.sm.Snapshot()
+				rsm.rf.Snapshot(commandId, snapshot)
+			}
+		} else if applyMsg.SnapshotValid { // if it's a snapshot
+			debug.D4BPrintf("rsm%v reads snapshot from applyCh, index:%v, term:%v", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
+			rsm.sm.Restore(applyMsg.Snapshot)
+		} else {
+			log.Fatal("wrong type of apply Message")
 		}
 	}
 

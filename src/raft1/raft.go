@@ -168,6 +168,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	if index <= rf.LastIncludedIndex {
+		// if snapshot has smaller index, meaning it is an older state, ignore it.
+		return
+	}
 	debug.D3DPrintf("%v: snapshot at %v, Is leader ? %v ", rf.me, index, rf.state == leader)
 
 	// truncate the log, after index (lastIncludedIndex)
