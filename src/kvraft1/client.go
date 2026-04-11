@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"6.5840/debuglog"
+	"6.5840/debug"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/kvtest1"
 	"6.5840/tester1"
@@ -47,12 +47,12 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	leader := ck.leader
 	ck.mu.Unlock()
 	for {
-		debuglog.D4BPrintf("clerk -> %v: Get %s \n", ck.servers[leader], key)
+		debug.D4BPrintf("clerk -> %v: Get %s \n", ck.servers[leader], key)
 
 		reply := rpc.GetReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
-			debuglog.D4BPrintf("clerk <- %v: Get %s, reply:%v \n", ck.servers[leader], key, reply)
+			debug.D4BPrintf("clerk <- %v: Get %s, reply:%v \n", ck.servers[leader], key, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey:
@@ -101,13 +101,13 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	firstTry := true
 
 	for {
-		debuglog.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
+		debug.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
 
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			debuglog.D4BPrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
+			debug.D4BPrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey:

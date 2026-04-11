@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"6.5840/debuglog"
+	"6.5840/debug"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
 	"6.5840/raft1"
@@ -106,7 +106,7 @@ func (rsm *RSM) readApply() {
 				}
 			} else {
 				opMsg := applyMsg.Command.(Op)
-				debuglog.D4BPrintf("%v read apply op: %v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
+				debug.D4BPrintf("%v read apply op: %v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
 
 				result := rsm.sm.DoOp(opMsg.Req)
 
@@ -130,7 +130,7 @@ func (rsm *RSM) readApply() {
 		}
 	}
 
-	debuglog.D4BPrintf("%v applyCh closed", rsm.me)
+	debug.D4BPrintf("%v applyCh closed", rsm.me)
 	// let all pending Submit() know that the raft has shutdown, therefore not possible to push forward apply. and they should quit
 	close(rsm.stopSubmit)
 }
@@ -161,7 +161,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	//D4BPrintf("%v start Submit %v\n", rsm.me, req)
 	//defer D4BPrintf("%v done Submit %v\n", rsm.me, req)
 	logId, _, isLeader := rsm.Raft().Start(op)
-	debuglog.D4BPrintf("rsm%v Start op %v: %v at %v\n", rsm.me, op.Id, op.Req, logId)
+	debug.D4BPrintf("rsm%v Start op %v: %v at %v\n", rsm.me, op.Id, op.Req, logId)
 
 	if !isLeader {
 		return rpc.ErrWrongLeader, nil
@@ -185,15 +185,28 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		select {
 		//case <-time.After(time.Millisecond * 300):
 		//	// N.B. problem with returning ErrWrongLeader immediately after its leadership expires:
-		//	// the server doesn't know whether the Command actually gets committed or not,
-		//	// if it returns ErrWrongLeader after losing leadership in the case that the Command actually got committed, this is wrong
-		//	// because client will retry the same Command, in believing that this Command never got consensus and executed on all raft servers, but it's actually done!
+		//	// the server doesn't know whether the Command actually gets committed or not, and cannot differentiate the two cases:
+		//	// case 1: it loses leadership before log getting committed.
+		//	// case 2: it loses leadership after log getting committed.
+		//	//
+		//	// and these two cases should be handled differently.
+		//	// in case 1: this server should reply OK, because the operation was successful.
+		//	// in case 2: this server should reply ErrWrongLeader, because the operation wasn't successful and it's no longer a leader
+		//	//
+		//	// therefore, if it returns ErrWrongLeader after losing leadership in the case that the Command actually got committed (case 1), it delivers wrong message to the client.
+		//	// because client will retry the same Command, in believing that this Command never got commited and executed on all raft servers, while it's actually done!
 		//	// despite that exact-once semantics can be achieved from the server side to cancel duplicate operations,
-		//	// but it doesn't mean that rsm should allow this happen.
+		//	// it doesn't mean that rsm should allow this happen.
+		//
+		//	// final solution: introducing no-op apply in raft. When a server ascends as the leader, it appends a no-op log of its term,
+		//	// and this log will be eventually applied to state machine. for the former leader who started a Submit(), but never got committed, this log will overwrite the existing log dedicated to that Submit(), and the result be sent to resultCh,
+		//	// So the server will find out by comparing the opId that its Submit() request didn't get committed and thus return ErrWrongLeader to client.
+		//	// But if the Submit() it started get committed by other leader, even if it has lost leadership, it knows that its Submit() got committed and thus it should reply OK to client.
+		//	// this mechanism allows the server to know how to reply client according to valid evidence but not according to its raft state.
 		//
 		//	_, isStillLeader := rsm.rf.GetState()
 		//	if !isStillLeader {
-		//		debuglog.D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
+		//		debug.D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
 		//		rsm.mu.Lock()
 		//		if _, exists := rsm.resultByLogId[logId]; !exists {
 		//
@@ -203,14 +216,14 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		//		return rpc.ErrWrongLeader, nil
 		//	}
 		case result := <-resultCh:
-			debuglog.D4BPrintf("rsm%v Submit %v \n", rsm.me, op)
+			debug.D4BPrintf("rsm%v Submit %v \n", rsm.me, op)
 			rsm.mu.Lock()
 			delete(rsm.resultByLogId, logId)
 
 			// if the req at the specific log index is replaced by other request (identified by opId),
 			// it means that this server is no longer a leader. so it should stop serving the pending Submits
 			if result.opId != OpId {
-				debuglog.D4BPrintf("%v req doesn't match: expect %v, get %v\n, will stop all pending submits", rsm.me, OpId, result.opId)
+				debug.D4BPrintf("%v req doesn't match: expect %v, get %v\n, will stop all pending submits", rsm.me, OpId, result.opId)
 				rsm.mu.Unlock()
 				return rpc.ErrWrongLeader, nil
 			}
@@ -219,7 +232,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		case <-stopSubmit: // whenever get notification of stop submit, quit the Submit immediately
 			// this case is triggered when applyCh from the raft is closed, meaning that the raft is shut down.
 			// so all pending submit wouldn't be able to finish and must quit quickly as well.
-			debuglog.D4APrintf("rsm%v: Submit %v is stopped\n", rsm.me, op)
+			debug.D4APrintf("rsm%v: Submit %v is stopped\n", rsm.me, op)
 			rsm.mu.Lock()
 			delete(rsm.resultByLogId, logId)
 			rsm.mu.Unlock()

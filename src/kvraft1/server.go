@@ -3,7 +3,7 @@ package kvraft
 import (
 	"sync"
 
-	"6.5840/debuglog"
+	"6.5840/debug"
 	"6.5840/kvraft1/rsm"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
@@ -50,7 +50,7 @@ func (kv *KVServer) DoOp(req any) any {
 				Err:     rpc.OK,
 			}
 		}
-		debuglog.D4BPrintf("server%v: DoOp: Get req %v, key:%s, reply:%v \n", kv.me, req, typedReq.Key, reply)
+		debug.D4BPrintf("server%v: DoOp: Get req %v, key:%s, reply:%v \n", kv.me, req, typedReq.Key, reply)
 	case rpc.PutArgs:
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
@@ -78,9 +78,9 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			}
 		}
-		debuglog.D4BPrintf("server%v: DoOp: Put req %v, %v-%v, reply:%v \n", kv.me, req, typedReq.Key, typedReq.Value, reply)
+		debug.D4BPrintf("server%v: DoOp: Put req %v, %v-%v, reply:%v \n", kv.me, req, typedReq.Key, typedReq.Value, reply)
 	default:
-		debuglog.D4BPrintf("DoOp: Unknown req type %T\n", req)
+		debug.D4BPrintf("DoOp: Unknown req type %T\n", req)
 		reply = nil // it's neither Get, nor Put.
 	}
 	return reply
@@ -107,7 +107,7 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 		reply.Err = rpcErr
 	}
 
-	debuglog.D4BPrintf("server%v:Get %v, reply: %v, %v, %v \n", kv.me, args.Key, reply.Value, reply.Version, reply.Err)
+	debug.D4BPrintf("server%v:Get %v, reply: %v, %v, %v \n", kv.me, args.Key, reply.Value, reply.Version, reply.Err)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
@@ -124,7 +124,7 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	} else { // if rpc isn't ok, meaning this server is not the leader,
 		reply.Err = rpcErr
 	}
-	debuglog.D4BPrintf("server%v: Put %v:%v, reply: %v \n", kv.me, args.Key, args.Value, reply.Err)
+	debug.D4BPrintf("server%v: Put %v:%v, reply: %v \n", kv.me, args.Key, args.Value, reply.Err)
 }
 
 // StartKVServer() and MakeRSM() must return quickly, so they should
