@@ -316,7 +316,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.Log = rf.Log[:rf.physicalIndex(args.PrevLogIndex+1+i)] //truncate the conflicting entry and all following ones
 		for j := i; j < len(args.Entries); j++ {
-			debug.D3DPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
+			debug.D3BPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
 		}
 		rf.Log = append(rf.Log, args.Entries[i:]...) // append unvisited remaining logs from the leader entries to this raft's Log
 	}
@@ -799,9 +799,9 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 
-		// pause for a random amount of time between 50 and 350
+		// pause for a random amount of time between 300 and 600
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		ms := 300 + (rand.Int63() % 300)
 		rf.mu.Lock()
 		needElection := rf.state != leader && time.Since(rf.lastHeartbeatTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()

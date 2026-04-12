@@ -2,9 +2,7 @@ package kvraft
 
 import (
 	"bytes"
-	"fmt"
 	"log"
-	"strings"
 	"sync"
 
 	"6.5840/debug"
@@ -134,13 +132,15 @@ func (kv *KVServer) Restore(data []byte) {
 		return
 	}
 
-	var sb strings.Builder
-	for k, v := range kvm {
-		s := fmt.Sprintf("%v-%v\t", k, v)
-		sb.WriteString(s)
-	}
+	debug.D4CPrintf("server%v: Restored from snapshot.\n", kv.me)
 
-	debug.D4CPrintf("server%v: Restored from snapshot:%v\n", kv.me, sb.String())
+	//var sb strings.Builder
+	//for k, v := range kvm {
+	//	s := fmt.Sprintf("%v-%v\t", k, v)
+	//	sb.WriteString(s)
+	//}
+
+	//debug.D4CPrintf("server%v: Restored from snapshot:%v\n", kv.me, sb.String())
 
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()

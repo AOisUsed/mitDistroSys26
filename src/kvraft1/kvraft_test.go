@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"testing"
 	"time"
@@ -152,12 +151,12 @@ func (ts *Test) GenericTestSpeed() {
 	const heartbeatInterval = 100 * time.Millisecond
 	const opsPerInterval = 3
 	const timePerOp = heartbeatInterval / opsPerInterval
-	log.Printf("dur %v %v", dur/numOps, timePerOp)
-	for i, n := range bins {
-		if n > 0 {
-			log.Printf("%d: %d\n", i, n)
-		}
-	}
+	//log.Printf("dur %v %v", dur/numOps, timePerOp)
+	//for i, n := range bins {
+	//	if n > 0 {
+	//		log.Printf("%d: %d\n", i, n)
+	//	}
+	//}
 	if dur > numOps*timePerOp {
 		ts.t.Fatalf("Operations completed too slowly %v/op > %v/op\n", dur/numOps, timePerOp)
 	}

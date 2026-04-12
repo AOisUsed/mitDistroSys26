@@ -3,10 +3,11 @@ package debug
 import "log"
 
 const DebugAll4 = false
-const Debug4A = false
+const CancelAllPrint4 = true
+
+const Debug4A = true
 const Debug4B = true
 const Debug4C = true
-const CancelAllPrint4 = true
 
 func D4APrintf(format string, a ...interface{}) {
 	if !CancelAllPrint4 && (DebugAll4 || Debug4A) {

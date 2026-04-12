@@ -108,16 +108,20 @@ func (rsm *RSM) readApply() {
 			var applyRes applyResult
 			if applyMsg.Command == nil {
 				// this is a no-op command from raft
-				applyRes = applyResult{
-					opId:  -1,
-					value: nil,
-				}
+				applyRes = applyResult{opId: -1}
 			} else {
 				// this is a real command from client
 				opMsg := applyMsg.Command.(Op)
 				debug.D4BPrintf("%v read apply with opId%v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
 
 				result := rsm.sm.DoOp(opMsg.Req)
+
+				// check whether raftstate exceeds the maxraftstate. if so, snapshot
+				if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
+					debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v,need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
+					snapshot := rsm.sm.Snapshot()
+					rsm.rf.Snapshot(commandId, snapshot)
+				}
 
 				applyRes = applyResult{
 					opId:  opMsg.Id,
@@ -135,15 +139,22 @@ func (rsm *RSM) readApply() {
 				ch <- applyRes
 			}
 
-			// check whether raftstate exceeds the maxraftstate. if so, snapshot
-			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
-				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v,need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
-				snapshot := rsm.sm.Snapshot()
-				rsm.rf.Snapshot(commandId, snapshot)
-			}
 		} else if applyMsg.SnapshotValid { // if it's a snapshot
 			debug.D4BPrintf("rsm%v reads snapshot from applyCh, index:%v, term:%v", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
 			rsm.sm.Restore(applyMsg.Snapshot)
+
+			// todo: need to think where this part should be placed
+			// when snapshot is introduced, it's no longer reliable to know that a Submit() expires based only on the log overwrite
+			// because snapshot brings the leap of log index.
+			// In order to solve the problem, whenever an external snapshot happens, it must check all pending Submit() and let them know of their expiry
+			rsm.mu.Lock()
+			for idx, ch := range rsm.resultByLogId {
+				if idx <= applyMsg.SnapshotIndex {
+					ch <- applyResult{opId: -1}
+					//delete(rsm.resultByLogId, idx)
+				}
+			}
+			rsm.mu.Unlock()
 		} else {
 			log.Fatal("wrong type of apply Message")
 		}
@@ -195,6 +206,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 	resultCh := make(chan applyResult, 1)
 	rsm.resultByLogId[logId] = resultCh
+	debug.D4APrintf("rsm%v: resultCh for %v is prepared", rsm.me, logId)
 	stopSubmit := rsm.stopSubmit
 	rsm.mu.Unlock()
 
