@@ -108,6 +108,7 @@ func (rsm *RSM) readApply() {
 			var applyRes applyResult
 			if applyMsg.Command == nil {
 				// this is a no-op command from raft
+				debug.D4APrintf("rsm%v gets an no-op\n", rsm.me)
 				applyRes = applyResult{opId: -1}
 			} else {
 				// this is a real command from client
@@ -118,7 +119,7 @@ func (rsm *RSM) readApply() {
 
 				// check whether raftstate exceeds the maxraftstate. if so, snapshot
 				if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
-					debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v,need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
+					debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v, need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
 					snapshot := rsm.sm.Snapshot()
 					rsm.rf.Snapshot(commandId, snapshot)
 				}
@@ -148,10 +149,10 @@ func (rsm *RSM) readApply() {
 			// because snapshot brings the leap of log index.
 			// In order to solve the problem, whenever an external snapshot happens, it must check all pending Submit() and let them know of their expiry
 			rsm.mu.Lock()
-			for idx, ch := range rsm.resultByLogId {
-				if idx <= applyMsg.SnapshotIndex {
+			for id, ch := range rsm.resultByLogId {
+				if id <= applyMsg.SnapshotIndex {
 					ch <- applyResult{opId: -1}
-					//delete(rsm.resultByLogId, idx)
+					//delete(rsm.resultByLogId, id)
 				}
 			}
 			rsm.mu.Unlock()
@@ -216,15 +217,15 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		select {
 		//case <-time.After(time.Millisecond * 300):
 		//	// N.B. problem with returning ErrWrongLeader immediately after its leadership expires:
-		//	// the server doesn't know whether the Command actually gets committed or not, and cannot differentiate the two cases:
-		//	// case 1: it loses leadership before log getting committed.
-		//	// case 2: it loses leadership after log getting committed.
+		//	// the server doesn't know whether the Command actually will get committed or not, and cannot differentiate the two cases:
+		//	// case 1: it loses leadership before log getting duplicated to the majority and the log has no chance to get committed.
+		//	// case 2: it loses leadership before log getting committed, but the log has the potential to be committed (it may sound weird, but it refers to the case where the log has been duplicated to the majority (as well as the upcoming new leader) and this server loses leadership. the new leader then commits it indirectly in its own new term).
 		//	//
 		//	// and these two cases should be handled differently.
-		//	// in case 1: this server should reply OK, because the operation was successful.
-		//	// in case 2: this server should reply ErrWrongLeader, because the operation wasn't successful and it's no longer a leader
+		//	// in case 1: this server should reply ErrWrongLeader, because the operation wasn't successful and it's no longer a leader
+		//	// in case 2: this server should reply OK, because the operation was/will be committed by the new leader and will be eventually applied to state machine.
 		//	//
-		//	// therefore, if it returns ErrWrongLeader after losing leadership in the case that the Command actually got committed (case 1), it delivers wrong message to the client.
+		//	// therefore, if it returns ErrWrongLeader after losing leadership in the case that the Command actually got committed (case 2), it delivers wrong message to the client.
 		//	// because client will retry the same Command, in believing that this Command never got commited and executed on all raft servers, while it's actually done!
 		//	// despite that exact-once semantics can be achieved from the server side to cancel duplicate operations,
 		//	// it doesn't mean that rsm should allow this happen.
