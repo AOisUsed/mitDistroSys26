@@ -808,7 +808,7 @@ func (rf *Raft) ticker() {
 		//D3APrintf("%v ticker: random time is %v ms, gap from last heartbeat is %v", rf.me, ms, time.Since(rf.lastHeartbeatTime))
 		if needElection {
 			//D3APrintf("%v ticker timeout", rf.me)
-			go rf.startElection()
+			rf.startElection()
 		}
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
@@ -832,13 +832,16 @@ func (rf *Raft) startElection() {
 
 	voteCount := 1
 
+	var wg sync.WaitGroup
 	//send RequestVotes to all other servers
 	for i := range rf.peers {
 		if i == rf.me { //rf.me doesn't change, lock isn't needed
 			continue
 		}
+		wg.Add(1)
 		//request vote to i
 		go func(i int) {
+			defer wg.Done()
 			reply := &RequestVoteReply{}
 			debug.D3APrintf("%v at %v: is to request vote from %v", rf.me, args.Term, i)
 			ok := rf.sendRequestVote(i, args, reply)
@@ -881,6 +884,7 @@ func (rf *Raft) startElection() {
 			}
 		}(i)
 	}
+	wg.Wait() //wait until all the RequestVote RPC returns to know that the election is finished
 }
 
 // try to send replicateReady every 0.1 second to claim its leadership
