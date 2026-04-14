@@ -109,7 +109,7 @@ func (rsm *RSM) readApply() {
 			var applyRes applyResult
 
 			opMsg := applyMsg.Command.(Op)
-			debug.D4BPrintf("%v read apply with opId%v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
+			debug.D4APrintf("%v read apply with opId%v at commandIndex: %v \n", rsm.me, opMsg.Id, commandId)
 
 			result := rsm.sm.DoOp(opMsg.Req)
 
@@ -190,7 +190,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		return rpc.ErrWrongLeader, nil
 	}
 
-	debug.D4BPrintf("rsm%v Start op %v: %v at %v.\n", rsm.me, op.Id, op.Req, commandId)
+	debug.D4APrintf("rsm%v Start op %v: %v at %v.\n", rsm.me, op.Id, op.Req, commandId)
 
 	// must lock before writing the channel into rsm. otherwise,
 	// rare case may happen that raft commits the log extremely fast and wants to let the corresponding Submit() know of it,
