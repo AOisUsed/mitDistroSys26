@@ -9,7 +9,6 @@ package raft
 import (
 	"bytes"
 	"log"
-
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -112,8 +111,6 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (3C).
-	// Example:
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	persistedState := PersistedState{
@@ -122,7 +119,7 @@ func (rf *Raft) persist() {
 		Log:           rf.Log,
 		SnapshotIndex: rf.LastIncludedIndex,
 	}
-	err := e.Encode(persistedState)
+	err := e.Encode(persistedState) // if the log is long, this is super time-consuming
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -185,6 +182,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 func (rf *Raft) lastLogIndex() int {
+	//defer log.Printf("[Raft] lastLogIndex finishes at %v\n", time.Now().Format("15:04:05.000"))
 	return len(rf.Log) - 1 + rf.LastIncludedIndex
 }
 
@@ -218,7 +216,10 @@ func (rf *Raft) becomeFollowerWithTerm(term int) {
 
 // AppendEntries RPC handler
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	//start := time.Now()
+	//defer log.Printf("Append Entries took %v while holding lock", time.Since(start))
 	rf.mu.Lock()
+	//log.Printf("[Raft %v+] %v <-AppendEntries- %v at %v", args.PrevLogIndex+1, rf.me, args.LeaderId, time.Now().Format("15:04:05.000"))
 	defer rf.mu.Unlock()
 
 	//update the lastHeartbeat Time
@@ -246,7 +247,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm
 		reply.Success = false
+		//log.Printf("[Raft %v+] %v <-AppendEntries- %v completed but not persist at %v", args.PrevLogIndex+1, rf.me, args.LeaderId, time.Now().Format("15:04:05.000"))
 		rf.persist()
+		//defer log.Printf("[Raft %v+] %v <-AppendEntries- %v finishes at %v", args.PrevLogIndex+1, rf.me, args.LeaderId, time.Now().Format("15:04:05.000"))
 		return
 	}
 	// at this point, this raft would be a follower
@@ -517,8 +520,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := false
 
-	// Your code here (3B).
-	//log.Printf("Start() tries to acquire log")
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.state == leader {
@@ -534,7 +535,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		default:
 		}
 	}
-	//log.Printf("Start() done")
 	return index, term, isLeader
 }
 
@@ -606,7 +606,6 @@ func (rf *Raft) newInstallSnapshotArgs() *InstallSnapshotArgs {
 
 // advanceCommitIndex is for a leader to check whether commit can be advanced and to notify applyReadyCh if it is the case
 func (rf *Raft) advanceCommitIndex() {
-	//todo: may need to be improved for this loop O(n*n) holds lock for too long
 	for N := rf.lastLogIndex(); N > rf.commitIndex; N-- {
 		if rf.Log[rf.physicalIndex(N)].Term != rf.CurrentTerm { // this is to ensure never commit on terms other than its own
 			continue
@@ -630,7 +629,7 @@ func (rf *Raft) advanceCommitIndex() {
 	}
 }
 
-// synchroniseFollower synchronises the log of the follower, meaning it resend appendEntries until follower is in sync
+// synchroniseFollower synchronises the log of the follower, meaning that it resends appendEntries/snapshot until the follower is in sync
 func (rf *Raft) synchroniseFollower(i int) {
 	rf.mu.Lock()
 	needReplicate := rf.nextIndex[i] <= rf.lastLogIndex()
@@ -685,7 +684,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	if !ok {
 		return
 	}
-	//D3BPrintf("%v-AppendEntries->%v, with LeaderCommit %v,PrevLogIndex %v,PrevLogTerm %v", rf.me, i, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm)
+	debug.D3BPrintf("%v-AppendEntries->%v, with LeaderCommit %v,PrevLogIndex %v,PrevLogTerm %v", rf.me, i, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm)
 	// check the term and leadership
 	// if this raft knows that it's not the leader anymore, stop
 	rf.mu.Lock()
@@ -761,7 +760,6 @@ func (rf *Raft) applier() {
 
 					// apply snapshot to state machine
 					rf.applyCh <- snapshotMsg
-					//log.Printf("%v apply snapshot: Index:%3d\n", rf.me, snapshotMsg.SnapshotIndex)
 					debug.D3DPrintf("%v apply snapshot: Index:%3d\n", rf.me, snapshotMsg.SnapshotIndex)
 
 					// update lastApplied
@@ -775,7 +773,6 @@ func (rf *Raft) applier() {
 						CommandIndex: rf.lastApplied + 1,
 					}
 					rf.mu.Unlock()
-
 					// apply log entry to state machine
 					rf.applyCh <- logMsg
 					debug.D3DPrintf("%v apply log: command:%20d,  commandIndex:%3v\n", rf.me, logMsg.Command, logMsg.CommandIndex)
@@ -873,13 +870,13 @@ func (rf *Raft) startElection() {
 						rf.matchIndex[j] = 0
 					}
 					// append a no-op log
-					rf.Log = append(rf.Log, &LogEntry{Term: rf.CurrentTerm, Command: nil})
-					rf.persist()
-
-					select {
-					case rf.logAppendedCh <- struct{}{}:
-					default:
-					}
+					//rf.Log = append(rf.Log, &LogEntry{Term: rf.CurrentTerm, Command: nil})
+					//rf.persist()
+					//
+					//select {
+					//case rf.logAppendedCh <- struct{}{}:
+					//default:
+					//}
 				}
 			}
 		}(i)

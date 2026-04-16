@@ -171,8 +171,8 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	// Submit creates an Op structure to run a command through Raft;
 	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
 	// is the argument to Submit and id is a unique id for the op.
+	// note that this id(OpId) is only observable and usable on this server, not a global one.
 
-	// your code here
 	OpId := rsm.nextOpId()
 	op := Op{Me: rsm.me, Id: OpId, Req: req}
 
@@ -200,7 +200,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 	resultCh := make(chan applyResult, 1)
 	rsm.resultByCommandId[commandId] = resultCh
-	debug.D4APrintf("rsm%v: resultCh for %v is prepared", rsm.me, commandId)
+	debug.D4APrintf("rsm%v: resultCh for op %v is prepared", rsm.me, OpId)
 	stopSubmit := rsm.stopSubmit
 	rsm.mu.Unlock()
 
