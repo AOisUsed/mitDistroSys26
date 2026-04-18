@@ -119,7 +119,7 @@ func (rf *Raft) persist() {
 		Log:           rf.Log,
 		SnapshotIndex: rf.LastIncludedIndex,
 	}
-	err := e.Encode(persistedState) // if the log is long, this is super time-consuming
+	err := e.Encode(persistedState) // if the log is long, this is super time-consuming. if snapshot isn't introduced, long-log can degrade the overall performance (manifested as latency)
 	if err != nil {
 		log.Fatal(err)
 		return

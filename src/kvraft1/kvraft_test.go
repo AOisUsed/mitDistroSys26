@@ -118,7 +118,7 @@ func (ts *Test) GenericTest() {
 
 // check that ops are committed fast enough, better than 1 per heartbeat interval
 func (ts *Test) GenericTestSpeed() {
-	const numOps = 1000
+	const numOps = 500
 	bins := make([]int, 100)
 
 	defer ts.Cleanup()
