@@ -18,13 +18,24 @@ type VersionedValue struct {
 	Version rpc.Tversion
 }
 
+type LastRequest struct {
+	RequestId uint64
+	Reply     any // for this KVServer, this is either rpc.GetReply or rpc.PutReply.
+}
+
+type SnapshotData struct {
+	Kvm               map[string]*VersionedValue
+	LastReqByClientId map[uint64]*LastRequest
+}
+
 type KVServer struct {
 	me  int
 	rsm *rsm.RSM
 
 	// Your definitions here.
-	kvm  map[string]*VersionedValue
-	rwMu sync.RWMutex
+	kvm               map[string]*VersionedValue
+	lastReqByClientId map[uint64]*LastRequest
+	rwMu              sync.RWMutex
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -38,6 +49,24 @@ func (kv *KVServer) DoOp(req any) any {
 	var reply any
 	switch typedReq := req.(type) {
 	case rpc.GetArgs:
+		// deduplicate request
+		kv.rwMu.RLock()
+		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
+		kv.rwMu.RUnlock()
+		if exists {
+			// if the request has been executed, simply return the result and not execute it again.
+			if typedReq.RequestId <= lastReq.RequestId {
+				// note that typedReq.reqId < lastReq.reqId condition should not occur if client functions correctly
+				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
+				if typedReq.RequestId < lastReq.RequestId {
+					debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastReq.RequestId)
+				}
+				debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+			}
+		}
+		debug.D4BPrintf("server%v", kv.me)
+		// execute the operation
 		kv.rwMu.RLock()
 		verVal, exists := kv.kvm[typedReq.Key]
 		kv.rwMu.RUnlock()
@@ -53,7 +82,32 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		debug.D4BPrintf("server%v: DoOp: Get req %v, reply:%v \n", kv.me, req, reply)
+		// Save to LastReqByClientId
+		kv.rwMu.Lock()
+		kv.lastReqByClientId[typedReq.ClientId] = &LastRequest{
+			RequestId: typedReq.RequestId,
+			Reply:     reply,
+		}
+		kv.rwMu.Unlock()
+		debug.D4BPrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	case rpc.PutArgs:
+		// deduplicate request
+		kv.rwMu.RLock()
+		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
+		kv.rwMu.RUnlock()
+		if exists {
+			// if the request has been executed, simply return the result and not execute it again.
+			if typedReq.RequestId <= lastReq.RequestId {
+				// note that typedReq.Id < lastReq.Id condition should not occur if client functions correctly
+				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
+				if typedReq.RequestId < lastReq.RequestId {
+					debug.D4BPrintf("server%v:client %v sending request with impossible id:%v!\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+				}
+				debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+			}
+		}
+		// execute the operation
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 		if v, exists := kv.kvm[typedReq.Key]; exists {
@@ -81,6 +135,12 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		debug.D4BPrintf("server%v: DoOp: Put req %v, reply:%v \n", kv.me, req, reply)
+		// Save to LastReqByClientId
+		kv.lastReqByClientId[typedReq.ClientId] = &LastRequest{
+			RequestId: typedReq.RequestId,
+			Reply:     reply,
+		}
+		debug.D4BPrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	default:
 		debug.D4BPrintf("DoOp: Unknown req type %T\n", req)
 		reply = nil // it's neither Get, nor Put.
@@ -92,17 +152,33 @@ func (kv *KVServer) Snapshot() []byte {
 	// Your code here
 
 	//debug.D4CPrintf("server%v: Snapshot()\n", kv.me)
-	// make a copy of kv
+	// make a copy of kvm
 	kv.rwMu.RLock()
-	var snapshot = make(map[string]*VersionedValue)
+	var kvm = make(map[string]*VersionedValue)
 	for k, v := range kv.kvm {
 		copiedV := &VersionedValue{
 			Value:   v.Value,
 			Version: v.Version,
 		}
-		snapshot[k] = copiedV
+		kvm[k] = copiedV
+	}
+
+	// make a copy of LastReqByClientId
+	var lastReqByClientId = make(map[uint64]*LastRequest)
+	for clientId, lastRequest := range kv.lastReqByClientId {
+		copiedReq := &LastRequest{
+			RequestId: lastRequest.RequestId,
+			Reply:     lastRequest.Reply,
+		}
+		lastReqByClientId[clientId] = copiedReq
 	}
 	kv.rwMu.RUnlock()
+
+	// snapshot
+	snapshot := SnapshotData{
+		Kvm:               kvm,
+		LastReqByClientId: lastReqByClientId,
+	}
 
 	// encode copied snapshot
 	w := new(bytes.Buffer)
@@ -116,7 +192,6 @@ func (kv *KVServer) Snapshot() []byte {
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
 	if data == nil || len(data) < 1 {
 		return
 	}
@@ -125,8 +200,8 @@ func (kv *KVServer) Restore(data []byte) {
 
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var kvm map[string]*VersionedValue
-	err := d.Decode(&kvm)
+	var snapshot SnapshotData
+	err := d.Decode(&snapshot)
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -144,7 +219,8 @@ func (kv *KVServer) Restore(data []byte) {
 
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()
-	kv.kvm = kvm
+	kv.kvm = snapshot.Kvm
+	kv.lastReqByClientId = snapshot.LastReqByClientId
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -186,17 +262,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(rsm.Op{})
 	labgob.Register(rpc.PutArgs{})
+	labgob.Register(rpc.PutReply{})
 	labgob.Register(rpc.GetArgs{})
+	labgob.Register(rpc.GetReply{})
 
 	kv := &KVServer{me: me}
 
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 	// You may need initialization code here.
 
-	// only make kvm when it's nil because after reboot, its kvm will be restored from raft snapshot (state machine),
+	// only make Kvm when it's nil because after reboot, its Kvm will be restored from raft snapshot (state machine),
 	// and it should not be overwritten.
 	if kv.kvm == nil {
 		kv.kvm = make(map[string]*VersionedValue)
+		kv.lastReqByClientId = make(map[uint64]*LastRequest)
 	}
 	return []any{kv, kv.rsm.Raft()}
 }

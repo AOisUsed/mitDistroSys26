@@ -2,7 +2,7 @@ package debug
 
 import "log"
 
-const DebugAll4 = false
+const DebugAll4 = true
 const CancelAllPrint4 = true
 
 const Debug4A = true

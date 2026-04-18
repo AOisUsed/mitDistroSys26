@@ -1,8 +1,11 @@
 package kvraft
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"6.5840/debug"
 	"6.5840/kvsrv1/rpc"
@@ -10,19 +13,36 @@ import (
 	"6.5840/tester1"
 )
 
+func nrand() uint64 {
+	var b [8]byte
+	_, err := rand.Read(b[:])
+	if err != nil {
+		panic(err)
+	}
+	return binary.LittleEndian.Uint64(b[:])
+}
+
 type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
 	leader  int // last successful leader (index into servers[])
 	// You can add to this struct.
 
-	mu sync.Mutex
+	clientId  uint64
+	requestId uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
+	mu        sync.Mutex
+}
+
+func (ck *Clerk) nextReqId() uint64 {
+	return atomic.AddUint64(&ck.requestId, 1)
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	// You'll have to add code here.
 	ck.leader = 0
+	ck.clientId = nrand()
+	ck.requestId = 0
 	return ck
 }
 
@@ -41,18 +61,24 @@ func (ck *Clerk) Leader() int {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-	args := rpc.GetArgs{Key: key}
+	args := rpc.GetArgs{
+		RequestInfo: rpc.RequestInfo{
+			ClientId:  ck.clientId,
+			RequestId: ck.nextReqId(),
+		},
+		Key: key,
+	}
 
 	ck.mu.Lock()
 	leader := ck.leader
 	ck.mu.Unlock()
 	for {
-		debug.D4BPrintf("clerk -> %v: Get %s \n", ck.servers[leader], key)
+		debug.D4BPrintf("clerk%v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
 
 		reply := rpc.GetReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
-			debug.D4BPrintf("clerk <- %v: Get %s, reply:%v \n", ck.servers[leader], key, reply)
+			debug.D4BPrintf("clerk%v <- %v: reqId:%5v, Get %s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey:
@@ -92,7 +118,15 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	args := rpc.PutArgs{
+		RequestInfo: rpc.RequestInfo{
+			ClientId:  ck.clientId,
+			RequestId: ck.nextReqId(),
+		},
+		Key:     key,
+		Value:   value,
+		Version: version,
+	}
 
 	ck.mu.Lock()
 	leader := ck.leader
@@ -101,13 +135,15 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	firstTry := true
 
 	for {
-		debug.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
+		//debug.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
+		debug.D4BPrintf("clerk%v -> %v: reqId:%5v, Put %s:%s \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			debug.D4BPrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
+			//debug.D4BPrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
+			debug.D4BPrintf("clerk%v <- %v: reqId:%5v, Put %s:%s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey:
@@ -122,6 +158,7 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 					return rpc.ErrMaybe
 				}
 			case rpc.ErrWrongLeader:
+				firstTry = false
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
