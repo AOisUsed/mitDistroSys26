@@ -9,6 +9,10 @@ package shardkv
 //
 
 import (
+	"log"
+	"sync"
+
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 
 	"6.5840/kvsrv1/rpc"
@@ -20,8 +24,12 @@ import (
 type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
-	rcks   map[tester.Tgid]*shardgrp.Clerk
+	rcks map[tester.Tgid]*shardgrp.Clerk
 	// You will have to modify this struct.
+
+	cachedConfig *shardcfg.ShardConfig
+
+	mu sync.RWMutex
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -41,7 +49,6 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 	return rck, ok
 }
 
-
 // Get a key from a shardgrp.  You can use shardcfg.Key2Shard(key) to
 // find the shard responsible for the key and ck.sck.Query() to read
 // the current configuration and lookup the servers in the group
@@ -49,11 +56,80 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
-	return "", 0, ""
+
+	// use key to get the shardId
+	shardId := shardcfg.Key2Shard(key)
+
+	// check whether it has cachedConfig
+	ck.mu.RLock()
+	cachedConfig := ck.cachedConfig
+	ck.mu.RUnlock()
+
+	// get the shard config from controller by query, if no cachedConfig exists
+	if cachedConfig == nil { // todo: concurrent invocation can result in duplicated unnecessary queries.
+		cachedConfig = ck.sck.Query() // should be outside the lock
+		ck.mu.Lock()
+		ck.cachedConfig = cachedConfig
+		ck.mu.Unlock()
+	}
+
+	// consult the config to know the shard group responsible for the key
+	gid, servers, ok := cachedConfig.GidServers(shardId)
+	if !ok {
+		log.Fatal("group doesn't exist")
+	}
+
+	// check if the clerk communicating to certain group has been cached
+	ck.mu.RLock()
+	clerk, exists := ck.rcks[gid]
+	ck.mu.RUnlock()
+
+	if !exists {
+		clerk = shardgrp.MakeClerk(ck.clnt, servers)
+		ck.mu.Lock()
+		ck.rcks[gid] = clerk
+		ck.mu.Unlock()
+	}
+
+	return clerk.Get(key)
 }
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
-	return ""
+
+	// use key to get the shardId
+	shardId := shardcfg.Key2Shard(key)
+
+	// check whether it has cachedConfig
+	ck.mu.RLock()
+	cachedConfig := ck.cachedConfig
+	ck.mu.RUnlock()
+
+	// get the shard config from controller by query, if no cachedConfig exists
+	if cachedConfig == nil { // todo: concurrent invocation can result in duplicated unnecessary queries.
+		cachedConfig = ck.sck.Query() // should be outside the lock
+		ck.mu.Lock()
+		ck.cachedConfig = cachedConfig
+		ck.mu.Unlock()
+	}
+
+	// consult the config to know the shard group responsible for the key
+	gid, servers, ok := cachedConfig.GidServers(shardId)
+	if !ok {
+		log.Fatal("group doesn't exist")
+	}
+
+	// check if the clerk communicating to certain group has been cached
+	ck.mu.RLock()
+	clerk, exists := ck.rcks[gid]
+	ck.mu.RUnlock()
+
+	if !exists {
+		clerk = shardgrp.MakeClerk(ck.clnt, servers)
+		ck.mu.Lock()
+		ck.rcks[gid] = clerk
+		ck.mu.Unlock()
+	}
+	return clerk.Put(key, value, version)
 }

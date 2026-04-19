@@ -119,34 +119,34 @@ func least(c *ShardConfig) tester.Tgid {
 
 // balance assignment of shards to groups.
 // modifies c.
-func (c *ShardConfig) Rebalance() {
+func (cfg *ShardConfig) Rebalance() {
 	// if no groups, un-assign all shards
-	if len(c.Groups) < 1 {
-		for s, _ := range c.Shards {
-			c.Shards[s] = 0
+	if len(cfg.Groups) < 1 {
+		for s, _ := range cfg.Shards {
+			cfg.Shards[s] = 0
 		}
 		return
 	}
 
 	// assign all unassigned shards
-	for s, g := range c.Shards {
-		_, ok := c.Groups[g]
+	for s, g := range cfg.Shards {
+		_, ok := cfg.Groups[g]
 		if ok == false {
-			lg := least(c)
-			c.Shards[s] = lg
+			lg := least(cfg)
+			cfg.Shards[s] = lg
 		}
 	}
 
 	// move shards from most to least heavily loaded
 	for {
-		mg, mn, lg, ln := analyze(c)
+		mg, mn, lg, ln := analyze(cfg)
 		if mn < ln+2 {
 			break
 		}
 		// move 1 shard from mg to lg
-		for s, g := range c.Shards {
+		for s, g := range cfg.Shards {
 			if g == mg {
-				c.Shards[s] = lg
+				cfg.Shards[s] = lg
 				break
 			}
 		}

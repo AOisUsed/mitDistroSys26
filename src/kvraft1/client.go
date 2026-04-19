@@ -33,10 +33,6 @@ type Clerk struct {
 	mu        sync.Mutex
 }
 
-func (ck *Clerk) nextReqId() uint64 {
-	return atomic.AddUint64(&ck.requestId, 1)
-}
-
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	// You'll have to add code here.
@@ -44,6 +40,10 @@ func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 	ck.clientId = nrand()
 	ck.requestId = 0
 	return ck
+}
+
+func (ck *Clerk) nextReqId() uint64 {
+	return atomic.AddUint64(&ck.requestId, 1)
 }
 
 func (ck *Clerk) Leader() int {
