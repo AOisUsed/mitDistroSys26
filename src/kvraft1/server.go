@@ -191,6 +191,7 @@ func (kv *KVServer) Snapshot() []byte {
 	return w.Bytes()
 }
 
+// Restore from snapshot after server crash
 func (kv *KVServer) Restore(data []byte) {
 	if data == nil || len(data) < 1 {
 		return

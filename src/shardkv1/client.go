@@ -49,6 +49,30 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 	return rck, ok
 }
 
+func (ck *Clerk) getConfig() *shardcfg.ShardConfig {
+	ck.mu.RLock()
+	cfg := ck.cachedConfig
+	ck.mu.RUnlock()
+	if cfg != nil {
+		return cfg
+	}
+
+	cfg = ck.sck.Query()
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.cachedConfig = cfg
+
+	return ck.cachedConfig
+}
+
+// refreshConfig
+func (ck *Clerk) refreshConfig() {
+	cfg := ck.sck.Query()
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.cachedConfig = cfg
+}
+
 // Get a key from a shardgrp.  You can use shardcfg.Key2Shard(key) to
 // find the shard responsible for the key and ck.sck.Query() to read
 // the current configuration and lookup the servers in the group
@@ -60,38 +84,32 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
-	// check whether it has cachedConfig
-	ck.mu.RLock()
-	cachedConfig := ck.cachedConfig
-	ck.mu.RUnlock()
+	for {
+		cachedConfig := ck.getConfig()
+		// consult the config to know the shard group responsible for the key
+		gid, servers, ok := cachedConfig.GidServers(shardId)
+		if !ok {
+			log.Fatal("group doesn't exist")
+		}
 
-	// get the shard config from controller by query, if no cachedConfig exists
-	if cachedConfig == nil { // todo: concurrent invocation can result in duplicated unnecessary queries.
-		cachedConfig = ck.sck.Query() // should be outside the lock
-		ck.mu.Lock()
-		ck.cachedConfig = cachedConfig
-		ck.mu.Unlock()
+		// check if the clerk communicating to certain group has been cached
+		ck.mu.RLock()
+		clerk, exists := ck.rcks[gid]
+		ck.mu.RUnlock()
+
+		if !exists {
+			clerk = shardgrp.MakeClerk(ck.clnt, servers)
+			ck.mu.Lock()
+			ck.rcks[gid] = clerk
+			ck.mu.Unlock()
+		}
+		val, version, rpcErr := clerk.Get(key)
+		if rpcErr == rpc.ErrWrongGroup {
+			ck.refreshConfig()
+		} else {
+			return val, version, rpcErr
+		}
 	}
-
-	// consult the config to know the shard group responsible for the key
-	gid, servers, ok := cachedConfig.GidServers(shardId)
-	if !ok {
-		log.Fatal("group doesn't exist")
-	}
-
-	// check if the clerk communicating to certain group has been cached
-	ck.mu.RLock()
-	clerk, exists := ck.rcks[gid]
-	ck.mu.RUnlock()
-
-	if !exists {
-		clerk = shardgrp.MakeClerk(ck.clnt, servers)
-		ck.mu.Lock()
-		ck.rcks[gid] = clerk
-		ck.mu.Unlock()
-	}
-
-	return clerk.Get(key)
 }
 
 // Put a key to a shard group.
@@ -101,35 +119,30 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
-	// check whether it has cachedConfig
-	ck.mu.RLock()
-	cachedConfig := ck.cachedConfig
-	ck.mu.RUnlock()
+	for {
+		config := ck.getConfig()
+		// consult the config to know the shard group responsible for the key
+		gid, servers, ok := config.GidServers(shardId)
+		if !ok {
+			log.Fatal("group doesn't exist")
+		}
 
-	// get the shard config from controller by query, if no cachedConfig exists
-	if cachedConfig == nil { // todo: concurrent invocation can result in duplicated unnecessary queries.
-		cachedConfig = ck.sck.Query() // should be outside the lock
-		ck.mu.Lock()
-		ck.cachedConfig = cachedConfig
-		ck.mu.Unlock()
+		// check if the clerk communicating to certain group has been cached
+		ck.mu.RLock()
+		clerk, exists := ck.rcks[gid]
+		ck.mu.RUnlock()
+
+		if !exists {
+			clerk = shardgrp.MakeClerk(ck.clnt, servers)
+			ck.mu.Lock()
+			ck.rcks[gid] = clerk
+			ck.mu.Unlock()
+		}
+		rpcErr := clerk.Put(key, value, version)
+		if rpcErr == rpc.ErrWrongGroup {
+			ck.refreshConfig()
+		} else {
+			return rpcErr
+		}
 	}
-
-	// consult the config to know the shard group responsible for the key
-	gid, servers, ok := cachedConfig.GidServers(shardId)
-	if !ok {
-		log.Fatal("group doesn't exist")
-	}
-
-	// check if the clerk communicating to certain group has been cached
-	ck.mu.RLock()
-	clerk, exists := ck.rcks[gid]
-	ck.mu.RUnlock()
-
-	if !exists {
-		clerk = shardgrp.MakeClerk(ck.clnt, servers)
-		ck.mu.Lock()
-		ck.rcks[gid] = clerk
-		ck.mu.Unlock()
-	}
-	return clerk.Put(key, value, version)
 }

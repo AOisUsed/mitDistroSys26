@@ -10,6 +10,7 @@ import (
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
 	"6.5840/labrpc"
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
 	"6.5840/tester1"
 )
@@ -29,8 +30,11 @@ type LastRequest struct {
 }
 
 type SnapshotData struct {
-	Kvm               map[string]*VersionedValue
+	Kvm               [shardcfg.NShards]map[string]*VersionedValue
 	LastReqByClientId map[uint64]*LastRequest
+	CfgNumByShid      map[shardcfg.Tshid]shardcfg.Tnum
+	FrozenByShid      map[shardcfg.Tshid]bool
+	ResponsibleShards map[shardcfg.Tshid]struct{}
 }
 
 type KVServer struct {
@@ -39,9 +43,24 @@ type KVServer struct {
 	gid tester.Tgid
 
 	// Your code here
-	kvm               map[string]*VersionedValue
+	// for kv
+	kvm               [shardcfg.NShards]map[string]*VersionedValue
 	lastReqByClientId map[uint64]*LastRequest
-	rwMu              sync.RWMutex
+
+	// for shard
+	cfgNumByShid      map[shardcfg.Tshid]shardcfg.Tnum
+	frozenByShid      map[shardcfg.Tshid]bool
+	responsibleShards map[shardcfg.Tshid]struct{}
+
+	rwMu sync.RWMutex
+}
+
+// check whether the server is responsible for the shard, need to be used within Read Lock
+func (kv *KVServer) isResponsibleForShard(shid shardcfg.Tshid) bool {
+	if _, exists := kv.responsibleShards[shid]; exists {
+		return true
+	}
+	return false
 }
 
 func (kv *KVServer) DoOp(req any) any {
@@ -49,11 +68,24 @@ func (kv *KVServer) DoOp(req any) any {
 
 	var reply any
 	switch typedReq := req.(type) {
+
+	// kv: Get, Put
 	case rpc.GetArgs:
-		// deduplicate request
+		// check whether the shard that the key belongs to is frozen
+		shid := shardcfg.Key2Shard(typedReq.Key)
 		kv.rwMu.RLock()
+		defer kv.rwMu.RUnlock()
+
+		// check whether it's responsible for the shard
+		if !kv.isResponsibleForShard(shid) {
+			reply = rpc.GetReply{
+				Err: rpc.ErrWrongGroup,
+			}
+			return reply
+		}
+
+		// deduplicate request: return saved duplicate request reply
 		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
-		kv.rwMu.RUnlock()
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
 			if typedReq.RequestId <= lastReq.RequestId {
@@ -66,10 +98,9 @@ func (kv *KVServer) DoOp(req any) any {
 				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
 			}
 		}
-		// execute the operation
-		kv.rwMu.RLock()
-		verVal, exists := kv.kvm[typedReq.Key]
-		kv.rwMu.RUnlock()
+
+		// execute the Get operation
+		verVal, exists := kv.kvm[shid][typedReq.Key]
 		if !exists {
 			reply = rpc.GetReply{
 				Err: rpc.ErrNoKey,
@@ -83,18 +114,36 @@ func (kv *KVServer) DoOp(req any) any {
 		}
 		//debug.D5APrintf("server%v: DoOp: Get req %v, reply:%v \n", kv.me, req, reply)
 		// Save to LastReqByClientId
-		kv.rwMu.Lock()
 		kv.lastReqByClientId[typedReq.ClientId] = &LastRequest{
 			RequestId: typedReq.RequestId,
 			Reply:     reply,
 		}
-		kv.rwMu.Unlock()
 		//debug.D5APrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	case rpc.PutArgs:
-		// deduplicate request
-		kv.rwMu.RLock()
+		// check whether the shard that the key belongs to is frozen
+		shid := shardcfg.Key2Shard(typedReq.Key)
+		kv.rwMu.Lock()
+		defer kv.rwMu.Unlock()
+
+		// check whether it's responsible for the shard
+		if !kv.isResponsibleForShard(shid) {
+			reply = rpc.PutReply{
+				Err: rpc.ErrWrongGroup,
+			}
+			return reply
+		}
+
+		// check whether the shard is frozen, and return WrongGroup if frozen
+		isFrozen, exists := kv.frozenByShid[shid]
+		if exists && isFrozen {
+			reply = rpc.PutReply{
+				Err: rpc.ErrWrongGroup,
+			}
+			return reply
+		}
+
+		// deduplicate request: return saved duplicate request reply
 		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
-		kv.rwMu.RUnlock()
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
 			if typedReq.RequestId <= lastReq.RequestId {
@@ -107,13 +156,13 @@ func (kv *KVServer) DoOp(req any) any {
 				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
 			}
 		}
-		// execute the operation
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
-		if v, exists := kv.kvm[typedReq.Key]; exists {
+
+		// execute the Put operation
+		kvshard := kv.kvm[shid] // kv map of the respective shard
+		if v, exists := kvshard[typedReq.Key]; exists {
 			if v.Version == typedReq.Version { //version matches
-				kv.kvm[typedReq.Key].Value = typedReq.Value
-				kv.kvm[typedReq.Key].Version += 1
+				kvshard[typedReq.Key].Value = typedReq.Value
+				kvshard[typedReq.Key].Version += 1
 				reply = rpc.PutReply{
 					Err: rpc.OK,
 				}
@@ -124,7 +173,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else {
 			if typedReq.Version == 0 {
-				kv.kvm[typedReq.Key] = &VersionedValue{Value: typedReq.Value, Version: 1}
+				kvshard[typedReq.Key] = &VersionedValue{Value: typedReq.Value, Version: 1}
 				reply = rpc.PutReply{
 					Err: rpc.OK,
 				}
@@ -140,10 +189,144 @@ func (kv *KVServer) DoOp(req any) any {
 			RequestId: typedReq.RequestId,
 			Reply:     reply,
 		}
-		//debug.D5APrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
+	//debug.D5APrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
+
+	// sharding: Freeze, Install, Delete
+	case shardrpc.FreezeShardArgs:
+		kv.rwMu.Lock()
+		defer kv.rwMu.Unlock()
+		// check config Num
+		// if local has higher, reject the request
+		shid := typedReq.Shard
+		localCfgNum, exists := kv.cfgNumByShid[shid]
+		if !exists {
+			log.Fatalf("server:%v DoOp(FreezeShad) doesn't have the Num for the shard %v\n", kv.me, shid)
+		}
+		// if the request is outdated, simply reply with its Configuration Num. When the clerk gets the Num, it knows that this request is not executed
+		if localCfgNum > typedReq.Num {
+			reply = shardrpc.FreezeShardReply{
+				State: nil,
+				Num:   localCfgNum,
+				Err:   rpc.OK, // if the request is outdated, it must have been done before, otherwise controller wouldn't have incremented the config Num, therefore reply OK is safe
+			}
+			return reply
+		} else if localCfgNum == typedReq.Num {
+			// if localCfgNum equals, meaning the request has been executed, reply OK
+			// and since it's been frozen, the current state will be the same. FreezeShard is idempotent
+			if kv.frozenByShid[shid] != true {
+				// the design here: once frozen state is set to true in FreezeShard, never set to false in the same config Num,
+				// because controller may fail and retry Freeze/Delete unorderly. it breaks idempotency if it is allowed to change the *frozen* state
+				// independently by Freeze or Delete.  reset *frozen* state only in InstallShard
+				log.Fatalf("server%v DoOp(FreezeShard) should have frozen the shard %v!\n", kv.me, shid)
+			}
+			w := new(bytes.Buffer)
+			e := labgob.NewEncoder(w)
+			err := e.Encode(kv.kvm[shid])
+			if err != nil {
+				log.Fatal(err)
+			}
+			marshalledKVShard := w.Bytes()
+			reply = shardrpc.FreezeShardReply{
+				State: marshalledKVShard,
+				Num:   localCfgNum,
+				Err:   rpc.OK,
+			}
+			return reply
+		} else { // case where localCfgNum < Req.Num
+			kv.frozenByShid[shid] = true         // set shard frozen
+			kv.cfgNumByShid[shid] = typedReq.Num // update config Num
+
+			// if not responsible for this shard, don't freeze
+			// if controller functions correctly, this would never occur
+			if !kv.isResponsibleForShard(shid) {
+				reply = shardrpc.FreezeShardReply{
+					State: nil,
+					Num:   typedReq.Num,
+					Err:   rpc.ErrWrongGroup,
+				}
+			} else { // this kv is responsible for the shard
+				w := new(bytes.Buffer)
+				e := labgob.NewEncoder(w)
+				err := e.Encode(kv.kvm[shid])
+				if err != nil {
+					log.Fatal(err)
+				}
+				marshalledKVShard := w.Bytes()
+				reply = shardrpc.FreezeShardReply{
+					State: marshalledKVShard,
+					Num:   typedReq.Num,
+					Err:   rpc.OK,
+				}
+			}
+			return reply
+		}
+	case shardrpc.InstallShardArgs:
+		kv.rwMu.Lock()
+		defer kv.rwMu.Unlock()
+		// check config Num
+		// if local has higher, reject the request
+		shid := typedReq.Shard
+		localCfgNum, exists := kv.cfgNumByShid[shid]
+		if !exists {
+			log.Fatalf("server:%v DoOp(InstallShard) doesn't have the Num for the shard %v\n", kv.me, shid)
+		}
+		if localCfgNum >= typedReq.Num {
+			reply = shardrpc.InstallShardReply{
+				Err: rpc.OK,
+			}
+			return reply
+		} else { // localCfgNum < typedReq.Num
+			kv.cfgNumByShid[shid] = typedReq.Num    // update config Num
+			kv.frozenByShid[shid] = false           // set shard unfrozen
+			kv.responsibleShards[shid] = struct{}{} // mark shard as responsible
+
+			r := bytes.NewBuffer(typedReq.State)
+			d := labgob.NewDecoder(r)
+			var shardkv map[string]*VersionedValue
+			err := d.Decode(&shardkv)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// install shardkv
+			kv.kvm[shid] = shardkv
+			reply = shardrpc.InstallShardReply{
+				Err: rpc.OK,
+			}
+			return reply
+		}
+	case shardrpc.DeleteShardArgs:
+		// idempotency design:
+		// don't check whether it's responsible for the
+		kv.rwMu.Lock()
+		defer kv.rwMu.Unlock()
+		shid := typedReq.Shard
+		localCfgNum, exists := kv.cfgNumByShid[shid]
+		if !exists {
+			log.Fatalf("server:%v DoOp(DeleteShard) doesn't have the Num for the shard %v\n", kv.me, shid)
+		}
+		if localCfgNum > typedReq.Num {
+			reply = shardrpc.DeleteShardReply{
+				Err: rpc.OK,
+			}
+			return reply
+		} else { // localCfgNum < typedReq.Num
+			//log.Printf("server:%v DoOp(DeleteShard) at case: should delete %v \n", kv.me, shid)
+			//debug.D5APrintf("Before DeleteShard: ")
+			//kv.Snapshot()
+
+			kv.kvm[shid] = nil                   // delete kv for the shard
+			kv.cfgNumByShid[shid] = typedReq.Num // update config Num
+			delete(kv.responsibleShards, shid)   // mark as no longer responsible
+			reply = shardrpc.DeleteShardReply{
+				Err: rpc.OK,
+			}
+			//debug.D5APrintf("After DeleteShard: ")
+			//kv.Snapshot()
+		}
 	default:
 		debug.D5APrintf("DoOp: Unknown req type %T\n", req)
-		reply = nil // it's neither Get, nor Put.
+		reply = nil
 	}
 	return reply
 }
@@ -154,13 +337,17 @@ func (kv *KVServer) Snapshot() []byte {
 	//debug.D5APrintf("server%v: Snapshot()\n", kv.me)
 	// make a copy of kvm
 	kv.rwMu.RLock()
-	var kvm = make(map[string]*VersionedValue)
-	for k, v := range kv.kvm {
-		copiedV := &VersionedValue{
-			Value:   v.Value,
-			Version: v.Version,
+	var kvm [shardcfg.NShards]map[string]*VersionedValue
+	for shid, shardkv := range kv.kvm {
+		var copiedShardkv = make(map[string]*VersionedValue)
+		for k, v := range shardkv {
+			copiedV := &VersionedValue{
+				Value:   v.Value,
+				Version: v.Version,
+			}
+			copiedShardkv[k] = copiedV
 		}
-		kvm[k] = copiedV
+		kvm[shid] = copiedShardkv
 	}
 
 	// make a copy of LastReqByClientId
@@ -172,12 +359,79 @@ func (kv *KVServer) Snapshot() []byte {
 		}
 		lastReqByClientId[clientId] = copiedReq
 	}
+
+	// make a copy of cfgNumByShid
+	var cfgNumByShid = make(map[shardcfg.Tshid]shardcfg.Tnum)
+	for shid, num := range kv.cfgNumByShid {
+		cfgNumByShid[shid] = num
+	}
+
+	// make a copy of frozenByShid
+	var frozenByShid = make(map[shardcfg.Tshid]bool)
+	for shid, isFrozen := range kv.frozenByShid {
+		frozenByShid[shid] = isFrozen
+	}
+
+	// make a copy of ResponsibleShards
+	var responsibleShards = make(map[shardcfg.Tshid]struct{})
+	for shid := range kv.responsibleShards {
+		responsibleShards[shid] = struct{}{}
+	}
+
 	kv.rwMu.RUnlock()
+
+	//var totalSize int
+	//kvmBuf := new(bytes.Buffer)
+	//gob.NewEncoder(kvmBuf).Encode(kvm)
+	//kvmSize := kvmBuf.Len()
+	//totalSize += kvmSize
+	////log.Printf("[Snapshot] Kvm size: %d bytes", kvmSize)
+	//
+	//// 2. LastReqByClientId 大小
+	//reqBuf := new(bytes.Buffer)
+	//gob.NewEncoder(reqBuf).Encode(lastReqByClientId)
+	//reqSize := reqBuf.Len()
+	//totalSize += reqSize
+	////log.Printf("[Snapshot] LastReq size: %d bytes", reqSize)
+	//
+	//// 3. CfgNumByShid 大小
+	//cfgBuf := new(bytes.Buffer)
+	//gob.NewEncoder(cfgBuf).Encode(cfgNumByShid)
+	//cfgSize := cfgBuf.Len()
+	//totalSize += cfgSize
+	////log.Printf("[Snapshot] CfgNum size: %d bytes", cfgSize)
+	//
+	//// 4. FrozenByShid 大小
+	//frozenBuf := new(bytes.Buffer)
+	//gob.NewEncoder(frozenBuf).Encode(frozenByShid)
+	//frozenSize := frozenBuf.Len()
+	//totalSize += frozenSize
+	////log.Printf("[Snapshot] Frozen size: %d bytes", frozenSize)
+	//
+	//// 5. ResponsibleShards 大小
+	//respBuf := new(bytes.Buffer)
+	//gob.NewEncoder(respBuf).Encode(responsibleShards)
+	//respSize := respBuf.Len()
+	//totalSize += respSize
+	////log.Printf("[Snapshot] Responsible size: %d bytes", respSize)
+	//
+	//log.Printf("kv%v: [Snapshot] KVM: %d, LastReq: %d, CfgNum: %d, Frozen: %d, Resp: %d | Total: %d ",
+	//	kv.me,
+	//	kvmBuf.Len(),
+	//	reqBuf.Len(),
+	//	cfgBuf.Len(),
+	//	frozenBuf.Len(),
+	//	respBuf.Len(),
+	//	totalSize,
+	//)
 
 	// snapshot
 	snapshot := SnapshotData{
 		Kvm:               kvm,
 		LastReqByClientId: lastReqByClientId,
+		CfgNumByShid:      cfgNumByShid,
+		FrozenByShid:      frozenByShid,
+		ResponsibleShards: responsibleShards,
 	}
 
 	// encode copied snapshot
@@ -221,6 +475,9 @@ func (kv *KVServer) Restore(data []byte) {
 	defer kv.rwMu.Unlock()
 	kv.kvm = snapshot.Kvm
 	kv.lastReqByClientId = snapshot.LastReqByClientId
+	kv.cfgNumByShid = snapshot.CfgNumByShid
+	kv.frozenByShid = snapshot.FrozenByShid
+	kv.responsibleShards = snapshot.ResponsibleShards
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -231,11 +488,11 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	rpcErr, rep := kv.rsm.Submit(*args)
 	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm used DoOp(), just use the result DoOp() returns
 		*reply = rep.(rpc.GetReply)
-	} else { // if rpc isn't ok, meaning this server is not the leader,
+	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
 		reply.Err = rpcErr
 	}
 
-	debug.D5APrintf("server%v:Get %v, reply: %v, %v, %v \n", kv.me, args.Key, reply.Value, reply.Version, reply.Err)
+	debug.D5APrintf("server%v: Get %v, reply: valueSize:%v, %v, %v \n", kv.me, args.Key, len(reply.Value), reply.Version, reply.Err)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
@@ -247,29 +504,46 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	//defer log.Printf("server %v Put done", kv.me)
 
 	rpcErr, rep := kv.rsm.Submit(*args)
-	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm used DoOp(), just use the result DoOp() returns
+	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
 		*reply = rep.(rpc.PutReply)
-	} else { // if rpc isn't ok, meaning this server is not the leader,
+	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
 		reply.Err = rpcErr
 	}
-	debug.D5APrintf("server%v: Put %v:%v,version:%v, reply: %v \n", kv.me, args.Key, args.Value, args.Version, reply.Err)
+	debug.D5APrintf("server%v: Put %v: valueSize%v, version:%v, reply: %v \n", kv.me, args.Key, len(args.Value), args.Version, reply.Err)
 }
 
 // Freeze the specified shard (i.e., reject future Get/Puts for this
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
 	// Your code here
+	rpcErr, rep := kv.rsm.Submit(*args)
+	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
+		*reply = rep.(shardrpc.FreezeShardReply)
+	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
+		reply.Err = rpcErr
+	}
 }
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
 	// Your code here
-	kv.rsm.Submit(*args)
+	rpcErr, rep := kv.rsm.Submit(*args)
+	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
+		*reply = rep.(shardrpc.InstallShardReply)
+	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
+		reply.Err = rpcErr
+	}
 }
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
 	// Your code here
+	rpcErr, rep := kv.rsm.Submit(*args)
+	if rpcErr == rpc.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
+		*reply = rep.(shardrpc.DeleteShardReply)
+	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
+		reply.Err = rpcErr
+	}
 }
 
 // StartShardServerGrp starts a server for shardgrp `gid`.
@@ -289,14 +563,27 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(rsm.Op{})
 
 	kv := &KVServer{gid: gid, me: me}
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
-	// only make kvm when it's nil because after reboot, its Kvm will be restored from raft snapshot (state machine),
-	// and it should not be overwritten.
-	if kv.kvm == nil {
-		kv.kvm = make(map[string]*VersionedValue)
-		kv.lastReqByClientId = make(map[uint64]*LastRequest)
+	var kvm [shardcfg.NShards]map[string]*VersionedValue
+	for i := 0; i < shardcfg.NShards; i++ {
+		kvm[i] = make(map[string]*VersionedValue)
 	}
+	kv.kvm = kvm
+
+	kv.lastReqByClientId = make(map[uint64]*LastRequest)
+	kv.cfgNumByShid = make(map[shardcfg.Tshid]shardcfg.Tnum)
+	// initialise such that Num for each shard is 0 // todo: may be incorrect
+	for i := 0; i < shardcfg.NShards; i++ {
+		kv.cfgNumByShid[shardcfg.Tshid(i)] = 0
+	}
+	kv.frozenByShid = make(map[shardcfg.Tshid]bool)
+	kv.responsibleShards = make(map[shardcfg.Tshid]struct{})
+	// initialise responsibleShards such that the server suppose that it's responsible for all shards, todo:may not be correct
+	for i := 0; i < shardcfg.NShards; i++ {
+		kv.responsibleShards[shardcfg.Tshid(i)] = struct{}{}
+	}
+
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []any{kv, kv.rsm.Raft()}
 }

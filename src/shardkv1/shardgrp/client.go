@@ -10,6 +10,7 @@ import (
 	"6.5840/debug"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp/shardrpc"
 	"6.5840/tester1"
 )
 
@@ -48,7 +49,7 @@ func (ck *Clerk) Leader() int {
 	return ck.leader
 }
 
-// Get only return OK, ErrNoKey as rpc.Err
+// Get return OK, ErrNoKey, ErrWrongGroup as rpc.Err
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	args := rpc.GetArgs{
 		RequestInfo: rpc.RequestInfo{
@@ -62,15 +63,16 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	leader := ck.leader
 	ck.mu.Unlock()
 	for {
-		debug.D5APrintf("clerk%v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
+		//debug.D5APrintf("clerk%v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
 
-		reply := rpc.GetReply{}
+		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
-			debug.D5APrintf("clerk%v <- %v: reqId:%5v, Get %s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply)
+			//debug.D5APrintf("clerk%v <- %v: reqId:%5v, Get %s, reply: valueSize:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(reply.Value), reply.Version, reply.Err)
 
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey:
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
+				debug.D5APrintf("clerk%v <- %v: reqId:%5v, Get %s, reply: valueSize:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(reply.Value), reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -87,7 +89,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	}
 }
 
-// Put only return OK, ErrNoKey, ErrMaybe as rpc.Err
+// Put returns OK, ErrNoKey, ErrWrongGroup, ErrMaybe as rpc.Err
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	args := rpc.PutArgs{
 		RequestInfo: rpc.RequestInfo{
@@ -106,23 +108,23 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	firstTry := true
 
 	for {
-		//debug.D5APrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
-		debug.D5APrintf("clerk%v -> %v: reqId:%5v, Put %s:%s \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
+		//debug.D5APrintf("clerk%v -> %v: reqId:%5v, Put %s, valueSize:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(value))
 
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			//debug.D5APrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
-			debug.D5APrintf("clerk%v <- %v: reqId:%5v, Put %s:%s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
+			//debug.D5APrintf("clerk%v <- %v: reqId:%5v, Put %s: valueSize: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(value), reply)
 
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey:
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
+				debug.D5APrintf("clerk%v <- %v: reqId:%5v, Put %s: valueSize: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(value), reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrVersion:
+				debug.D5APrintf("clerk%v <- %v: reqId:%5v, Put %s: valueSize: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, len(value), reply)
 				if firstTry {
 					return rpc.ErrVersion
 				} else {
@@ -150,15 +152,107 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
 	// Your code here
-	return nil, ""
+	// first check Num,
+	// if getting bigger Num, this is an outdated, meaning failed ?
+
+	args := shardrpc.FreezeShardArgs{
+		Shard: s,
+		Num:   num,
+	}
+	ck.mu.Lock()
+	leader := ck.leader
+	ck.mu.Unlock()
+
+	for {
+		//debug.D5APrintf("clerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+
+		var reply shardrpc.FreezeShardReply
+		ok := ck.clnt.Call(ck.servers[leader], "KVServer.FreezeShard", &args, &reply)
+		if ok {
+			//debug.D5APrintf("clerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+			switch reply.Err {
+			case rpc.OK, rpc.ErrWrongGroup:
+				debug.D5APrintf("clerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+				ck.mu.Lock()
+				ck.leader = leader
+				ck.mu.Unlock()
+				return reply.State, reply.Err
+			case rpc.ErrWrongLeader:
+				leader = (leader + 1) % len(ck.servers)
+				continue
+			default:
+				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+			}
+		}
+		leader = (leader + 1) % len(ck.servers)
+	}
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.InstallShardArgs{
+		Shard: s,
+		State: state,
+		Num:   num,
+	}
+	ck.mu.Lock()
+	leader := ck.leader
+	ck.mu.Unlock()
+	for {
+		//debug.D5APrintf("clerk -> %v: InstallShard (shard: %v, len(state): %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
+		var reply shardrpc.InstallShardReply
+		ok := ck.clnt.Call(ck.servers[leader], "KVServer.InstallShard", &args, &reply)
+		if ok {
+			//debug.D5APrintf("clerk <- %v: InstallShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			switch reply.Err {
+			case rpc.OK:
+				debug.D5APrintf("clerk <- %v: InstallShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+				ck.mu.Lock()
+				ck.leader = leader
+				ck.mu.Unlock()
+				return reply.Err
+			case rpc.ErrWrongLeader:
+				leader = (leader + 1) % len(ck.servers)
+				continue
+			default:
+				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+			}
+		}
+		leader = (leader + 1) % len(ck.servers)
+	}
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.DeleteShardArgs{
+		Shard: s,
+		Num:   num,
+	}
+	ck.mu.Lock()
+	leader := ck.leader
+	ck.mu.Unlock()
+
+	for {
+		//debug.D5APrintf("clerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+
+		var reply shardrpc.DeleteShardReply
+		ok := ck.clnt.Call(ck.servers[leader], "KVServer.DeleteShard", &args, &reply)
+		if ok {
+			//debug.D5APrintf("clerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			switch reply.Err {
+			case rpc.OK:
+				debug.D5APrintf("clerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+				ck.mu.Lock()
+				ck.leader = leader
+				ck.mu.Unlock()
+				return reply.Err
+			case rpc.ErrWrongLeader:
+				leader = (leader + 1) % len(ck.servers)
+				continue
+			default:
+				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+			}
+		}
+		leader = (leader + 1) % len(ck.servers)
+	}
 }

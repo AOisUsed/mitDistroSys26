@@ -3,7 +3,7 @@ package debug
 import "log"
 
 const DebugAll5 = true
-const CancelAllPrint5 = true
+const CancelAllPrint5 = false
 
 const Debug5A = true
 const Debug5B = true

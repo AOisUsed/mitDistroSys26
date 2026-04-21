@@ -116,8 +116,10 @@ func (rsm *RSM) readApply() {
 			// check whether raftstate exceeds the maxraftstate. if so, snapshot
 			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
 				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v, need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
+				raftstateSizeBefore := rsm.rf.PersistBytes()
 				snapshot := rsm.sm.Snapshot()
 				rsm.rf.Snapshot(commandId, snapshot)
+				debug.D5APrintf("rsm%v: exceeded maxraftstate %v, took snapshot raftstateSize %v -> %v, reqId: %v, commandId: %v, with snapshot size: %v \n", rsm.me, rsm.maxraftstate, raftstateSizeBefore, rsm.rf.PersistBytes(), opMsg.Id, commandId, len(snapshot))
 			}
 
 			applyRes = applyResult{
@@ -166,6 +168,7 @@ func (rsm *RSM) Raft() raftapi.Raft {
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
 // try again.
+// only returns rpc.OK or rpc.ErrWrongLeader
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 	// Submit creates an Op structure to run a command through Raft;

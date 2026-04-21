@@ -138,8 +138,7 @@ func TestDeleteBasic5A(t *testing.T) {
 	if ok := ts.joinGroups(sck, []tester.Tgid{gid2}); !ok {
 		ts.t.Fatalf("TestDeleteBasic5A: joinGroups failed")
 	}
-
-	// push more Get's through so that all peers snapshot
+	// push more Gets through so that all peers snapshot
 	for j := 0; j < 5; j++ {
 		for i := 0; i < len(ka); i++ {
 			ts.CheckGet(ck, ka[i], va[i], rpc.Tversion(1))

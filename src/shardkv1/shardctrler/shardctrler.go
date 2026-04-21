@@ -73,22 +73,23 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // configuration from the current one to new.  While the controller
 // changes the configuration it may be superseded by another
 // controller.
-func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
+func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 	// Your code here.
-	old, ver := sck.queryInternal()
-
-	// don't change config if the new has smaller config version (Num)
-	if new.Num <= old.Num {
-		debug.D5APrintf("controller ChangeConfig called with older config: %v < current: %v , does nothing\n", old.Num, new.Num)
+	oldCfg, ver := sck.queryInternal()
+	// don't change config if the newCfg has smaller config version (Num)
+	if newCfg.Num <= oldCfg.Num {
+		debug.D5APrintf("controller ChangeConfig called with older config: %v < current: %v , does nothing\n", oldCfg.Num, newCfg.Num)
 		return
 	}
 
+	debug.D5APrintf("controller: ChangeConfigTo()\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
+
 	var wg sync.WaitGroup
-	// compare the old and new configuration, find the difference, and act accordingly
-	for shid, oldGid := range old.Shards {
+	// compare the oldCfg and newCfg configuration, find the difference, and act accordingly
+	for shid, oldGid := range oldCfg.Shards {
 		// can be executed concurrently for different shard,
 		// but the execution concerning one shard should be sequential (i.e. strictly follow step 1 to 3)
-		newGid := new.Shards[shid]
+		newGid := newCfg.Shards[shid]
 
 		// if the shard belongs to the same group, ignore
 		if newGid == oldGid {
@@ -99,22 +100,23 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 		go func(shid shardcfg.Tshid, oldGid tester.Tgid, newGid tester.Tgid) {
 			defer wg.Done()
 
-			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, new.Num)
-			oldGrpClerk := sck.Clerk(old, oldGid)
-			data, err := oldGrpClerk.FreezeShard(shid, new.Num)
+			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
+			oldGrpClerk := sck.Clerk(oldCfg, oldGid)
+			data, err := oldGrpClerk.FreezeShard(shid, newCfg.Num)
 			if err != rpc.OK {
+				// could only be 1 of 3 kinds: OK, ErrWrongGroup, ErrVersion
 				debug.D5APrintf("controller -FreezeShard-> %v failed with %v\n", shid, err)
 			}
 
-			// 2. install the shard to the newGid: newGrp.Install(shid, new.Num)
-			newGrpClerk := sck.Clerk(new, newGid)
-			err = newGrpClerk.InstallShard(shid, data, new.Num)
+			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
+			newGrpClerk := sck.Clerk(newCfg, newGid)
+			err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
 			if err != rpc.OK {
 				debug.D5APrintf("controller -InstallShard-> %v failed with %v\n", shid, err)
 			}
 
-			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, new.Num)
-			err = oldGrpClerk.DeleteShard(shid, new.Num)
+			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
+			err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
 			if err != rpc.OK {
 				debug.D5APrintf("controller -DeleteShard-> %v failed with %v\n", shid, err)
 			}
@@ -122,23 +124,23 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 	}
 	wg.Wait()
 
-	// save new config to configStore
+	// save newCfg to configStore
+	marshalledCfg := newCfg.String()
 
-	marshalledCfg := new.String()
-
-	err := sck.configStore.Put("cfg", marshalledCfg, ver+1)
+	err := sck.configStore.Put("cfg", marshalledCfg, ver) // idempotent save
 	if err != rpc.OK {
-		debug.D5APrintf("controller save new config, err:%v\n", err)
+		debug.D5APrintf("controller save newCfg, err:%v\n", err)
 	}
 }
 
 // queryInternal query the configStore that returns the config and the version
 func (sck *ShardCtrler) queryInternal() (*shardcfg.ShardConfig, rpc.Tversion) {
-	UnmarshalledCfg, ver, err := sck.configStore.Get("cfg")
+	marshalledCfg, ver, err := sck.configStore.Get("cfg")
+
 	if err != rpc.OK {
 		log.Fatal("configStore Get err:", err)
 	}
-	shardCfg := shardcfg.FromString(UnmarshalledCfg)
+	shardCfg := shardcfg.FromString(marshalledCfg)
 	return shardCfg, ver
 }
 
