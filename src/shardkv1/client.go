@@ -12,6 +12,7 @@ import (
 	"log"
 	"sync"
 
+	"6.5840/debug"
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 
@@ -28,8 +29,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 
 	cachedConfig *shardcfg.ShardConfig
-
-	mu sync.RWMutex
+	mu           sync.RWMutex
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -62,12 +62,14 @@ func (ck *Clerk) getConfig() *shardcfg.ShardConfig {
 	defer ck.mu.Unlock()
 	ck.cachedConfig = cfg
 
+	log.Printf("getConfig: returning Num=%v, Shards=%v", cfg.Num, cfg.Shards)
 	return ck.cachedConfig
 }
 
 // refreshConfig
 func (ck *Clerk) refreshConfig() {
 	cfg := ck.sck.Query()
+	log.Printf("refreshConfig: got Num=%v, Shards=%v", cfg.Num, cfg.Shards)
 	ck.mu.Lock()
 	defer ck.mu.Unlock()
 	ck.cachedConfig = cfg
@@ -103,7 +105,10 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			ck.rcks[gid] = clerk
 			ck.mu.Unlock()
 		}
+
+		debug.D5APrintf("client -Get(key: %v) in shard %v-> group %v\n", key, shardId, gid)
 		val, version, rpcErr := clerk.Get(key)
+		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpc.ErrWrongGroup {
 			ck.refreshConfig()
 		} else {
@@ -138,7 +143,9 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			ck.rcks[gid] = clerk
 			ck.mu.Unlock()
 		}
+		debug.D5APrintf("client -Put(key: %v, value: %v, version: %v) in shard %v-> group %v\n", key, value, version, shardId, gid)
 		rpcErr := clerk.Put(key, value, version)
+		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		if rpcErr == rpc.ErrWrongGroup {
 			ck.refreshConfig()
 		} else {

@@ -95,7 +95,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 		if newGid == oldGid {
 			continue
 		}
-
+		debug.D5APrintf("controller start moving shard %v from %v to %v\n", shid, oldGid, newGid)
 		wg.Add(1)
 		go func(shid shardcfg.Tshid, oldGid tester.Tgid, newGid tester.Tgid) {
 			defer wg.Done()
@@ -105,20 +105,23 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 			data, err := oldGrpClerk.FreezeShard(shid, newCfg.Num)
 			if err != rpc.OK {
 				// could only be 1 of 3 kinds: OK, ErrWrongGroup, ErrVersion
-				debug.D5APrintf("controller -FreezeShard-> %v failed with %v\n", shid, err)
+				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, oldGid, err)
+				return
 			}
 
 			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
 			newGrpClerk := sck.Clerk(newCfg, newGid)
 			err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
 			if err != rpc.OK {
-				debug.D5APrintf("controller -InstallShard-> %v failed with %v\n", shid, err)
+				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v failed with %v\n", shid, len(data), newCfg.Num, newGid, err)
+				return
 			}
 
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
 			err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
 			if err != rpc.OK {
-				debug.D5APrintf("controller -DeleteShard-> %v failed with %v\n", shid, err)
+				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, newGid, err)
+				return
 			}
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}

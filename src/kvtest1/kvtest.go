@@ -115,6 +115,7 @@ func (ts *Test) PutAtLeastOnce(ck IKVClerk, key, value string, ver rpc.Tversion,
 func (ts *Test) CheckGet(ck IKVClerk, key, value string, version rpc.Tversion) {
 	tester.AnnotateCheckerBegin(fmt.Sprintf("checking Get(%v) = (%v, %v)", key, value, version))
 	val, ver, err := ts.Get(ck, key, 0)
+	//log.Printf("--After ts.Get(ck, key: %v, cli:%v )--", key, 0)
 	if err != rpc.OK {
 		text := fmt.Sprintf("Get(%v) returns error = %v", key, err)
 		tester.AnnotateCheckerFailure(text, text)

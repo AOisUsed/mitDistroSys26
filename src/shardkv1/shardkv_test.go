@@ -204,23 +204,35 @@ func joinLeave5A(t *testing.T, reliable bool, part string) {
 
 	ts.setupKVService()
 	ck := ts.MakeClerk()
+	//t.Log("==Before SpreadPuts==")
 	ka, va := ts.SpreadPuts(ck, NKEYS)
+	//t.Log("==After SpreadPuts==")
 
 	sck := ts.ShardCtrler()
 	grps := ts.groups(NGRP)
 
+	//t.Log("==Before JoinGroups==")
 	ts.joinGroups(sck, grps)
+	//t.Log("==After JoinGroups==")
 
+	//t.Logf("==Before CheckShutdownSharding(down: %v, ka: %v)==\n", grps[0], ka)
 	ts.checkShutdownSharding(grps[0], ka, va)
+	//t.Logf("==After ShutdownSharding(down: %v, ka: %v, va: %v)==\n", grps[0], ka, va)
 
 	for i := 0; i < len(ka); i++ {
+		//t.Logf("==Before CheckGet(ck, key: %v, value: %v, version: %v)==\n)", ka[i], va[i], rpc.Tversion(1))
 		ts.CheckGet(ck, ka[i], va[i], rpc.Tversion(1))
+		//t.Logf("==After CheckGet(ck, key: %v, value: %v, version: %v)==\n)", ka[i], va[i], rpc.Tversion(1))
 	}
 
+	//t.Log("==Before LeaveGroups==")
 	ts.leaveGroups(sck, grps)
+	//t.Log("==After LeaveGroups==")
 
 	for i := 0; i < len(ka); i++ {
+		//t.Logf("==Before CheckGet(ck, key: %v, value: %v, version: %v)==\n)", ka[i], va[i], rpc.Tversion(1))
 		ts.CheckGet(ck, ka[i], va[i], rpc.Tversion(1))
+		//t.Logf("==After CheckGet(ck, key: %v, value: %v, version: %v)==\n)", ka[i], va[i], rpc.Tversion(1))
 	}
 }
 
