@@ -46,7 +46,7 @@ func (sck *ShardCtrler) InitController() {
 
 }
 
-// Clerk create/get clerk from config and groupId. note that if the servers of a group change, this could return outdated value
+// Clerk create/get clerk from config and groupId. note that if the servers of a group change, this could return wrong value
 func (sck *ShardCtrler) Clerk(shardCfg *shardcfg.ShardConfig, gid tester.Tgid) *shardgrp.Clerk {
 	sck.mu.Lock()
 	clerk, exists := sck.clerkByGid[gid]
@@ -82,7 +82,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 		return
 	}
 
-	debug.D5APrintf("controller: ChangeConfigTo()\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
+	debug.D5APrintf("controller: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
 
 	var wg sync.WaitGroup
 	// compare the oldCfg and newCfg configuration, find the difference, and act accordingly
@@ -108,6 +108,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, oldGid, err)
 				return
 			}
+			debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", shid, newCfg.Num, oldGid, err)
 
 			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
 			newGrpClerk := sck.Clerk(newCfg, newGid)
@@ -116,6 +117,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v failed with %v\n", shid, len(data), newCfg.Num, newGid, err)
 				return
 			}
+			debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", shid, len(data), newCfg.Num, newGid, err)
 
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
 			err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
@@ -123,6 +125,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, newGid, err)
 				return
 			}
+			debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", shid, newCfg.Num, newGid, err)
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}
 	wg.Wait()
@@ -132,7 +135,9 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 
 	err := sck.configStore.Put("cfg", marshalledCfg, ver) // idempotent save
 	if err != rpc.OK {
-		debug.D5APrintf("controller save newCfg, err:%v\n", err)
+		debug.D5APrintf("controller save newCfg failed with err:%v\n", err)
+	} else {
+		debug.D5APrintf("controller save newCfg succeeds with :%v, ChangeConfigTo(Num: %v) is done\n", err, newCfg.Num)
 	}
 }
 
@@ -141,7 +146,7 @@ func (sck *ShardCtrler) queryInternal() (*shardcfg.ShardConfig, rpc.Tversion) {
 	marshalledCfg, ver, err := sck.configStore.Get("cfg")
 
 	if err != rpc.OK {
-		log.Fatal("configStore Get err:", err)
+		log.Fatal("configStore get config err:", err)
 	}
 	shardCfg := shardcfg.FromString(marshalledCfg)
 	return shardCfg, ver
@@ -152,7 +157,7 @@ func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 	// Your code here.
 	UnmarshalledCfg, _, err := sck.configStore.Get("cfg")
 	if err != rpc.OK {
-		log.Fatal("configStore Get err:", err)
+		log.Fatal("configStore get config err:", err)
 	}
 	shardCfg := shardcfg.FromString(UnmarshalledCfg)
 	return shardCfg

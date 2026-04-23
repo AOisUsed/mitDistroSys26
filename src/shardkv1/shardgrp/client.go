@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.5840/debug"
 	"6.5840/kvsrv1/rpc"
@@ -30,7 +31,7 @@ type Clerk struct {
 	// You can  add to this struct.
 	clientId   uint64
 	requestId  uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
-	maxAttempt int    // maximum attempt for a request, each rpc fail counts as an attempt. this is used to deal with server group shutdown
+	maxAttempt int    // maximum attempt for a request, each rpc fail counts as an attempt. this is used to detect server group leave
 	mu         sync.Mutex
 }
 
@@ -68,28 +69,33 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	attemptCount := 0
 	for attemptCount < maxAttempt {
-		//debug.D5APrintf("clerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
+		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
 
 		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
-			//debug.D5APrintf("clerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
+			debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
-				debug.D5APrintf("clerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
+				//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
 			case rpc.ErrWrongLeader:
+				attemptCount = 0
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
-				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
 		attemptCount++
+		if attemptCount%len(ck.servers) == 0 {
+			// if all servers are dead, backoff for a bit of time
+			time.Sleep(300 * time.Millisecond)
+		}
 		leader = (leader + 1) % len(ck.servers)
 	}
 	// if exceeds maxAttempt, return ErrWrongLeader, so that the client will pull latest config from configStore
@@ -117,33 +123,34 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	firstTry := true
 
 	for attemptCount < maxAttempt {
-		//debug.D5APrintf("clerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
+		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			//debug.D5APrintf("clerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
+			debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
-				debug.D5APrintf("clerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
+				//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrVersion:
-				debug.D5APrintf("clerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
+				//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 				if firstTry {
 					return rpc.ErrVersion
 				}
 				return rpc.ErrMaybe
 			case rpc.ErrWrongLeader:
 				firstTry = false
+				attemptCount = 0
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
-				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
 		// RPC fails: it may have been executed or not.
@@ -152,6 +159,10 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		// firstTry need to be set to false. Because leadership can quickly change and
 		// the Command propagates between the servers.
 		attemptCount++
+		if attemptCount%len(ck.servers) == 0 {
+			// if all servers are dead, backoff for a bit of time
+			time.Sleep(300 * time.Millisecond)
+		}
 		firstTry = false
 		leader = (leader + 1) % len(ck.servers)
 	}
@@ -176,27 +187,32 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 	attemptCount := 0
 
 	for attemptCount < maxAttempt {
-		//debug.D5APrintf("clerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+		debug.D5APrintf("shardkvclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 
 		var reply shardrpc.FreezeShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.FreezeShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("clerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+			debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 			switch reply.Err {
 			case rpc.OK, rpc.ErrWrongGroup:
-				debug.D5APrintf("clerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+				//debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.State, reply.Err
 			case rpc.ErrWrongLeader:
+				attemptCount = 0
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
-				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
 		attemptCount++
+		if attemptCount%len(ck.servers) == 0 {
+			// if all servers are dead, backoff for a bit of time
+			time.Sleep(300 * time.Millisecond)
+		}
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return nil, rpc.ErrWrongGroup
@@ -216,26 +232,31 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 
 	attemptCount := 0
 	for attemptCount < maxAttempt {
-		debug.D5APrintf("clerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
+		debug.D5APrintf("shardkvclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
 		var reply shardrpc.InstallShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.InstallShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			debug.D5APrintf("shardkvclerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
 			case rpc.OK:
-				debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+				//debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
+				attemptCount = 0
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
-				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
 		attemptCount++
+		if attemptCount%len(ck.servers) == 0 {
+			// if all servers are dead, backoff for a bit of time
+			time.Sleep(300 * time.Millisecond)
+		}
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return rpc.ErrWrongGroup
@@ -253,20 +274,21 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	ck.mu.Unlock()
 	attemptCount := 0
 	for attemptCount < maxAttempt {
-		//debug.D5APrintf("clerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+		debug.D5APrintf("shardkvclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 
 		var reply shardrpc.DeleteShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.DeleteShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("clerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
 			case rpc.OK:
-				debug.D5APrintf("clerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+				//debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
+				attemptCount = 0
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
@@ -274,6 +296,10 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 			}
 		}
 		attemptCount++
+		if attemptCount%len(ck.servers) == 0 {
+			// if all servers are dead, backoff for a bit of time
+			time.Sleep(300 * time.Millisecond)
+		}
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return rpc.ErrWrongGroup

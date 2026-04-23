@@ -62,14 +62,14 @@ func (ck *Clerk) getConfig() *shardcfg.ShardConfig {
 	defer ck.mu.Unlock()
 	ck.cachedConfig = cfg
 
-	log.Printf("getConfig: returning Num=%v, Shards=%v", cfg.Num, cfg.Shards)
+	//log.Printf("getConfig: returning Num=%v, Shards=%v", cfg.Num, cfg.Shards)
 	return ck.cachedConfig
 }
 
 // refreshConfig
 func (ck *Clerk) refreshConfig() {
 	cfg := ck.sck.Query()
-	log.Printf("refreshConfig: got Num=%v, Shards=%v", cfg.Num, cfg.Shards)
+	//log.Printf("refreshConfig: got Num=%v, Shards=%v", cfg.Num, cfg.Shards)
 	ck.mu.Lock()
 	defer ck.mu.Unlock()
 	ck.cachedConfig = cfg

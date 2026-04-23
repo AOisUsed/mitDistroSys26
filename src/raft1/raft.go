@@ -818,7 +818,6 @@ func (rf *Raft) startElection() {
 	rf.VotedFor = rf.me //vote for itself
 	rf.persist()
 	debug.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
-	debug.D5APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
 
 	args := &RequestVoteArgs{
 		Term:         rf.CurrentTerm,
@@ -862,7 +861,6 @@ func (rf *Raft) startElection() {
 				voteCount++
 				if voteCount > len(rf.peers)/2 {
 					debug.D3APrintf("%v at %v wins ", rf.me, args.Term)
-					debug.D5APrintf("%v at %v wins ", rf.me, args.Term)
 					rf.state = leader
 					//reinitialise volatile state on leaders
 					for j := range rf.nextIndex {
