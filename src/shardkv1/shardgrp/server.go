@@ -650,6 +650,10 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 		kv.responsibleShards[shardcfg.Tshid(i)] = struct{}{}
 	}
 
+	for i := 0; i < shardcfg.NShards; i++ {
+		kv.shardClients[i] = make(map[uint64]struct{}) // ← 初始化每个 shard 的 client set
+	}
+
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []any{kv, kv.rsm.Raft()}
