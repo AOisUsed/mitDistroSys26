@@ -18,14 +18,14 @@ type VersionedValue struct {
 	Version rpc.Tversion
 }
 
-type LastRequest struct {
+type LastWrite struct {
 	RequestId uint64
-	Reply     any // for this KVServer, this is either rpc.GetReply or rpc.PutReply.
+	Reply     rpc.PutReply // for this KVServer, this is rpc.PutReply.
 }
 
 type SnapshotData struct {
 	Kvm               map[string]*VersionedValue
-	LastReqByClientId map[uint64]*LastRequest
+	LastReqByClientId map[uint64]*LastWrite
 }
 
 type KVServer struct {
@@ -33,9 +33,9 @@ type KVServer struct {
 	rsm *rsm.RSM
 
 	// Your definitions here.
-	kvm               map[string]*VersionedValue
-	lastReqByClientId map[uint64]*LastRequest
-	rwMu              sync.RWMutex
+	kvm                 map[string]*VersionedValue
+	lastWriteByClientId map[uint64]*LastWrite
+	rwMu                sync.RWMutex
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -49,23 +49,22 @@ func (kv *KVServer) DoOp(req any) any {
 	var reply any
 	switch typedReq := req.(type) {
 	case rpc.GetArgs:
-		// deduplicate request
-		kv.rwMu.RLock()
-		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
-		kv.rwMu.RUnlock()
-		if exists {
-			// if the request has been executed, simply return the result and not execute it again.
-			if typedReq.RequestId <= lastReq.RequestId {
-				// note that typedReq.reqId < lastReq.reqId condition should not occur if client functions correctly
-				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-				if typedReq.RequestId < lastReq.RequestId {
-					debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastReq.RequestId)
-				}
-				debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
-				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
-			}
-		}
-		debug.D4BPrintf("server%v", kv.me)
+		//// deduplicate request
+		//kv.rwMu.RLock()
+		//lastReq, exists := kv.lastWriteByClientId[typedReq.ClientId]
+		//kv.rwMu.RUnlock()
+		//if exists {
+		//	// if the request has been executed, simply return the result and not execute it again.
+		//	if typedReq.RequestId <= lastReq.RequestId {
+		//		// note that typedReq.reqId < lastReq.reqId condition should not occur if client functions correctly
+		//		// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
+		//		if typedReq.RequestId < lastReq.RequestId {
+		//			debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastReq.RequestId)
+		//		}
+		//		debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+		//		return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+		//	}
+		//}
 		// execute the operation
 		kv.rwMu.RLock()
 		verVal, exists := kv.kvm[typedReq.Key]
@@ -82,18 +81,10 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		debug.D4BPrintf("server%v: DoOp: Get req %v, reply:%v \n", kv.me, req, reply)
-		// Save to LastReqByClientId
-		kv.rwMu.Lock()
-		kv.lastReqByClientId[typedReq.ClientId] = &LastRequest{
-			RequestId: typedReq.RequestId,
-			Reply:     reply,
-		}
-		kv.rwMu.Unlock()
-		debug.D4BPrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	case rpc.PutArgs:
 		// deduplicate request
 		kv.rwMu.RLock()
-		lastReq, exists := kv.lastReqByClientId[typedReq.ClientId]
+		lastReq, exists := kv.lastWriteByClientId[typedReq.ClientId]
 		kv.rwMu.RUnlock()
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
@@ -135,10 +126,10 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		debug.D4BPrintf("server%v: DoOp: Put req %v, reply:%v \n", kv.me, req, reply)
-		// Save to LastReqByClientId
-		kv.lastReqByClientId[typedReq.ClientId] = &LastRequest{
+		// Save to LastWriteByClientId
+		kv.lastWriteByClientId[typedReq.ClientId] = &LastWrite{
 			RequestId: typedReq.RequestId,
-			Reply:     reply,
+			Reply:     reply.(rpc.PutReply),
 		}
 		debug.D4BPrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	default:
@@ -164,9 +155,9 @@ func (kv *KVServer) Snapshot() []byte {
 	}
 
 	// make a copy of LastReqByClientId
-	var lastReqByClientId = make(map[uint64]*LastRequest)
-	for clientId, lastRequest := range kv.lastReqByClientId {
-		copiedReq := &LastRequest{
+	var lastReqByClientId = make(map[uint64]*LastWrite)
+	for clientId, lastRequest := range kv.lastWriteByClientId {
+		copiedReq := &LastWrite{
 			RequestId: lastRequest.RequestId,
 			Reply:     lastRequest.Reply,
 		}
@@ -221,7 +212,7 @@ func (kv *KVServer) Restore(data []byte) {
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()
 	kv.kvm = snapshot.Kvm
-	kv.lastReqByClientId = snapshot.LastReqByClientId
+	kv.lastWriteByClientId = snapshot.LastReqByClientId
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -276,7 +267,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	// and it should not be overwritten.
 	if kv.kvm == nil {
 		kv.kvm = make(map[string]*VersionedValue)
-		kv.lastReqByClientId = make(map[uint64]*LastRequest)
+		kv.lastWriteByClientId = make(map[uint64]*LastWrite)
 	}
 	return []any{kv, kv.rsm.Raft()}
 }
