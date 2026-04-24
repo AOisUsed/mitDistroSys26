@@ -172,8 +172,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
 	// Your code here
-	// first check Num,
-	// if getting bigger Num, this is an outdated, meaning failed ?
 
 	args := shardrpc.FreezeShardArgs{
 		Shard: s,
@@ -194,7 +192,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		if ok {
 			debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 			switch reply.Err {
-			case rpc.OK, rpc.ErrWrongGroup:
+			case rpc.OK:
 				//debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader

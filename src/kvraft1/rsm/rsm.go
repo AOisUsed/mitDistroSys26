@@ -190,6 +190,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	commandId, termAtStart, isLeader := rsm.Raft().Start(op)
 
 	if !isLeader {
+		rsm.mu.Unlock()
 		return rpc.ErrWrongLeader, nil
 	}
 

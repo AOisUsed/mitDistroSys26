@@ -29,6 +29,15 @@ type LastRequest struct {
 	Reply     any // for this KVServer, this is either rpc.GetReply or rpc.PutReply.
 }
 
+// shard state machine
+type ShardStatus int
+
+const (
+	Absent  ShardStatus = iota // shard doesn't exist in this server
+	Serving                    // shard is serving requests
+	Frozen                     // shard is frozen
+)
+
 type ShardState struct {
 	Kv                map[string]*VersionedValue
 	LastReqByClientId map[uint64]*LastRequest
@@ -38,8 +47,7 @@ type SnapshotData struct {
 	Kvm               [shardcfg.NShards]map[string]*VersionedValue
 	LastReqByClientId map[uint64]*LastRequest
 	CfgNumByShid      map[shardcfg.Tshid]shardcfg.Tnum
-	FrozenByShid      map[shardcfg.Tshid]bool
-	ResponsibleShards map[shardcfg.Tshid]struct{}
+	ShardStatuses     [shardcfg.NShards]ShardStatus
 	ShardClients      [shardcfg.NShards]map[uint64]struct{}
 }
 
@@ -54,20 +62,11 @@ type KVServer struct {
 	lastReqByClientId map[uint64]*LastRequest
 
 	// for shard
-	cfgNumByShid      map[shardcfg.Tshid]shardcfg.Tnum
-	frozenByShid      map[shardcfg.Tshid]bool
-	responsibleShards map[shardcfg.Tshid]struct{}
-	shardClients      [shardcfg.NShards]map[uint64]struct{} // record which clients have done operation on the shard
+	cfgNumByShid  map[shardcfg.Tshid]shardcfg.Tnum
+	shardStatuses [shardcfg.NShards]ShardStatus
+	shardClients  [shardcfg.NShards]map[uint64]struct{} // record which clients have done operation on the shard
 
 	rwMu sync.Mutex
-}
-
-// check whether the server is responsible for the shard, need to be used within Read Lock
-func (kv *KVServer) isResponsibleForShard(shid shardcfg.Tshid) bool {
-	if _, exists := kv.responsibleShards[shid]; exists {
-		return true
-	}
-	return false
 }
 
 func (kv *KVServer) DoOp(req any) any {
@@ -76,15 +75,16 @@ func (kv *KVServer) DoOp(req any) any {
 	var reply any
 	switch request := req.(type) {
 
-	// kv: Get, Put
+	// == KV == //
+	// == Get == //
 	case rpc.GetArgs:
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 
-		// check whether it's responsible for the shard
-		if !kv.isResponsibleForShard(shid) {
+		// check whether it's serving for the shard
+		if kv.shardStatuses[shid] != Serving {
 			reply = rpc.GetReply{
 				Err: rpc.ErrWrongGroup,
 			}
@@ -99,7 +99,7 @@ func (kv *KVServer) DoOp(req any) any {
 				// note that request.reqId < lastReq.reqId condition should not occur if client functions correctly
 				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
 				if request.RequestId < lastReq.RequestId {
-					log.Fatalf("shardkvserver %v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, request.ClientId, request.RequestId, lastReq.RequestId)
+					log.Fatalf("Fatal: shardkvserver %v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, request.ClientId, request.RequestId, lastReq.RequestId)
 				}
 				debug.D5APrintf("shardkvserver %v:client %v sending duplicated request:%v\n", kv.me, request.ClientId, request.RequestId)
 				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
@@ -127,23 +127,16 @@ func (kv *KVServer) DoOp(req any) any {
 		}
 		kv.shardClients[shid][request.ClientId] = struct{}{}
 		//debug.D5APrintf("shardkvserver %v: saved LastReqByClientId {%v:%v}", kv.me, request.ClientId, reply)
+
+	//== Put == //
 	case rpc.PutArgs:
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 
-		// check whether it's responsible for the shard
-		if !kv.isResponsibleForShard(shid) {
-			reply = rpc.PutReply{
-				Err: rpc.ErrWrongGroup,
-			}
-			return reply
-		}
-
-		// check whether the shard is frozen, and return WrongGroup if frozen
-		isFrozen, exists := kv.frozenByShid[shid]
-		if exists && isFrozen {
+		// check whether it's serving for the shard
+		if kv.shardStatuses[shid] != Serving {
 			reply = rpc.PutReply{
 				Err: rpc.ErrWrongGroup,
 			}
@@ -200,172 +193,133 @@ func (kv *KVServer) DoOp(req any) any {
 		kv.shardClients[shid][request.ClientId] = struct{}{}
 	//debug.D5APrintf("shardkvserver %v: saved LastReqByClientId {%v:%v}", kv.me, request.ClientId, reply)
 
-	// sharding: Freeze, Install, Delete
+	// == Sharding == //
+	// == FreezeShard == //
 	case shardrpc.FreezeShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp Freeze(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
-		// check config Num
-		// if local has higher, reject the request
 		shid := request.Shard
-		localCfgNum, exists := kv.cfgNumByShid[shid]
-		if !exists {
-			log.Fatalf("shardkvserver %v: DoOp(FreezeShad) doesn't have the Num for the shard %v\n", kv.me, shid)
-		}
-		// if the request is outdated, simply reply with its Configuration Num. When the clerk gets the Num, it knows that this request is not executed
-		if localCfgNum >= request.Num {
+		localCfgNum := kv.cfgNumByShid[shid]
+		reqCfgNum := request.Num
+
+		// Accept any newer reconfiguration for shards we currently own.
+		// A shard may stay in the same group across many configs, so the
+		// next move is not necessarily localCfgNum+1.
+		if reqCfgNum > localCfgNum &&
+			(kv.shardStatuses[shid] == Serving || kv.shardStatuses[shid] == Frozen) { // need to resend if the state is frozen as InstallShard on new owner may have failed.
+			kv.shardStatuses[shid] = Frozen
+			reply = shardrpc.FreezeShardReply{
+				State: kv.marshallShardState(shid),
+				Num:   reqCfgNum,
+				Err:   rpc.OK,
+			}
+		} else {
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
-				Err:   rpc.OK, // if the request is outdated, it must have been done before, otherwise controller wouldn't have incremented the config Num, therefore reply OK is safe
+				Err:   rpc.OK, // note that this ok, doesn't mean operation is successful
 			}
-			return reply
-			//} else if localCfgNum == request.Num {
-			//	// if localCfgNum equals, meaning the request has been executed, reply OK
-			//	// and since it's been frozen, the current state will be the same. FreezeShard is idempotent
-			//	if kv.frozenByShid[shid] != true {
-			//		// the design here: once frozen state is set to true in FreezeShard, never set to false in the same config Num,
-			//		// because controller may fail and retry Freeze/Delete unorderly. it breaks idempotency if it is allowed to change the *frozen* state
-			//		// independently by Freeze or Delete.  reset *frozen* state only in InstallShard
-			//		log.Fatalf("shardkvserver %v: DoOp(FreezeShard) should have frozen the shard %v!\n", kv.me, shid)
-			//	}
-			//	w := new(bytes.Buffer)
-			//	e := labgob.NewEncoder(w)
-			//
-			//	lastReqByClientId := make(map[uint64]*LastRequest)
-			//	Clnts := kv.shardClients[shid] // clients that did Ops on this shard
-			//	for client := range Clnts {    // we only care about the lastReq of clients that worked on this shard
-			//		lastReqByClientId[client] = kv.lastReqByClientId[client]
-			//	}
-			//	shardState := ShardState{
-			//		Kv:                kv.kvm[shid],
-			//		LastReqByClientId: lastReqByClientId,
-			//	}
-			//	err := e.Encode(shardState)
-			//	if err != nil {
-			//		log.Fatal(err)
-			//	}
-			//	marshalledShardState := w.Bytes()
-			//	reply = shardrpc.FreezeShardReply{
-			//		State: marshalledShardState,
-			//		Num:   localCfgNum,
-			//		Err:   rpc.OK,
-			//	}
-			//	return reply
-		} else { // case where localCfgNum < Req.Num
-			kv.frozenByShid[shid] = true        // set shard frozen
-			kv.cfgNumByShid[shid] = request.Num // update config Num
-
-			w := new(bytes.Buffer)
-			e := labgob.NewEncoder(w)
-
-			lastReqByClientId := make(map[uint64]*LastRequest)
-			Clnts := kv.shardClients[shid] // clients that did Ops on this shard
-			for client := range Clnts {    // we only care about the lastReq of clients that worked on this shard
-				lastReqByClientId[client] = kv.lastReqByClientId[client]
-			}
-			shardState := ShardState{
-				Kv:                kv.kvm[shid],
-				LastReqByClientId: lastReqByClientId,
-			}
-			err := e.Encode(shardState)
-			if err != nil {
-				log.Fatal(err)
-			}
-			marshalledShardState := w.Bytes()
-			reply = shardrpc.FreezeShardReply{
-				State: marshalledShardState,
-				Num:   request.Num,
-				Err:   rpc.OK,
-			}
-			return reply
 		}
+
+	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 		// check config Num
-		// if local has higher, reject the request
-		shid := request.Shard
-		localCfgNum, exists := kv.cfgNumByShid[shid]
-		if !exists {
-			log.Fatalf("shardkvserver %v: DoOp(InstallShard) doesn't have the Num for the shard %v\n", kv.me, shid)
+		localCfgNum := kv.cfgNumByShid[request.Shard]
+		if request.Num > localCfgNum && kv.shardStatuses[request.Shard] == Absent {
+			kv.InstallShardState(request.Shard, request.State)
+			kv.shardStatuses[request.Shard] = Serving
+			kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
 		}
-		if localCfgNum >= request.Num {
-			reply = shardrpc.InstallShardReply{
-				Err: rpc.OK,
-			}
-			return reply
-		} else { // localCfgNum < request.Num
-			kv.cfgNumByShid[shid] = request.Num     // update config Num
-			kv.frozenByShid[shid] = false           // set shard unfrozen
-			kv.responsibleShards[shid] = struct{}{} // mark shard as responsible
-
-			r := bytes.NewBuffer(request.State)
-			d := labgob.NewDecoder(r)
-			var shardState ShardState
-			err := d.Decode(&shardState)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			// install shardkv
-			kv.kvm[shid] = shardState.Kv
-
-			// install lastReqByClientId (), shardClients
-			for clientId, Request := range shardState.LastReqByClientId {
-				// shardClients
-				kv.shardClients[shid][clientId] = struct{}{}
-				// lastReqByClientId: only keep the latest (bigger requestId)
-				if existingReq, exists := kv.lastReqByClientId[clientId]; !exists ||
-					Request.RequestId > existingReq.RequestId {
-					kv.lastReqByClientId[clientId] = Request
-				}
-			}
-
-			reply = shardrpc.InstallShardReply{
-				Err: rpc.OK,
-			}
-			return reply
+		// return the same thing in all condition
+		reply = shardrpc.InstallShardReply{
+			Err: rpc.OK,
 		}
+		return reply
+
+	// == DeleteShard == //
 	case shardrpc.DeleteShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp DeleteShard(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		// idempotency design:
-		// don't check whether it's responsible for the
+
 		kv.rwMu.Lock()
 		defer kv.rwMu.Unlock()
 		shid := request.Shard
-		localCfgNum, exists := kv.cfgNumByShid[shid]
-		if !exists {
-			log.Fatalf("shardkvserver %v: DoOp(DeleteShard) doesn't have the Num for the shard %v\n", kv.me, shid)
-		}
-		if localCfgNum > request.Num {
-			reply = shardrpc.DeleteShardReply{
-				Err: rpc.OK,
-			}
-			return reply
-		} else { // localCfgNum <= request.Num  (must execute deletion when the Num matches because Num matches only mean that this shard at least Frozen the shard ?)
-			//log.Printf("shardkvserver %v: DoOp(DeleteShard) at case: should delete %v \n", kv.me, shid)
-			//debug.D5APrintf("Before DeleteShard: ")
-			//kv.Snapshot()
+		localCfgNum := kv.cfgNumByShid[shid]
 
+		if request.Num > localCfgNum && kv.shardStatuses[request.Shard] == Frozen {
 			kv.kvm[shid] = nil          // delete kv for the shard
 			kv.shardClients[shid] = nil // delete shardClients,
 			// note that for current design, don't change lastReqByClient because we don't know whether the lastReq of a certain client recorded is the record of the deleted shard.
 			// If we wish to remove that, we'll need carry the lastReq together with the key that it operated on
+			kv.shardStatuses[shid] = Absent
 			kv.cfgNumByShid[shid] = request.Num // update config Num
-			delete(kv.responsibleShards, shid)  // mark as no longer responsible
-			reply = shardrpc.DeleteShardReply{
-				Err: rpc.OK,
-			}
-			//debug.D5APrintf("After DeleteShard: ")
-			//kv.Snapshot()
+		}
+		reply = shardrpc.DeleteShardReply{
+			Err: rpc.OK,
 		}
 	default:
 		debug.D5APrintf("shardkvserver %v: DoOp: Unknown req type %T\n", kv.me, req)
 		reply = nil
 	}
 	return reply
+}
+
+// marshallShardState into bytes
+func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	lastReqByClientId := make(map[uint64]*LastRequest)
+	Clnts := kv.shardClients[shid] // clients that did Ops on this shard
+	for client := range Clnts {    // we only care about the lastReq of clients that worked on this shard
+		lastReqByClientId[client] = kv.lastReqByClientId[client]
+	}
+
+	kvm := make(map[string]*VersionedValue)
+	for k, v := range kv.kvm[shid] {
+		kvm[k] = v
+	}
+	shardState := ShardState{
+		Kv:                kvm,
+		LastReqByClientId: lastReqByClientId,
+	}
+	err := e.Encode(shardState)
+	if err != nil {
+		log.Fatal(err)
+	}
+	marshalledShardState := w.Bytes()
+	return marshalledShardState
+}
+
+// need to used within Write Lock
+func (kv *KVServer) InstallShardState(shid shardcfg.Tshid, shardstate []byte) {
+	r := bytes.NewBuffer(shardstate)
+	d := labgob.NewDecoder(r)
+	var shardState ShardState
+	err := d.Decode(&shardState)
+	if err != nil {
+		log.Fatalf("Fatal: %v", err)
+	}
+
+	// install shardkv
+	kvm := make(map[string]*VersionedValue)
+	for k, v := range shardState.Kv {
+		kvm[k] = v
+	}
+	kv.kvm[shid] = kvm
+	// install lastReqByClientId (), shardClients
+	kv.shardClients[shid] = make(map[uint64]struct{})
+	for clientId, Request := range shardState.LastReqByClientId {
+		// shardClients
+		kv.shardClients[shid][clientId] = struct{}{}
+		// lastReqByClientId: only keep the latest (bigger requestId)
+		if existingReq, exists := kv.lastReqByClientId[clientId]; !exists ||
+			Request.RequestId > existingReq.RequestId {
+			kv.lastReqByClientId[clientId] = Request
+		}
+	}
 }
 
 func (kv *KVServer) Snapshot() []byte {
@@ -404,18 +358,13 @@ func (kv *KVServer) Snapshot() []byte {
 		cfgNumByShid[shid] = num
 	}
 
-	// make a copy of frozenByShid
-	var frozenByShid = make(map[shardcfg.Tshid]bool)
-	for shid, isFrozen := range kv.frozenByShid {
-		frozenByShid[shid] = isFrozen
+	// make a copy of shardStatuses
+	var shardStatuses [shardcfg.NShards]ShardStatus
+	for shid, status := range kv.shardStatuses {
+		shardStatuses[shid] = status
 	}
 
-	// make a copy of ResponsibleShards
-	var responsibleShards = make(map[shardcfg.Tshid]struct{})
-	for shid := range kv.responsibleShards {
-		responsibleShards[shid] = struct{}{}
-	}
-
+	// make a copy of shardClients
 	var shardClients [shardcfg.NShards]map[uint64]struct{}
 	for shid := range kv.shardClients {
 		clients := make(map[uint64]struct{})
@@ -426,58 +375,12 @@ func (kv *KVServer) Snapshot() []byte {
 	}
 	kv.rwMu.Unlock()
 
-	//var totalSize int
-	//kvmBuf := new(bytes.Buffer)
-	//gob.NewEncoder(kvmBuf).Encode(kvm)
-	//kvmSize := kvmBuf.Len()
-	//totalSize += kvmSize
-	////log.Printf("[Snapshot] Kvm size: %d bytes", kvmSize)
-	//
-	//// 2. LastReqByClientId 大小
-	//reqBuf := new(bytes.Buffer)
-	//gob.NewEncoder(reqBuf).Encode(lastReqByClientId)
-	//reqSize := reqBuf.Len()
-	//totalSize += reqSize
-	////log.Printf("[Snapshot] LastReq size: %d bytes", reqSize)
-	//
-	//// 3. CfgNumByShid 大小
-	//cfgBuf := new(bytes.Buffer)
-	//gob.NewEncoder(cfgBuf).Encode(cfgNumByShid)
-	//cfgSize := cfgBuf.Len()
-	//totalSize += cfgSize
-	////log.Printf("[Snapshot] CfgNum size: %d bytes", cfgSize)
-	//
-	//// 4. FrozenByShid 大小
-	//frozenBuf := new(bytes.Buffer)
-	//gob.NewEncoder(frozenBuf).Encode(frozenByShid)
-	//frozenSize := frozenBuf.Len()
-	//totalSize += frozenSize
-	////log.Printf("[Snapshot] Frozen size: %d bytes", frozenSize)
-	//
-	//// 5. ResponsibleShards 大小
-	//respBuf := new(bytes.Buffer)
-	//gob.NewEncoder(respBuf).Encode(responsibleShards)
-	//respSize := respBuf.Len()
-	//totalSize += respSize
-	////log.Printf("[Snapshot] Responsible size: %d bytes", respSize)
-	//
-	//log.Printf("kv%v: [Snapshot] KVM: %d, LastReq: %d, CfgNum: %d, Frozen: %d, Resp: %d | Total: %d ",
-	//	kv.me,
-	//	kvmBuf.Len(),
-	//	reqBuf.Len(),
-	//	cfgBuf.Len(),
-	//	frozenBuf.Len(),
-	//	respBuf.Len(),
-	//	totalSize,
-	//)
-
 	// snapshot
 	snapshot := SnapshotData{
 		Kvm:               kvm,
 		LastReqByClientId: lastReqByClientId,
 		CfgNumByShid:      cfgNumByShid,
-		FrozenByShid:      frozenByShid,
-		ResponsibleShards: responsibleShards,
+		ShardStatuses:     shardStatuses,
 		ShardClients:      shardClients,
 	}
 
@@ -493,7 +396,7 @@ func (kv *KVServer) Snapshot() []byte {
 	e := labgob.NewEncoder(w)
 	err := e.Encode(snapshot)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Fatal: %v", err)
 		return nil
 	}
 	return w.Bytes()
@@ -505,13 +408,12 @@ func (kv *KVServer) Restore(data []byte) {
 	}
 
 	debug.D5APrintf("shardkvserver %v: Restore()\n", kv.me)
-
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var snapshot SnapshotData
 	err := d.Decode(&snapshot)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Fatal: %v", err)
 		return
 	}
 
@@ -522,22 +424,13 @@ func (kv *KVServer) Restore(data []byte) {
 	}
 	debug.D5APrintf("shardkvserver %v: Restored from snapshot\n keyNum: %v\n", kv.me, keyNum)
 
-	//var sb strings.Builder
-	//for k, v := range kvm {
-	//	s := fmt.Sprintf("%v-%v\t", k, v)
-	//	sb.WriteString(s)
-	//}
-
-	//debug.D5APrintf("shardkvserver %v: Restored from snapshot:%v\n", kv.me, sb.String())
-
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()
-
+	// restore from snapshot
 	kv.kvm = snapshot.Kvm
 	kv.lastReqByClientId = snapshot.LastReqByClientId
 	kv.cfgNumByShid = snapshot.CfgNumByShid
-	kv.frozenByShid = snapshot.FrozenByShid
-	kv.responsibleShards = snapshot.ResponsibleShards
+	kv.shardStatuses = snapshot.ShardStatuses
 	kv.shardClients = snapshot.ShardClients
 }
 
@@ -629,31 +522,49 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(rsm.Op{})
 	labgob.Register(ShardState{})
 
-	kv := &KVServer{gid: gid, me: me}
+	// initialisations:
 
+	// kvm
+	kv := &KVServer{gid: gid, me: me}
 	var kvm [shardcfg.NShards]map[string]*VersionedValue
 	for i := 0; i < shardcfg.NShards; i++ {
 		kvm[i] = make(map[string]*VersionedValue)
 	}
 	kv.kvm = kvm
 
+	// lastReqByClientId
 	kv.lastReqByClientId = make(map[uint64]*LastRequest)
+
+	// cfgNumByShid tracks the latest configuration number this server has
+	// processed for each shard.
 	kv.cfgNumByShid = make(map[shardcfg.Tshid]shardcfg.Tnum)
-	// initialise such that Num for each shard is 0 // todo: may be incorrect
 	for i := 0; i < shardcfg.NShards; i++ {
-		kv.cfgNumByShid[shardcfg.Tshid(i)] = 0
-	}
-	kv.frozenByShid = make(map[shardcfg.Tshid]bool)
-	kv.responsibleShards = make(map[shardcfg.Tshid]struct{})
-	// initialise responsibleShards such that the server suppose that it's responsible for all shards, todo:may not be correct
-	for i := 0; i < shardcfg.NShards; i++ {
-		kv.responsibleShards[shardcfg.Tshid(i)] = struct{}{}
+		if gid == shardcfg.Gid1 {
+			kv.cfgNumByShid[shardcfg.Tshid(i)] = 1
+		} else {
+			kv.cfgNumByShid[shardcfg.Tshid(i)] = 0
+		}
 	}
 
-	for i := 0; i < shardcfg.NShards; i++ {
-		kv.shardClients[i] = make(map[uint64]struct{}) // ← 初始化每个 shard 的 client set
+	// shardStatuses: only the initial group owns all shards at startup.
+	var shardStatuses [shardcfg.NShards]ShardStatus
+	for shid := 0; shid < shardcfg.NShards; shid++ {
+		if gid == shardcfg.Gid1 {
+			shardStatuses[shid] = Serving
+		} else {
+			shardStatuses[shid] = Absent
+		}
 	}
+	kv.shardStatuses = shardStatuses
 
+	// shardClients, initialise as empty
+	var shardClients [shardcfg.NShards]map[uint64]struct{}
+	for shid := 0; shid < shardcfg.NShards; shid++ {
+		shardClients[shid] = make(map[uint64]struct{})
+	}
+	kv.shardClients = shardClients
+
+	// initialise RSM (which may overwrite this server from its raft snapshot)
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []any{kv, kv.rsm.Raft()}
