@@ -102,30 +102,26 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 
 			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
 			oldGrpClerk := sck.Clerk(oldCfg, oldGid)
-			data, err := oldGrpClerk.FreezeShard(shid, newCfg.Num)
-			if err != rpc.OK {
-				// could only be 1 of 3 kinds: OK, ErrWrongGroup, ErrVersion
-				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, oldGid, err)
-				return
+			var data []byte
+			var err rpc.Err
+			for err != rpc.OK {
+				data, err = oldGrpClerk.FreezeShard(shid, newCfg.Num)
+				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", shid, newCfg.Num, oldGid, err)
 			}
-			debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", shid, newCfg.Num, oldGid, err)
 
 			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
 			newGrpClerk := sck.Clerk(newCfg, newGid)
-			err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
-			if err != rpc.OK {
-				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v failed with %v\n", shid, len(data), newCfg.Num, newGid, err)
-				return
+			err = rpc.ErrWrongLeader // set to ErrWrongLeader to trigger err!= rpc.OK
+			for err != rpc.OK {
+				err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
+				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", shid, len(data), newCfg.Num, newGid, err)
 			}
-			debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", shid, len(data), newCfg.Num, newGid, err)
-
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
-			err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
-			if err != rpc.OK {
-				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v failed with %v\n", shid, newCfg.Num, newGid, err)
-				return
+			err = rpc.ErrWrongLeader // set to ErrWrongLeader to trigger err!= rpc.OK
+			for err != rpc.OK {
+				err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
+				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", shid, newCfg.Num, newGid, err)
 			}
-			debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", shid, newCfg.Num, newGid, err)
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}
 	wg.Wait()
@@ -133,11 +129,19 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 	// save newCfg to configStore
 	marshalledCfg := newCfg.String()
 
-	err := sck.configStore.Put("cfg", marshalledCfg, ver) // idempotent save
-	if err != rpc.OK {
-		debug.D5APrintf("controller save newCfg failed with err:%v\n", err)
-	} else {
-		debug.D5APrintf("controller save newCfg succeeds with :%v, ChangeConfigTo(Num: %v) is done\n", err, newCfg.Num)
+	for {
+		err := sck.configStore.Put("cfg", marshalledCfg, ver) // idempotent save
+		if err == rpc.ErrMaybe {
+			// recheck to see whether PUT was successful
+			_, getVer, getErr := sck.configStore.Get("cfg")
+			if getVer == ver+1 && getErr == rpc.OK { // meaning that the previous Put was successful
+				return
+			}
+			continue
+		} else {
+			debug.D5APrintf("controller save newCfg succeeds with :%v, ChangeConfigTo(Num: %v) is done\n", err, newCfg.Num)
+			return
+		}
 	}
 }
 
