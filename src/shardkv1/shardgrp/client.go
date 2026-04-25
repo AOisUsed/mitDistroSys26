@@ -29,10 +29,12 @@ type Clerk struct {
 	servers []string
 	leader  int // last successful leader (index into servers[])
 	// You can  add to this struct.
-	clientId   uint64
-	requestId  uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
-	maxAttempt int
-	mu         sync.Mutex
+	clientId    uint64
+	requestId   uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
+	maxAttempts int
+	backoffTime time.Duration
+
+	mu sync.Mutex
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
@@ -40,9 +42,8 @@ func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
 	ck.leader = 0
 	ck.clientId = nrand()
 	ck.requestId = 0
-	// A shard-group clerk should only probe one full round of replicas.
-	// Longer-term routing decisions belong to the shardkv-level clerk.
-	ck.maxAttempt = len(ck.servers)
+	ck.maxAttempts = len(ck.servers) * 3
+	ck.backoffTime = 500 * time.Millisecond
 	return ck
 }
 
@@ -66,43 +67,41 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	ck.mu.Lock()
 	leader := ck.leader
-	maxAttempt := ck.maxAttempt
+	maxAttempt := ck.maxAttempts
+	serverNum := len(ck.servers)
+	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	consecutiveFail := 0
-	totalAttempts := 0
-	for consecutiveFail < maxAttempt {
+	attempts := 0
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
-
+		attempts++
 		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
 			//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup: // 正常Get结果
 				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
-			case rpc.ErrWrongLeader:
-				consecutiveFail = 0
-				totalAttempts++
-				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
-					time.Sleep(300 * time.Millisecond)
-				}
+			case rpc.ErrWrongLeader: // 需要重试
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 { // backoff
+			time.Sleep(backoffTime)
+		}
 	}
-	// if exceeds maxAttempt, return ErrWrongLeader, so that the client will pull latest config from configStore
-	return "", 0, rpc.ErrWrongGroup
+	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
+	return "", 0, rpc.ErrRetryExhausted
 }
 
 // Put returns OK, ErrNoKey, ErrWrongGroup, ErrMaybe as rpc.Err
@@ -119,16 +118,17 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 	ck.mu.Lock()
 	leader := ck.leader
-	maxAttempt := ck.maxAttempt
+	maxAttempt := ck.maxAttempts
+	serverNum := len(ck.servers)
+	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	consecutiveFail := 0
 	firstTry := true
-	totalAttempts := 0
 
-	for consecutiveFail < maxAttempt {
+	attempts := 0
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
-
+		attempts++
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
@@ -150,25 +150,21 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 				return rpc.ErrMaybe
 			case rpc.ErrWrongLeader:
 				firstTry = false
-				consecutiveFail = 0
-				totalAttempts++
-				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
-					time.Sleep(300 * time.Millisecond)
-				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		// Transport failure is ambiguous: the command may or may not have been
-		// accepted by the current leader before the reply was lost.
-		consecutiveFail++
 		firstTry = false
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 { // backoff
+			time.Sleep(backoffTime)
+		}
 	}
-	// if exceeds maxAttempt, return ErrMaybe because it must have gone through at least one rpc failure, and we cannot know whether Put is executed or not.
-	return rpc.ErrWrongGroup // todo: suppose never executed to pass the test for now. Could deliver the wrong message.
+	// if exceeds maxAttempts, return ErrMaybe because it must have gone through at least one rpc failure, and we cannot know whether Put is executed or not.
+	// ErrMaybe here isn't very accurate becase in RSM, it didn't distinguish leader fail before Starting a submit or fail after.
+	return rpc.ErrMaybe
 }
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
@@ -180,14 +176,15 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 	}
 	ck.mu.Lock()
 	leader := ck.leader
-	maxAttempt := ck.maxAttempt
+	maxAttempt := ck.maxAttempts
+	serverNum := len(ck.servers)
+	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	consecutiveFail := 0
-	totalAttempts := 0
-	for consecutiveFail < maxAttempt {
+	attempts := 0
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
-
+		attempts++
 		var reply shardrpc.FreezeShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.FreezeShard", &args, &reply)
 		if ok {
@@ -200,21 +197,18 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 				ck.mu.Unlock()
 				return reply.State, reply.Err
 			case rpc.ErrWrongLeader:
-				consecutiveFail = 0
-				totalAttempts++
-				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
-					time.Sleep(300 * time.Millisecond)
-				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 { // backoff
+			time.Sleep(backoffTime)
+		}
 	}
-	return nil, rpc.ErrWrongGroup
+	return nil, rpc.ErrRetryExhausted
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
@@ -226,13 +220,15 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	}
 	ck.mu.Lock()
 	leader := ck.leader
-	maxAttempt := ck.maxAttempt
+	maxAttempt := ck.maxAttempts
+	serverNum := len(ck.servers)
+	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	consecutiveFail := 0
-	totalAttempts := 0
-	for consecutiveFail < maxAttempt {
+	attempts := 0
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
+		attempts++
 		var reply shardrpc.InstallShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.InstallShard", &args, &reply)
 		if ok {
@@ -245,21 +241,18 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				consecutiveFail = 0
-				totalAttempts++
-				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
-					time.Sleep(300 * time.Millisecond)
-				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 { // backoff
+			time.Sleep(backoffTime)
+		}
 	}
-	return rpc.ErrWrongGroup
+	return rpc.ErrRetryExhausted
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
@@ -270,14 +263,15 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	}
 	ck.mu.Lock()
 	leader := ck.leader
-	maxAttempt := ck.maxAttempt
+	maxAttempt := ck.maxAttempts
+	serverNum := len(ck.servers)
+	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	consecutiveFail := 0
-	totalAttempts := 0
-	for consecutiveFail < maxAttempt {
+	attempts := 0
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
-
+		attempts++
 		var reply shardrpc.DeleteShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.DeleteShard", &args, &reply)
 		if ok {
@@ -290,19 +284,16 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				consecutiveFail = 0
-				totalAttempts++
-				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
-					time.Sleep(300 * time.Millisecond)
-				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined error: %v", reply.Err))
 			}
 		}
-		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 { // backoff
+			time.Sleep(backoffTime)
+		}
 	}
-	return rpc.ErrWrongGroup
+	return rpc.ErrRetryExhausted
 }

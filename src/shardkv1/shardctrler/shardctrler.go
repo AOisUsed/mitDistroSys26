@@ -101,6 +101,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 			defer wg.Done()
 
 			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
+
 			oldGrpClerk := sck.Clerk(oldCfg, oldGid)
 			var data []byte
 			var err rpc.Err
@@ -139,7 +140,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 			}
 			continue
 		} else {
-			debug.D5APrintf("controller save newCfg succeeds with :%v, ChangeConfigTo(Num: %v) is done\n", err, newCfg.Num)
+			debug.D5APrintf("controller save ChangeConfigTo(Num: %v), Err: %v\n", newCfg.Num, err)
 			return
 		}
 	}

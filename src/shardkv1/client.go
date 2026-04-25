@@ -109,7 +109,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		debug.D5APrintf("client -Get(key: %v) in shard %v-> group %v\n", key, shardId, gid)
 		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
-		if rpcErr == rpc.ErrWrongGroup {
+		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted {
 			ck.refreshConfig()
 		} else {
 			return val, version, rpcErr
@@ -146,7 +146,7 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		debug.D5APrintf("client -Put(key: %v, value: %v, version: %v) in shard %v-> group %v\n", key, value, version, shardId, gid)
 		rpcErr := clerk.Put(key, value, version)
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
-		if rpcErr == rpc.ErrWrongGroup {
+		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted || rpcErr == rpc.ErrMaybe {
 			ck.refreshConfig()
 		} else {
 			return rpcErr

@@ -24,8 +24,8 @@ type LastWrite struct {
 }
 
 type SnapshotData struct {
-	Kvm               map[string]*VersionedValue
-	LastReqByClientId map[uint64]*LastWrite
+	Kvm                 map[string]*VersionedValue
+	LastWriteByClientId map[uint64]*LastWrite
 }
 
 type KVServer struct {
@@ -167,8 +167,8 @@ func (kv *KVServer) Snapshot() []byte {
 
 	// snapshot
 	snapshot := SnapshotData{
-		Kvm:               kvm,
-		LastReqByClientId: lastReqByClientId,
+		Kvm:                 kvm,
+		LastWriteByClientId: lastReqByClientId,
 	}
 
 	// encode copied snapshot
@@ -212,7 +212,7 @@ func (kv *KVServer) Restore(data []byte) {
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()
 	kv.kvm = snapshot.Kvm
-	kv.lastWriteByClientId = snapshot.LastReqByClientId
+	kv.lastWriteByClientId = snapshot.LastWriteByClientId
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {

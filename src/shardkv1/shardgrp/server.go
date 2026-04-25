@@ -182,25 +182,46 @@ func (kv *KVServer) DoOp(req any) any {
 		localCfgNum := kv.cfgNumByShid[shid]
 		reqCfgNum := request.Num
 
-		// Accept any newer reconfiguration for shards we currently own.
-		// A shard may stay in the same group across many configs, so the
-		// next move is not necessarily localCfgNum+1.
-		if reqCfgNum > localCfgNum &&
-			(kv.shardStatuses[shid] == Serving || kv.shardStatuses[shid] == Frozen) { // need to resend if the state is frozen as InstallShard on new owner may have failed.
-			kv.shardStatuses[shid] = Frozen
-			reply = shardrpc.FreezeShardReply{
-				State: kv.marshallShardState(shid),
-				Num:   reqCfgNum,
-				Err:   rpc.OK,
+		if reqCfgNum > localCfgNum {
+			switch kv.shardStatuses[shid] {
+			case Serving:
+				kv.shardStatuses[shid] = Frozen
+				kv.cfgNumByShid[shid] = reqCfgNum
+				reply = shardrpc.FreezeShardReply{
+					State: kv.marshallShardState(shid),
+					Num:   reqCfgNum,
+					Err:   rpc.OK,
+				}
+			case Absent, Frozen: // illegal operation on this state
+				reply = shardrpc.FreezeShardReply{
+					State: nil,
+					Num:   localCfgNum,
+					Err:   rpc.ErrWrongGroup,
+				}
 			}
-		} else {
+		} else if reqCfgNum == localCfgNum {
+			switch kv.shardStatuses[shid] {
+			case Frozen, Absent:
+				reply = shardrpc.FreezeShardReply{
+					State: kv.marshallShardState(shid), // 注意， Absent状态时，其实分片已经被删除了，此处是空，但由于DeleteShard前提是分片接受者已经完成了install， 所以在controller尝试把此分片装到分片接受者处时，接受者会幂等操作（拒绝）
+					Num:   reqCfgNum,
+					Err:   rpc.OK,
+				}
+			case Serving:
+				reply = shardrpc.FreezeShardReply{
+					State: nil,
+					Num:   reqCfgNum,
+					Err:   rpc.ErrWrongGroup,
+				}
+			}
+		} else { // reqCfgNum < localCfgNum
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
 				Err:   rpc.OK,
 			}
 		}
-
+		return reply
 	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
@@ -208,18 +229,35 @@ func (kv *KVServer) DoOp(req any) any {
 		defer kv.rwMu.Unlock()
 		// check config Num
 		localCfgNum := kv.cfgNumByShid[request.Shard]
-		if request.Num > localCfgNum && kv.shardStatuses[request.Shard] == Absent {
-			kv.InstallShardState(request.Shard, request.State)
-			kv.shardStatuses[request.Shard] = Serving
-			kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
+		if request.Num > localCfgNum {
+			switch kv.shardStatuses[request.Shard] {
+			case Absent:
+				kv.InstallShardState(request.Shard, request.State)
+				kv.shardStatuses[request.Shard] = Serving
+				kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
+				reply = shardrpc.InstallShardReply{
+					Err: rpc.OK,
+				}
+			case Frozen, Serving:
+				reply = shardrpc.InstallShardReply{
+					Err: rpc.ErrWrongGroup,
+				}
+			}
+		} else if request.Num == localCfgNum { // duplicated Install
+			switch kv.shardStatuses[request.Shard] {
+			case Serving:
+				reply = shardrpc.InstallShardReply{
+					Err: rpc.OK,
+				}
+			case Absent, Frozen: // illegal state for install
+				reply = shardrpc.InstallShardReply{
+					Err: rpc.ErrWrongGroup,
+				}
+			}
+		} else { // reqCfgNum < localCfgNum
 			reply = shardrpc.InstallShardReply{
 				Err: rpc.OK,
 			}
-			return reply
-		}
-		//
-		reply = shardrpc.InstallShardReply{
-			Err: rpc.OK,
 		}
 		return reply
 
@@ -232,16 +270,36 @@ func (kv *KVServer) DoOp(req any) any {
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 
-		if request.Num > localCfgNum && kv.shardStatuses[request.Shard] == Frozen {
-			kv.kvm[shid] = nil          // delete kv for the shard
-			kv.shardClients[shid] = nil // delete shardClients,
-			// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
-			// If we wish to remove that, we'll need carry the lastPut together with the key that it operated on
-			kv.shardStatuses[shid] = Absent
-			kv.cfgNumByShid[shid] = request.Num // update config Num
-		}
-		reply = shardrpc.DeleteShardReply{
-			Err: rpc.OK,
+		if request.Num == localCfgNum {
+			switch kv.shardStatuses[request.Shard] {
+			case Frozen:
+				kv.kvm[shid] = nil          // delete kv for the shard
+				kv.shardClients[shid] = nil // delete information of clients that operated on this shard,
+				// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
+				// If we wish to remove that, we'll need carry the lastPut together with the key that it operated on
+				kv.shardStatuses[shid] = Absent
+				kv.cfgNumByShid[shid] = request.Num // update config Num
+				reply = shardrpc.DeleteShardReply{
+					Err: rpc.OK,
+				}
+			case Absent:
+				// duplicated request
+				reply = shardrpc.DeleteShardReply{
+					Err: rpc.OK,
+				}
+			case Serving:
+				reply = shardrpc.DeleteShardReply{
+					Err: rpc.ErrWrongGroup,
+				}
+			}
+		} else if request.Num > localCfgNum {
+			reply = shardrpc.DeleteShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		} else { // request.Num < localCfgNum
+			reply = shardrpc.DeleteShardReply{
+				Err: rpc.OK,
+			}
 		}
 	default:
 		debug.D5APrintf("shardkvserver %v: DoOp: Unknown req type %T\n", kv.me, req)
@@ -306,7 +364,6 @@ func (kv *KVServer) InstallShardState(shid shardcfg.Tshid, shardstate []byte) {
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
 
 	//debug.D5APrintf("shardkvserver %v: Snapshot()\n", kv.me)
 
