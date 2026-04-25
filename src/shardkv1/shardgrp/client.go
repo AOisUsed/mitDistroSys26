@@ -31,7 +31,7 @@ type Clerk struct {
 	// You can  add to this struct.
 	clientId   uint64
 	requestId  uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
-	maxAttempt int    // maximum attempt for a request, each rpc fail counts as an attempt. this is used to detect server group leave
+	maxAttempt int
 	mu         sync.Mutex
 }
 
@@ -40,7 +40,9 @@ func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
 	ck.leader = 0
 	ck.clientId = nrand()
 	ck.requestId = 0
-	ck.maxAttempt = len(ck.servers) * 3 // set the maxAttempt as 3 times the number of servers
+	// A shard-group clerk should only probe one full round of replicas.
+	// Longer-term routing decisions belong to the shardkv-level clerk.
+	ck.maxAttempt = len(ck.servers)
 	return ck
 }
 
@@ -67,8 +69,9 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	maxAttempt := ck.maxAttempt
 	ck.mu.Unlock()
 
-	attemptCount := 0
-	for attemptCount < maxAttempt {
+	consecutiveFail := 0
+	totalAttempts := 0
+	for consecutiveFail < maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
 
 		var reply rpc.GetReply
@@ -84,18 +87,18 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
 			case rpc.ErrWrongLeader:
-				attemptCount = 0
+				consecutiveFail = 0
+				totalAttempts++
+				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
+					time.Sleep(300 * time.Millisecond)
+				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		attemptCount++
-		if attemptCount%len(ck.servers) == 0 {
-			// if all servers are dead, backoff for a bit of time
-			time.Sleep(300 * time.Millisecond)
-		}
+		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
 	}
 	// if exceeds maxAttempt, return ErrWrongLeader, so that the client will pull latest config from configStore
@@ -119,10 +122,11 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	maxAttempt := ck.maxAttempt
 	ck.mu.Unlock()
 
-	attemptCount := 0
+	consecutiveFail := 0
 	firstTry := true
+	totalAttempts := 0
 
-	for attemptCount < maxAttempt {
+	for consecutiveFail < maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 
 		reply := rpc.PutReply{}
@@ -146,23 +150,20 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 				return rpc.ErrMaybe
 			case rpc.ErrWrongLeader:
 				firstTry = false
-				attemptCount = 0
+				consecutiveFail = 0
+				totalAttempts++
+				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
+					time.Sleep(300 * time.Millisecond)
+				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		// RPC fails: it may have been executed or not.
-		// Note: whether it's firstTry isn't associated with the specific server
-		// but with the command. Once RPC fails, no matter whom the client communicated with,
-		// firstTry need to be set to false. Because leadership can quickly change and
-		// the Command propagates between the servers.
-		attemptCount++
-		if attemptCount%len(ck.servers) == 0 {
-			// if all servers are dead, backoff for a bit of time
-			time.Sleep(300 * time.Millisecond)
-		}
+		// Transport failure is ambiguous: the command may or may not have been
+		// accepted by the current leader before the reply was lost.
+		consecutiveFail++
 		firstTry = false
 		leader = (leader + 1) % len(ck.servers)
 	}
@@ -182,9 +183,9 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 	maxAttempt := ck.maxAttempt
 	ck.mu.Unlock()
 
-	attemptCount := 0
-
-	for attemptCount < maxAttempt {
+	consecutiveFail := 0
+	totalAttempts := 0
+	for consecutiveFail < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 
 		var reply shardrpc.FreezeShardReply
@@ -199,18 +200,18 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 				ck.mu.Unlock()
 				return reply.State, reply.Err
 			case rpc.ErrWrongLeader:
-				attemptCount = 0
+				consecutiveFail = 0
+				totalAttempts++
+				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
+					time.Sleep(300 * time.Millisecond)
+				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		attemptCount++
-		if attemptCount%len(ck.servers) == 0 {
-			// if all servers are dead, backoff for a bit of time
-			time.Sleep(300 * time.Millisecond)
-		}
+		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return nil, rpc.ErrWrongGroup
@@ -228,8 +229,9 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	maxAttempt := ck.maxAttempt
 	ck.mu.Unlock()
 
-	attemptCount := 0
-	for attemptCount < maxAttempt {
+	consecutiveFail := 0
+	totalAttempts := 0
+	for consecutiveFail < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
 		var reply shardrpc.InstallShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.InstallShard", &args, &reply)
@@ -243,18 +245,18 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				attemptCount = 0
+				consecutiveFail = 0
+				totalAttempts++
+				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
+					time.Sleep(300 * time.Millisecond)
+				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		attemptCount++
-		if attemptCount%len(ck.servers) == 0 {
-			// if all servers are dead, backoff for a bit of time
-			time.Sleep(300 * time.Millisecond)
-		}
+		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return rpc.ErrWrongGroup
@@ -270,8 +272,10 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	leader := ck.leader
 	maxAttempt := ck.maxAttempt
 	ck.mu.Unlock()
-	attemptCount := 0
-	for attemptCount < maxAttempt {
+
+	consecutiveFail := 0
+	totalAttempts := 0
+	for consecutiveFail < maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 
 		var reply shardrpc.DeleteShardReply
@@ -286,18 +290,18 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				attemptCount = 0
+				consecutiveFail = 0
+				totalAttempts++
+				if totalAttempts%maxAttempt == 0 { // if attempt count reaches the num of maxAttempt, maybe raft is in election, backoff
+					time.Sleep(300 * time.Millisecond)
+				}
 				leader = (leader + 1) % len(ck.servers)
 				continue
 			default:
 				panic(fmt.Sprintf("undefined error: %v", reply.Err))
 			}
 		}
-		attemptCount++
-		if attemptCount%len(ck.servers) == 0 {
-			// if all servers are dead, backoff for a bit of time
-			time.Sleep(300 * time.Millisecond)
-		}
+		consecutiveFail++
 		leader = (leader + 1) % len(ck.servers)
 	}
 	return rpc.ErrWrongGroup

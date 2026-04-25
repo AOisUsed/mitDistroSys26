@@ -131,7 +131,7 @@ func (kv *KVServer) DoOp(req any) any {
 			RequestId: typedReq.RequestId,
 			Reply:     reply.(rpc.PutReply),
 		}
-		debug.D4BPrintf("server%v: saved LastReqByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
+		debug.D4BPrintf("server%v: saved LastPutByClientId {%v:%v}", kv.me, typedReq.ClientId, reply)
 	default:
 		debug.D4BPrintf("DoOp: Unknown req type %T\n", req)
 		reply = nil // it's neither Get, nor Put.
@@ -154,7 +154,7 @@ func (kv *KVServer) Snapshot() []byte {
 		kvm[k] = copiedV
 	}
 
-	// make a copy of LastReqByClientId
+	// make a copy of LastPutByClientId
 	var lastReqByClientId = make(map[uint64]*LastWrite)
 	for clientId, lastRequest := range kv.lastWriteByClientId {
 		copiedReq := &LastWrite{

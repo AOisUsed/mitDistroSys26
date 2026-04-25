@@ -24,9 +24,9 @@ type VersionedValue struct {
 	Version rpc.Tversion
 }
 
-type LastRequest struct {
+type LastPut struct {
 	RequestId uint64
-	Reply     any // for this KVServer, this is either rpc.GetReply or rpc.PutReply.
+	Reply     rpc.PutReply // for this KVServer, this is  rpc.PutReply.
 }
 
 // shard state machine
@@ -40,12 +40,12 @@ const (
 
 type ShardState struct {
 	Kv                map[string]*VersionedValue
-	LastReqByClientId map[uint64]*LastRequest
+	LastPutByClientId map[uint64]*LastPut
 }
 
 type SnapshotData struct {
 	Kvm               [shardcfg.NShards]map[string]*VersionedValue
-	LastReqByClientId map[uint64]*LastRequest
+	LastPutByClientId map[uint64]*LastPut
 	CfgNumByShid      map[shardcfg.Tshid]shardcfg.Tnum
 	ShardStatuses     [shardcfg.NShards]ShardStatus
 	ShardClients      [shardcfg.NShards]map[uint64]struct{}
@@ -59,7 +59,7 @@ type KVServer struct {
 	// Your code here
 	// for kv
 	kvm               [shardcfg.NShards]map[string]*VersionedValue
-	lastReqByClientId map[uint64]*LastRequest
+	lastPutByClientId map[uint64]*LastPut
 
 	// for shard
 	cfgNumByShid  map[shardcfg.Tshid]shardcfg.Tnum
@@ -84,26 +84,11 @@ func (kv *KVServer) DoOp(req any) any {
 		defer kv.rwMu.Unlock()
 
 		// check whether it's serving for the shard
-		if kv.shardStatuses[shid] != Serving {
+		if kv.shardStatuses[shid] == Absent {
 			reply = rpc.GetReply{
 				Err: rpc.ErrWrongGroup,
 			}
 			return reply
-		}
-
-		// deduplicate request: return saved duplicate request reply
-		lastReq, exists := kv.lastReqByClientId[request.ClientId]
-		if exists {
-			// if the request has been executed, simply return the result and not execute it again.
-			if request.RequestId <= lastReq.RequestId {
-				// note that request.reqId < lastReq.reqId condition should not occur if client functions correctly
-				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-				if request.RequestId < lastReq.RequestId {
-					log.Fatalf("Fatal: shardkvserver %v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, request.ClientId, request.RequestId, lastReq.RequestId)
-				}
-				debug.D5APrintf("shardkvserver %v:client %v sending duplicated request:%v\n", kv.me, request.ClientId, request.RequestId)
-				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
-			}
 		}
 
 		// execute the Get operation
@@ -120,13 +105,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		//debug.D5APrintf("shardkvserver %v: DoOp: Get req %v, reply:%v \n", kv.me, req, reply)
-		// Save to LastReqByClientId
-		kv.lastReqByClientId[request.ClientId] = &LastRequest{
-			RequestId: request.RequestId,
-			Reply:     reply,
-		}
-		kv.shardClients[shid][request.ClientId] = struct{}{}
-		//debug.D5APrintf("shardkvserver %v: saved LastReqByClientId {%v:%v}", kv.me, request.ClientId, reply)
+		//debug.D5APrintf("shardkvserver %v: saved LastPutByClientId {%v:%v}", kv.me, request.ClientId, reply)
 
 	//== Put == //
 	case rpc.PutArgs:
@@ -143,18 +122,18 @@ func (kv *KVServer) DoOp(req any) any {
 			return reply
 		}
 
-		// deduplicate request: return saved duplicate request reply
-		lastReq, exists := kv.lastReqByClientId[request.ClientId]
+		// deduplicate request: return saved duplicate PUT reply
+		lastPut, exists := kv.lastPutByClientId[request.ClientId]
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
-			if request.RequestId <= lastReq.RequestId {
-				// note that request.Id < lastReq.Id condition should not occur if client functions correctly
+			if request.RequestId <= lastPut.RequestId {
+				// note that request.Id < lastPut.Id condition should not occur if client functions correctly
 				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-				if request.RequestId < lastReq.RequestId {
+				if request.RequestId < lastPut.RequestId {
 					debug.D5APrintf("shardkvserver %v:client %v sending request with impossible id:%v!\n", kv.me, request.ClientId, request.RequestId)
 				}
 				debug.D5APrintf("shardkvserver %v:client %v sending duplicated request:%v\n", kv.me, request.ClientId, request.RequestId)
-				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+				return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
 			}
 		}
 
@@ -185,13 +164,13 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		//debug.D5APrintf("shardkvserver %v: DoOp: Put req %v, reply:%v \n", kv.me, req, reply)
-		// Save to LastReqByClientId
-		kv.lastReqByClientId[request.ClientId] = &LastRequest{
+		// Save to LastPutByClientId
+		kv.lastPutByClientId[request.ClientId] = &LastPut{
 			RequestId: request.RequestId,
-			Reply:     reply,
+			Reply:     reply.(rpc.PutReply),
 		}
 		kv.shardClients[shid][request.ClientId] = struct{}{}
-	//debug.D5APrintf("shardkvserver %v: saved LastReqByClientId {%v:%v}", kv.me, request.ClientId, reply)
+	//debug.D5APrintf("shardkvserver %v: saved LastPutByClientId {%v:%v}", kv.me, request.ClientId, reply)
 
 	// == Sharding == //
 	// == FreezeShard == //
@@ -218,7 +197,7 @@ func (kv *KVServer) DoOp(req any) any {
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
-				Err:   rpc.OK, // note that this ok, doesn't mean operation is successful
+				Err:   rpc.OK,
 			}
 		}
 
@@ -233,8 +212,12 @@ func (kv *KVServer) DoOp(req any) any {
 			kv.InstallShardState(request.Shard, request.State)
 			kv.shardStatuses[request.Shard] = Serving
 			kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
+			reply = shardrpc.InstallShardReply{
+				Err: rpc.OK,
+			}
+			return reply
 		}
-		// return the same thing in all condition
+		//
 		reply = shardrpc.InstallShardReply{
 			Err: rpc.OK,
 		}
@@ -252,8 +235,8 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num > localCfgNum && kv.shardStatuses[request.Shard] == Frozen {
 			kv.kvm[shid] = nil          // delete kv for the shard
 			kv.shardClients[shid] = nil // delete shardClients,
-			// note that for current design, don't change lastReqByClient because we don't know whether the lastReq of a certain client recorded is the record of the deleted shard.
-			// If we wish to remove that, we'll need carry the lastReq together with the key that it operated on
+			// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
+			// If we wish to remove that, we'll need carry the lastPut together with the key that it operated on
 			kv.shardStatuses[shid] = Absent
 			kv.cfgNumByShid[shid] = request.Num // update config Num
 		}
@@ -271,10 +254,10 @@ func (kv *KVServer) DoOp(req any) any {
 func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	lastReqByClientId := make(map[uint64]*LastRequest)
+	lastPutByClientId := make(map[uint64]*LastPut)
 	Clnts := kv.shardClients[shid] // clients that did Ops on this shard
-	for client := range Clnts {    // we only care about the lastReq of clients that worked on this shard
-		lastReqByClientId[client] = kv.lastReqByClientId[client]
+	for client := range Clnts {    // we only care about the lastPut of clients that worked on this shard
+		lastPutByClientId[client] = kv.lastPutByClientId[client]
 	}
 
 	kvm := make(map[string]*VersionedValue)
@@ -283,7 +266,7 @@ func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 	}
 	shardState := ShardState{
 		Kv:                kvm,
-		LastReqByClientId: lastReqByClientId,
+		LastPutByClientId: lastPutByClientId,
 	}
 	err := e.Encode(shardState)
 	if err != nil {
@@ -309,15 +292,15 @@ func (kv *KVServer) InstallShardState(shid shardcfg.Tshid, shardstate []byte) {
 		kvm[k] = v
 	}
 	kv.kvm[shid] = kvm
-	// install lastReqByClientId (), shardClients
+	// install lastPutByClientId (), shardClients
 	kv.shardClients[shid] = make(map[uint64]struct{})
-	for clientId, Request := range shardState.LastReqByClientId {
+	for clientId, Request := range shardState.LastPutByClientId {
 		// shardClients
 		kv.shardClients[shid][clientId] = struct{}{}
-		// lastReqByClientId: only keep the latest (bigger requestId)
-		if existingReq, exists := kv.lastReqByClientId[clientId]; !exists ||
+		// lastPutByClientId: only keep the latest (bigger requestId)
+		if existingReq, exists := kv.lastPutByClientId[clientId]; !exists ||
 			Request.RequestId > existingReq.RequestId {
-			kv.lastReqByClientId[clientId] = Request
+			kv.lastPutByClientId[clientId] = Request
 		}
 	}
 }
@@ -342,14 +325,14 @@ func (kv *KVServer) Snapshot() []byte {
 		kvm[shid] = copiedShardkv
 	}
 
-	// make a copy of LastReqByClientId
-	var lastReqByClientId = make(map[uint64]*LastRequest)
-	for clientId, lastRequest := range kv.lastReqByClientId {
-		copiedReq := &LastRequest{
-			RequestId: lastRequest.RequestId,
-			Reply:     lastRequest.Reply,
+	// make a copy of LastPutByClientId
+	var lastPutByClientId = make(map[uint64]*LastPut)
+	for clientId, lastPut := range kv.lastPutByClientId {
+		copiedReq := &LastPut{
+			RequestId: lastPut.RequestId,
+			Reply:     lastPut.Reply,
 		}
-		lastReqByClientId[clientId] = copiedReq
+		lastPutByClientId[clientId] = copiedReq
 	}
 
 	// make a copy of cfgNumByShid
@@ -378,7 +361,7 @@ func (kv *KVServer) Snapshot() []byte {
 	// snapshot
 	snapshot := SnapshotData{
 		Kvm:               kvm,
-		LastReqByClientId: lastReqByClientId,
+		LastPutByClientId: lastPutByClientId,
 		CfgNumByShid:      cfgNumByShid,
 		ShardStatuses:     shardStatuses,
 		ShardClients:      shardClients,
@@ -428,7 +411,7 @@ func (kv *KVServer) Restore(data []byte) {
 	defer kv.rwMu.Unlock()
 	// restore from snapshot
 	kv.kvm = snapshot.Kvm
-	kv.lastReqByClientId = snapshot.LastReqByClientId
+	kv.lastPutByClientId = snapshot.LastPutByClientId
 	kv.cfgNumByShid = snapshot.CfgNumByShid
 	kv.shardStatuses = snapshot.ShardStatuses
 	kv.shardClients = snapshot.ShardClients
@@ -532,8 +515,8 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	}
 	kv.kvm = kvm
 
-	// lastReqByClientId
-	kv.lastReqByClientId = make(map[uint64]*LastRequest)
+	// lastPutByClientId
+	kv.lastPutByClientId = make(map[uint64]*LastPut)
 
 	// cfgNumByShid tracks the latest configuration number this server has
 	// processed for each shard.
