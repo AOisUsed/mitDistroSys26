@@ -218,7 +218,7 @@ func (kv *KVServer) DoOp(req any) any {
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
-				Err:   rpc.OK,
+				Err:   rpc.ErrStaleNum,
 			}
 		}
 		return reply
@@ -256,7 +256,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else { // reqCfgNum < localCfgNum
 			reply = shardrpc.InstallShardReply{
-				Err: rpc.OK,
+				Err: rpc.ErrStaleNum,
 			}
 		}
 		return reply
@@ -298,7 +298,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else { // request.Num < localCfgNum
 			reply = shardrpc.DeleteShardReply{
-				Err: rpc.OK,
+				Err: rpc.ErrStaleNum,
 			}
 		}
 	default:
@@ -516,7 +516,8 @@ func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.
 	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
 		reply.Err = rpcErr
 	}
-	debug.D5APrintf("shardkvserver %v: FreezeShard(%+v): %+v \n", kv.me, args, reply)
+	debug.D5APrintf("shardkvserver %v: FreezeShard(shard:%v, Num:%v) -> stateSize:%v, replyNum:%v, Err:%v\n",
+		kv.me, args.Shard, args.Num, len(reply.State), reply.Num, reply.Err)
 }
 
 // Install the supplied state for the specified shard.
@@ -531,7 +532,8 @@ func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrp
 	} else { // if rpc isn't ok, meaning this server is not the leader, the request didn't get through DoOp() and rep is nil
 		reply.Err = rpcErr
 	}
-	debug.D5APrintf("shardkvserver %v: InstallShard(%+v): %+v \n", kv.me, args, reply)
+	debug.D5APrintf("shardkvserver %v: InstallShard(shard:%v, stateSize:%v, Num:%v) -> Err:%v\n",
+		kv.me, args.Shard, len(args.State), args.Num, reply.Err)
 }
 
 // Delete the specified shard.

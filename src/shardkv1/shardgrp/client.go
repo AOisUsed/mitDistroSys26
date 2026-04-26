@@ -42,8 +42,8 @@ func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
 	ck.leader = 0
 	ck.clientId = nrand()
 	ck.requestId = 0
-	ck.maxAttempts = len(ck.servers) * 3
-	ck.backoffTime = 500 * time.Millisecond
+	ck.maxAttempts = len(ck.servers) // only try one round + one time
+	ck.backoffTime = 300 * time.Millisecond
 	return ck
 }
 
@@ -73,7 +73,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts < maxAttempt {
+	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
 		attempts++
 		var reply rpc.GetReply
@@ -89,8 +89,6 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
 			case rpc.ErrWrongLeader: // 需要重试
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
@@ -126,7 +124,7 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	firstTry := true
 
 	attempts := 0
-	for attempts < maxAttempt {
+	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 		attempts++
 		reply := rpc.PutReply{}
@@ -149,9 +147,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 				}
 				return rpc.ErrMaybe
 			case rpc.ErrWrongLeader:
-				firstTry = false
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
@@ -182,7 +177,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts < maxAttempt {
+	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.FreezeShardReply
@@ -190,15 +185,13 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 			switch reply.Err {
-			case rpc.OK:
+			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
 				debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.State, reply.Err
 			case rpc.ErrWrongLeader:
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
@@ -226,7 +219,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts < maxAttempt {
+	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
 		attempts++
 		var reply shardrpc.InstallShardReply
@@ -234,15 +227,13 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
-			case rpc.OK:
+			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
 				debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
@@ -269,7 +260,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts < maxAttempt {
+	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.DeleteShardReply
@@ -277,15 +268,13 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
-			case rpc.OK:
+			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
 				debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
 			case rpc.ErrWrongLeader:
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined error: %v", reply.Err))
 			}
