@@ -796,9 +796,9 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 
-		// pause for a random amount of time between 300 and 600
+		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 300 + (rand.Int63() % 300)
+		ms := 50 + (rand.Int63() % 300)
 		rf.mu.Lock()
 		needElection := rf.state != leader && time.Since(rf.lastHeartbeatTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()
@@ -848,7 +848,8 @@ func (rf *Raft) startElection() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			if reply.Term > rf.CurrentTerm {
-				rf.becomeFollowerWithTerm(rf.CurrentTerm)
+				rf.becomeFollowerWithTerm(reply.Term)
+				rf.lastHeartbeatTime = time.Now()
 				rf.persist()
 				return
 			}
@@ -890,6 +891,7 @@ func (rf *Raft) sendHeartbeat() {
 		rf.mu.Lock()
 		if rf.state != leader {
 			rf.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		rf.mu.Unlock()

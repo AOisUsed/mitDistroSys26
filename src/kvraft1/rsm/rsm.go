@@ -212,7 +212,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 	for {
 		select {
-		case <-time.After(time.Millisecond * 300):
+		case <-time.After(time.Millisecond * 100):
 			// if the server finds out that it's no longer the leader, it should reply ErrWrongLeader. But the semantics is twofold.
 			// the server doesn't know whether the Command actually will get committed or not, and cannot differentiate the two cases:
 			// case 1: it loses leadership before log getting duplicated to the majority and the log has no chance to get committed.
