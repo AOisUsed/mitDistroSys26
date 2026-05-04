@@ -49,10 +49,6 @@ type Raft struct {
 	persister *tester.Persister   // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 
-	// Your data here (3A, 3B, 3C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
 	//persistent state
 	CurrentTerm       int
 	VotedFor          int
@@ -72,7 +68,7 @@ type Raft struct {
 	applyCh chan raftapi.ApplyMsg
 
 	//utils
-	lastHeartbeatTime time.Time //last time when it heard an RPC
+	lastHeardTime     time.Time //last time when it heard an RPC
 	logAppendedCh     chan struct{}
 	applyReadyCh      chan struct{}
 	replicateReadyChs []chan struct{}
@@ -224,7 +220,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//update the lastHeartbeat Time
 	if args.Term >= rf.CurrentTerm {
-		rf.lastHeartbeatTime = time.Now()
+		rf.lastHeardTime = time.Now()
 	}
 
 	//higher AppEn, rf -> follower
@@ -373,7 +369,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 
 	// update the lastHeartbeat time
-	rf.lastHeartbeatTime = time.Now()
+	rf.lastHeardTime = time.Now()
 
 	termChanged := false
 	// update raft state before preceding, common for all RPCs
@@ -457,7 +453,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term >= rf.CurrentTerm && (rf.VotedFor == args.CandidateId || rf.VotedFor == -1) { // if receiver didn't vote for itself (it's not a candidate)
 		if args.LastLogTerm > rf.lastLogTerm() || // and if the candidate term is greater than the receiver,
 			(args.LastLogTerm == rf.lastLogTerm() && args.LastLogIndex >= rf.lastLogIndex()) { //or of the same term but candidate has number of entries >= to receiver
-			rf.lastHeartbeatTime = time.Now() // update lastHeartbeatTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
+			rf.lastHeardTime = time.Now() // update lastHeardTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
 			debug.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
@@ -800,9 +796,9 @@ func (rf *Raft) ticker() {
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		rf.mu.Lock()
-		needElection := rf.state != leader && time.Since(rf.lastHeartbeatTime) > time.Duration(ms)*time.Millisecond
+		needElection := rf.state != leader && time.Since(rf.lastHeardTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()
-		//D3APrintf("%v ticker: random time is %v ms, gap from last heartbeat is %v", rf.me, ms, time.Since(rf.lastHeartbeatTime))
+		//D3APrintf("%v ticker: random time is %v ms, gap from last heartbeat is %v", rf.me, ms, time.Since(rf.lastHeardTime))
 		if needElection {
 			//D3APrintf("%v ticker timeout", rf.me)
 			rf.startElection()
@@ -849,7 +845,7 @@ func (rf *Raft) startElection() {
 			defer rf.mu.Unlock()
 			if reply.Term > rf.CurrentTerm {
 				rf.becomeFollowerWithTerm(reply.Term)
-				rf.lastHeartbeatTime = time.Now()
+				rf.lastHeardTime = time.Now()
 				rf.persist()
 				return
 			}
@@ -945,7 +941,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 
 	//utils initialisation
-	rf.lastHeartbeatTime = time.Now()
+	rf.lastHeardTime = time.Now()
 	rf.logAppendedCh = make(chan struct{}, 1)
 	rf.applyReadyCh = make(chan struct{}, 1)
 	rf.replicateReadyChs = make([]chan struct{}, len(rf.peers))

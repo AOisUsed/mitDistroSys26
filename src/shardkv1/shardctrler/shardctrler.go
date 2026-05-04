@@ -85,6 +85,12 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 	debug.D5APrintf("controller: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
 
 	var wg sync.WaitGroup
+
+	// Retry policy for migration RPCs:
+	// 1) OK: phase finished
+	// 2) ErrRetryExhausted: transient, backoff then retry
+	// 3) ErrStaleNum: this controller is stale for this shard, abort whole config change
+	// 4) ErrWrongGroup: likely superseded / ownership changed, abort whole config change
 	// compare the oldCfg and newCfg configuration, find the difference, and act accordingly
 	for shid, oldGid := range oldCfg.Shards {
 		// can be executed concurrently for different shard,
@@ -101,7 +107,6 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 			defer wg.Done()
 
 			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
-
 			oldGrpClerk := sck.Clerk(oldCfg, oldGid)
 			var data []byte
 			var err rpc.Err

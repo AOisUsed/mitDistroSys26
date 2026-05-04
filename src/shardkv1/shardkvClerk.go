@@ -61,45 +61,38 @@ func (ck *Clerk) getConfig() *shardcfg.ShardConfig {
 	cfg := ck.cachedConfig
 	ck.mu.RUnlock()
 
-	if !fetching {
-		if cfg != nil {
-			// if not fetching and cachedCfg exists, return config
-			return cfg
-		} else {
-			// if not fetching and cachedCfg doesn't exist, fetch config (by calling refreshConfig)
-			ck.refreshConfig()
-			<-fetchingDone // waiting for fetching done
-			ck.mu.RLock()
-			cachedConfig := ck.cachedConfig
-			ck.mu.RUnlock()
-			return cachedConfig
-		}
-	} else { // is fetching config
-		<-fetchingDone // waiting for fetching done
-		ck.mu.RLock()
-		cachedConfig := ck.cachedConfig
-		ck.mu.RUnlock()
-		return cachedConfig
+	// return cached config if it exits and doesn't need to refresh
+	if !fetching && cfg != nil {
+		return cfg
 	}
+
+	// else fetch the latest config from config store
+	ck.refreshConfig()
+	<-fetchingDone // waiting for fetching done
+	ck.mu.RLock()
+	cachedConfig := ck.cachedConfig
+	ck.mu.RUnlock()
+	return cachedConfig
 }
 
-// refreshConfig
+// refreshConfig single-flight
 func (ck *Clerk) refreshConfig() {
-	ck.mu.RLock()
+	ck.mu.Lock()
 	fetching := ck.fetching
-	ck.mu.RUnlock()
+	defer ck.mu.Unlock()
 
-	if fetching { // if one Query is in flight, ignore
+	if fetching { // if one Query is in flight, quit this session
 		return
-	} else { // if no Query is ongoing, fetch config from configStore
+	} else { // if no Query is in flight, fetch config from configStore
+		ck.fetching = true
+		ck.mu.Unlock()
 		cfg := ck.sck.Query()
 		ck.mu.Lock()
 		fetchingDone := ck.fetchingDone       // 1. get channel
 		ck.cachedConfig = cfg                 // 2. save config
 		ck.fetching = false                   // 3. mark that no fetching is ongoing
 		ck.fetchingDone = make(chan struct{}) // 4. make new channel for next refreshConfig, because using close channel to broadcast can be done only once with one channel
-		ck.mu.Unlock()
-		close(fetchingDone) // 5. close channel to notify all waiting getConfig() to acquire freshly updated config
+		close(fetchingDone)                   // 5. close channel to notify all waiting getConfig() to acquire freshly updated config
 	}
 }
 
@@ -113,7 +106,6 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
-	retryExhaustedCnt := 0
 
 	for {
 		cachedConfig := ck.getConfig()
@@ -138,19 +130,9 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		debug.D5APrintf("client -Get(key: %v) in shard %v-> group %v\n", key, shardId, gid)
 		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
-		if rpcErr == rpc.ErrWrongGroup {
-			retryExhaustedCnt = 0
+		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted {
 			ck.refreshConfig()
-		} else if rpcErr == rpc.ErrRetryExhausted {
-			// transient no-leader window. periodically refresh config to avoid
-			// being stuck on stale group mapping (e.g. contacting an offline group).
-			retryExhaustedCnt++
-			if retryExhaustedCnt%2 == 0 {
-				ck.refreshConfig()
-			}
-			time.Sleep(100 * time.Millisecond)
 		} else {
-			retryExhaustedCnt = 0
 			return val, version, rpcErr
 		}
 	}
@@ -162,7 +144,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
-	retryExhaustedCnt := 0
 	for {
 		config := ck.getConfig()
 		// consult the config to know the shard group responsible for the key
@@ -186,19 +167,13 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		rpcErr := clerk.Put(key, value, version)
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
-		case rpc.ErrWrongGroup:
-			retryExhaustedCnt = 0
+		case rpc.ErrWrongGroup, rpc.ErrRetryExhausted:
 			ck.refreshConfig()
-		case rpc.ErrRetryExhausted:
-			// transient no-leader window; periodically refresh to escape stale config.
-			retryExhaustedCnt++
-			if retryExhaustedCnt%2 == 0 {
-				ck.refreshConfig()
-			}
-			time.Sleep(100 * time.Millisecond)
 		case rpc.ErrMaybe:
+			// ErrMaybe means the write may already be applied; caller must re-read
+			// and decide whether to retry with a newer version.
+			return rpcErr
 		case rpc.OK, rpc.ErrVersion, rpc.ErrNoKey:
-			retryExhaustedCnt = 0
 			return rpcErr
 		default:
 			log.Fatalf("undefined rpc Err: %v", rpcErr)

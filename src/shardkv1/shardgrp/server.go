@@ -70,7 +70,6 @@ type KVServer struct {
 }
 
 func (kv *KVServer) DoOp(req any) any {
-	// Your code here
 
 	var reply any
 	switch request := req.(type) {

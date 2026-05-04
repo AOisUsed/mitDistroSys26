@@ -28,7 +28,7 @@ type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
 	leader  int // last successful leader (index into servers[])
-	// You can  add to this struct.
+
 	clientId    uint64
 	requestId   uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
 	maxAttempts int
@@ -42,8 +42,8 @@ func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
 	ck.leader = 0
 	ck.clientId = nrand()
 	ck.requestId = 0
-	ck.maxAttempts = len(ck.servers) // only try one round + one time
-	ck.backoffTime = 300 * time.Millisecond
+	ck.maxAttempts = len(ck.servers) * 2 //  try two rounds
+	ck.backoffTime = 200 * time.Millisecond
 	return ck
 }
 
@@ -82,13 +82,13 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup: // 正常Get结果
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
 				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
-			case rpc.ErrWrongLeader: // 需要重试
+			case rpc.ErrWrongLeader:
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
@@ -121,8 +121,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
-	firstTry := true
-
 	attempts := 0
 	for attempts <= maxAttempt {
 		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
@@ -131,35 +129,30 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
-
+			//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup, rpc.ErrVersion:
 				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
-			case rpc.ErrVersion:
-				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
-				if firstTry {
-					return rpc.ErrVersion
-				}
-				return rpc.ErrMaybe
 			case rpc.ErrWrongLeader:
 			default:
 				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
-		firstTry = false
 		leader = (leader + 1) % len(ck.servers)
 		if attempts%serverNum == 0 { // backoff
 			time.Sleep(backoffTime)
 		}
 	}
-	// if exceeds maxAttempts, return ErrMaybe because it must have gone through at least one rpc failure, and we cannot know whether Put is executed or not.
-	// ErrMaybe here isn't very accurate becase in RSM, it didn't distinguish leader fail before Starting a submit or fail after.
-	return rpc.ErrMaybe
+	// Retries exhausted usually means we failed to discover a reachable/working
+	// leader for this shard group in this round.
+	// it could mean:
+	//	- the group is in partition/election,
+	// 	- the group has left
+	return rpc.ErrRetryExhausted
 }
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
