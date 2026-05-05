@@ -1,11 +1,8 @@
 package shardgrp
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"6.5840/debug"
@@ -15,40 +12,26 @@ import (
 	"6.5840/tester1"
 )
 
-func nrand() uint64 {
-	var b [8]byte
-	_, err := rand.Read(b[:])
-	if err != nil {
-		panic(err)
-	}
-	return binary.LittleEndian.Uint64(b[:])
-}
-
 type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
 	leader  int // last successful leader (index into servers[])
 
-	clientId    uint64
-	requestId   uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
+	clientId uint64
+	//requestId   uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
 	maxAttempts int
 	backoffTime time.Duration
 
 	mu sync.Mutex
 }
 
-func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
+func MakeClerk(clnt *tester.Clnt, servers []string, clientId uint64) *Clerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	ck.leader = 0
-	ck.clientId = nrand()
-	ck.requestId = 0
-	ck.maxAttempts = len(ck.servers) * 2 //  try two rounds
-	ck.backoffTime = 200 * time.Millisecond
+	ck.clientId = clientId
+	ck.maxAttempts = len(ck.servers) //  try one round + one time
+	ck.backoffTime = 100 * time.Millisecond
 	return ck
-}
-
-func (ck *Clerk) nextReqId() uint64 {
-	return atomic.AddUint64(&ck.requestId, 1)
 }
 
 func (ck *Clerk) Leader() int {
@@ -56,11 +39,11 @@ func (ck *Clerk) Leader() int {
 }
 
 // Get return OK, ErrNoKey, ErrWrongGroup as rpc.Err
-func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
+func (ck *Clerk) Get(requestId uint64, key string) (string, rpc.Tversion, rpc.Err) {
 	args := rpc.GetArgs{
 		RequestInfo: rpc.RequestInfo{
 			ClientId:  ck.clientId,
-			RequestId: ck.nextReqId(),
+			RequestId: requestId,
 		},
 		Key: key,
 	}
@@ -103,11 +86,11 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 }
 
 // Put returns OK, ErrNoKey, ErrWrongGroup, ErrMaybe as rpc.Err
-func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
+func (ck *Clerk) Put(requestId uint64, key string, value string, version rpc.Tversion) rpc.Err {
 	args := rpc.PutArgs{
 		RequestInfo: rpc.RequestInfo{
 			ClientId:  ck.clientId,
-			RequestId: ck.nextReqId(),
+			RequestId: requestId,
 		},
 		Key:     key,
 		Value:   value,

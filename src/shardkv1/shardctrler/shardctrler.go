@@ -6,6 +6,7 @@ package shardctrler
 
 import (
 	"log"
+	"math/rand"
 	"sync"
 
 	"6.5840/debug"
@@ -25,8 +26,9 @@ type ShardCtrler struct {
 	killed int32 // set by Kill()
 
 	// Your data here.
-	clerkByGid map[tester.Tgid]*shardgrp.Clerk
-	mu         sync.Mutex
+	controllerId uint64
+	clerkByGid   map[tester.Tgid]*shardgrp.Clerk
+	mu           sync.Mutex
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
@@ -35,6 +37,7 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 	srv := tester.ServerName(tester.GRP0, 0)
 	sck.configStore = kvsrv.MakeClerk(clnt, srv)
 	// Your code here.
+	sck.controllerId = rand.Uint64()
 	sck.clerkByGid = make(map[tester.Tgid]*shardgrp.Clerk)
 	return sck
 }
@@ -51,7 +54,7 @@ func (sck *ShardCtrler) Clerk(shardCfg *shardcfg.ShardConfig, gid tester.Tgid) *
 	sck.mu.Lock()
 	clerk, exists := sck.clerkByGid[gid]
 	if !exists {
-		clerk = shardgrp.MakeClerk(sck.clnt, shardCfg.Groups[gid])
+		clerk = shardgrp.MakeClerk(sck.clnt, shardCfg.Groups[gid], sck.controllerId)
 		sck.clerkByGid[gid] = clerk
 	}
 	sck.mu.Unlock()

@@ -10,7 +10,9 @@ package shardkv
 
 import (
 	"log"
+	"math/rand"
 	"sync"
+	"sync/atomic"
 
 	"6.5840/debug"
 	"6.5840/shardkv1/shardcfg"
@@ -26,8 +28,9 @@ type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
 	rcks map[tester.Tgid]*shardgrp.Clerk
-	// You will have to modify this struct.
 
+	clerkId      uint64
+	requestId    uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
 	cachedConfig *shardcfg.ShardConfig
 	fetching     bool          // whether a config Query is in flight
 	fetchingDone chan struct{} // channel used to notify that the fetching is done
@@ -43,9 +46,15 @@ func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk 
 	}
 	ck.rcks = make(map[tester.Tgid]*shardgrp.Clerk)
 	// You'll have to add code here.
+	ck.requestId = 0
+	ck.clerkId = rand.Uint64()
 	ck.fetching = false
 	ck.fetchingDone = make(chan struct{})
 	return ck
+}
+
+func (ck *Clerk) nextReqId() uint64 {
+	return atomic.AddUint64(&ck.requestId, 1)
 }
 
 func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
@@ -104,6 +113,7 @@ func (ck *Clerk) refreshConfig() {
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
 
+	reqId := ck.nextReqId()
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
@@ -121,14 +131,14 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		ck.mu.RUnlock()
 
 		if !exists {
-			clerk = shardgrp.MakeClerk(ck.clnt, servers)
+			clerk = shardgrp.MakeClerk(ck.clnt, servers, ck.clerkId)
 			ck.mu.Lock()
 			ck.rcks[gid] = clerk
 			ck.mu.Unlock()
 		}
 
 		debug.D5APrintf("client -Get(key: %v) in shard %v-> group %v\n", key, shardId, gid)
-		val, version, rpcErr := clerk.Get(key)
+		val, version, rpcErr := clerk.Get(reqId, key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted {
 			ck.refreshConfig()
@@ -142,6 +152,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
 
+	reqId := ck.nextReqId()
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 	for {
@@ -158,13 +169,13 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		ck.mu.RUnlock()
 
 		if !exists {
-			clerk = shardgrp.MakeClerk(ck.clnt, servers)
+			clerk = shardgrp.MakeClerk(ck.clnt, servers, ck.clerkId)
 			ck.mu.Lock()
 			ck.rcks[gid] = clerk
 			ck.mu.Unlock()
 		}
 		debug.D5APrintf("client -Put(key: %v, value: %v, version: %v) in shard %v-> group %v\n", key, value, version, shardId, gid)
-		rpcErr := clerk.Put(key, value, version)
+		rpcErr := clerk.Put(reqId, key, value, version)
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
 		case rpc.ErrWrongGroup, rpc.ErrRetryExhausted:
