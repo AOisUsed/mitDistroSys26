@@ -56,6 +56,18 @@ func (cfg *ShardConfig) String() string {
 	return string(b)
 }
 
+func (cfg *ShardConfig) EqualTo(other *ShardConfig) bool {
+	if cfg.Num != other.Num {
+		return false
+	}
+	for i := 0; i < NShards; i++ {
+		if cfg.Shards[i] != other.Shards[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func FromString(s string) *ShardConfig {
 	scfg := &ShardConfig{}
 	if err := json.Unmarshal([]byte(s), scfg); err != nil {
