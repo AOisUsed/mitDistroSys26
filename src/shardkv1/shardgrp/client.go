@@ -161,7 +161,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 			switch reply.Err {
-			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
+			case rpc.OK, rpc.ErrWrongGroup:
 				debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
@@ -203,7 +203,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
-			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
+			case rpc.OK, rpc.ErrWrongGroup:
 				debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
@@ -244,7 +244,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 		if ok {
 			//debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
-			case rpc.OK, rpc.ErrStaleNum, rpc.ErrWrongGroup:
+			case rpc.OK, rpc.ErrWrongGroup:
 				debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader

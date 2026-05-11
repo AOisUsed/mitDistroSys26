@@ -217,7 +217,7 @@ func (kv *KVServer) DoOp(req any) any {
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
-				Err:   rpc.ErrStaleNum,
+				Err:   rpc.OK,
 			}
 		}
 		return reply
@@ -255,7 +255,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else { // reqCfgNum < localCfgNum
 			reply = shardrpc.InstallShardReply{
-				Err: rpc.ErrStaleNum,
+				Err: rpc.OK,
 			}
 		}
 		return reply
@@ -297,7 +297,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else { // request.Num < localCfgNum
 			reply = shardrpc.DeleteShardReply{
-				Err: rpc.ErrStaleNum,
+				Err: rpc.OK,
 			}
 		}
 	default:

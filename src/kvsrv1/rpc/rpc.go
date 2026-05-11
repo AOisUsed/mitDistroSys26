@@ -14,7 +14,6 @@ const (
 	// For future kvraft lab
 	ErrWrongLeader    = "ErrWrongLeader"
 	ErrWrongGroup     = "ErrWrongGroup"
-	ErrStaleNum       = "ErrStaleNum"
 	ErrRetryExhausted = "ErrRetryExhausted"
 )
 
