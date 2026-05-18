@@ -578,24 +578,33 @@ func (rf *Raft) replicationDispatcher() {
 }
 
 func (rf *Raft) newAppendEntriesArgsFor(svrIndex int) *AppendEntriesArgs {
+	// deep copy entries to avoid data race
+	entries := rf.Log[rf.physicalIndex(rf.nextIndex[svrIndex]):]
+	entriesCopy := make([]*LogEntry, len(entries))
+	for i, e := range entries {
+		entriesCopy[i] = &LogEntry{Term: e.Term, Command: e.Command}
+	}
 	args := &AppendEntriesArgs{
 		Term:         rf.CurrentTerm,
 		LeaderId:     rf.me,
 		PrevLogIndex: rf.nextIndex[svrIndex] - 1,
 		PrevLogTerm:  rf.Log[rf.physicalIndex(rf.nextIndex[svrIndex]-1)].Term,
-		Entries:      rf.Log[rf.physicalIndex(rf.nextIndex[svrIndex]):],
+		Entries:      entriesCopy,
 		LeaderCommit: rf.commitIndex,
 	}
 	return args
 }
 
 func (rf *Raft) newInstallSnapshotArgs() *InstallSnapshotArgs {
+	// deep copy snapshot data to avoid data race
+	dataCopy := make([]byte, len(rf.SnapshotData))
+	copy(dataCopy, rf.SnapshotData)
 	args := &InstallSnapshotArgs{
 		Term:              rf.CurrentTerm,
 		LeaderId:          rf.me,
 		LastIncludedIndex: rf.LastIncludedIndex,
 		LastIncludedTerm:  rf.Log[rf.physicalIndex(rf.LastIncludedIndex)].Term,
-		Data:              rf.SnapshotData,
+		Data:              dataCopy,
 	}
 	return args
 }
@@ -792,9 +801,9 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 
-		// pause for a random amount of time between 150 and 450
+		// pause for a random amount of time between 300 and 600
 		// milliseconds.
-		ms := 150 + (rand.Int63() % 300)
+		ms := 300 + (rand.Int63() % 300)
 		rf.mu.Lock()
 		needElection := rf.state != leader && time.Since(rf.lastHeardTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()

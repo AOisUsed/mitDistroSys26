@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"6.5840/debug"
@@ -138,6 +139,7 @@ func (sck *ShardCtrler) isSuperseded(newCfg *shardcfg.ShardConfig) bool {
 // migrateShards is called in ChangeConfigTo and InitController. ver is the version of currentConfig value, for CAS Put
 func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tversion, newCfg *shardcfg.ShardConfig) {
 	var wg sync.WaitGroup
+	var anyFailed atomic.Bool
 
 	// compare the oldCfg and newCfg configuration, find the difference, and act accordingly
 	for shid, oldGid := range oldCfg.Shards {
@@ -165,7 +167,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 			//
 			// therefore we need maximum retries, if the maximum is reached, we can conclude that it's due to the group leave.
 			// because kv server is fault-tolerant with raft, in the case that the majority is dead isn't unlikely.
-			const shardOpRetries = 10
+			const shardOpRetries = 5
 
 			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
 			oldGrpClerk := sck.clerk(oldCfg, oldGid)
@@ -176,6 +178,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", shid, newCfg.Num, oldGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
+						anyFailed.Store(true)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -183,6 +186,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 			}
 			if err == rpc.ErrRetryExhausted {
 				debug.D5APrintf("controller -FreezeShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
+				anyFailed.Store(true)
 				return
 			}
 
@@ -194,6 +198,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", shid, len(data), newCfg.Num, newGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
+						anyFailed.Store(true)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -201,6 +206,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 			}
 			if err == rpc.ErrRetryExhausted {
 				debug.D5APrintf("controller -InstallShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
+				anyFailed.Store(true)
 				return
 			}
 
@@ -211,6 +217,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", shid, newCfg.Num, newGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
+						anyFailed.Store(true)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -218,11 +225,16 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 			}
 			if err == rpc.ErrRetryExhausted {
 				debug.D5APrintf("controller -DeleteShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
+				anyFailed.Store(true)
 				return
 			}
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}
 	wg.Wait()
+
+	if anyFailed.Load() {
+		return
+	}
 
 	// save newCfg to configStore
 	marshalledCfg := newCfg.String()
