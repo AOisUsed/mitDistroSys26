@@ -73,7 +73,6 @@ type Raft struct {
 	applyReadyCh      chan struct{}
 	replicateReadyChs []chan struct{}
 	snapshotPending   bool
-	kill              chan struct{}
 }
 
 // printState print the Persisted State of this Raft
@@ -951,7 +950,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.replicateReadyChs[i] = make(chan struct{}, 1)
 	}
 	rf.snapshotPending = false
-	rf.kill = make(chan struct{})
 
 	debug.D3APrintf("%v starts as a follower", rf.me)
 
