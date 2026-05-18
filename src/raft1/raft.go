@@ -792,9 +792,9 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 
-		// pause for a random amount of time between 50 and 350
+		// pause for a random amount of time between 150 and 450
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		ms := 150 + (rand.Int63() % 300)
 		rf.mu.Lock()
 		needElection := rf.state != leader && time.Since(rf.lastHeardTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()
@@ -811,7 +811,8 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	rf.CurrentTerm++
 	rf.state = candidate
-	rf.VotedFor = rf.me //vote for itself
+	rf.VotedFor = rf.me           //vote for itself
+	rf.lastHeardTime = time.Now() // prevent the ticker from starting another election immediately
 	rf.persist()
 	debug.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
 
@@ -824,17 +825,15 @@ func (rf *Raft) startElection() {
 	rf.mu.Unlock()
 
 	voteCount := 1
+	won := false
 
-	var wg sync.WaitGroup
-	//send RequestVotes to all other servers
+	//send RequestVotes to all other servers asynchronously
 	for i := range rf.peers {
 		if i == rf.me { //rf.me doesn't change, lock isn't needed
 			continue
 		}
-		wg.Add(1)
 		//request vote to i
 		go func(i int) {
-			defer wg.Done()
 			reply := &RequestVoteReply{}
 			debug.D3APrintf("%v at %v: is to request vote from %v", rf.me, args.Term, i)
 			ok := rf.sendRequestVote(i, args, reply)
@@ -842,21 +841,23 @@ func (rf *Raft) startElection() {
 				return
 			}
 			rf.mu.Lock()
-			defer rf.mu.Unlock()
 			if reply.Term > rf.CurrentTerm {
 				rf.becomeFollowerWithTerm(reply.Term)
 				rf.lastHeardTime = time.Now()
 				rf.persist()
+				rf.mu.Unlock()
 				return
 			}
 			if reply.VoteGranted {
 				if rf.state != candidate || reply.Term != rf.CurrentTerm {
 					debug.D3APrintf("%v at %v <-stale vote- %v at %v", rf.me, args.Term, i, reply.Term)
+					rf.mu.Unlock()
 					return
 				}
 				debug.D3APrintf("%v at %v <-vote- %v", rf.me, args.Term, i)
 				voteCount++
-				if voteCount > len(rf.peers)/2 {
+				if voteCount > len(rf.peers)/2 && !won {
+					won = true
 					debug.D3APrintf("%v at %v wins ", rf.me, args.Term)
 					rf.state = leader
 					//reinitialise volatile state on leaders
@@ -866,19 +867,11 @@ func (rf *Raft) startElection() {
 					for j := range rf.matchIndex {
 						rf.matchIndex[j] = 0
 					}
-					// append a no-op log
-					//rf.Log = append(rf.Log, &LogEntry{Term: rf.CurrentTerm, Command: nil})
-					//rf.persist()
-					//
-					//select {
-					//case rf.logAppendedCh <- struct{}{}:
-					//default:
-					//}
 				}
 			}
+			rf.mu.Unlock()
 		}(i)
 	}
-	wg.Wait() //wait until all the RequestVote RPC returns to know that the election is finished
 }
 
 // try to send replicateReady every 0.1 second to claim its leadership

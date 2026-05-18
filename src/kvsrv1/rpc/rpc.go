@@ -3,7 +3,7 @@ package rpc
 type Err string
 
 const (
-	// Err's returned by server and Clerk
+	// Errs returned by server and Clerk
 	OK         = "OK"
 	ErrNoKey   = "ErrNoKey"
 	ErrVersion = "ErrVersion"
@@ -15,6 +15,9 @@ const (
 	ErrWrongLeader    = "ErrWrongLeader"
 	ErrWrongGroup     = "ErrWrongGroup"
 	ErrRetryExhausted = "ErrRetryExhausted"
+
+	// for shard reconfiguration
+	ErrIllegalOperation = "ErrIllegalOperation"
 )
 
 type Tversion uint64

@@ -195,22 +195,22 @@ func (kv *KVServer) DoOp(req any) any {
 				reply = shardrpc.FreezeShardReply{
 					State: nil,
 					Num:   localCfgNum,
-					Err:   rpc.ErrWrongGroup,
+					Err:   rpc.ErrIllegalOperation,
 				}
 			}
 		} else if reqCfgNum == localCfgNum {
 			switch kv.shardStatuses[shid] {
 			case Frozen, Absent:
 				reply = shardrpc.FreezeShardReply{
-					State: kv.marshallShardState(shid), // 注意， Absent状态时，其实分片已经被删除了，此处是空，但由于DeleteShard前提是分片接受者已经完成了install， 所以在controller尝试把此分片装到分片接受者处时，接受者会幂等操作（拒绝）
+					State: kv.marshallShardState(shid), // 注意， Absent状态时，说明此分片已经在此group中被删除了，此处是空。由于DeleteShard前提是分片接受者已经完成了install， 所以在controller尝试把此空的分片数据装到分片接受者处时，接受者会幂等操作（拒绝），因而不影响正确性
 					Num:   reqCfgNum,
 					Err:   rpc.OK,
 				}
 			case Serving:
-				reply = shardrpc.FreezeShardReply{
+				reply = shardrpc.FreezeShardReply{ // illegal operation on this state
 					State: nil,
 					Num:   reqCfgNum,
-					Err:   rpc.ErrWrongGroup,
+					Err:   rpc.ErrIllegalOperation,
 				}
 			}
 		} else { // reqCfgNum < localCfgNum
@@ -238,8 +238,8 @@ func (kv *KVServer) DoOp(req any) any {
 					Err: rpc.OK,
 				}
 			case Frozen, Serving:
-				reply = shardrpc.InstallShardReply{
-					Err: rpc.ErrWrongGroup,
+				reply = shardrpc.InstallShardReply{ // illegal operation on this state
+					Err: rpc.ErrIllegalOperation,
 				}
 			}
 		} else if request.Num == localCfgNum { // duplicated Install
@@ -250,7 +250,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Absent, Frozen: // illegal state for install
 				reply = shardrpc.InstallShardReply{
-					Err: rpc.ErrWrongGroup,
+					Err: rpc.ErrIllegalOperation,
 				}
 			}
 		} else { // reqCfgNum < localCfgNum
@@ -288,12 +288,12 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Serving:
 				reply = shardrpc.DeleteShardReply{
-					Err: rpc.ErrWrongGroup,
+					Err: rpc.ErrIllegalOperation,
 				}
 			}
 		} else if request.Num > localCfgNum {
-			reply = shardrpc.DeleteShardReply{
-				Err: rpc.ErrWrongGroup,
+			reply = shardrpc.DeleteShardReply{ // illegal operation
+				Err: rpc.ErrIllegalOperation,
 			}
 		} else { // request.Num < localCfgNum
 			reply = shardrpc.DeleteShardReply{
