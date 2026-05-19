@@ -447,7 +447,8 @@
     }
 
     async function api(path, options, timeoutMs) {
-        timeoutMs = timeoutMs || 1500;
+        timeoutMs = timeoutMs || 15000;
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
@@ -662,6 +663,8 @@
         refreshStatus();
     }
 
+    let netParams = { dropRate: 300, shortDelayMs: 300, longDelayMs: 3000 };
+
     async function toggleUnreliable() {
         const toggle = document.getElementById('unreliableToggle');
         const label = document.getElementById('unreliableLabel');
@@ -672,9 +675,11 @@
         });
         label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
-        addLog(`不可靠网络: ${enabled ? '开启 (10%丢请求/回复 + 随机延迟)' : '关闭'}`, enabled ? 'err' : 'ok');
+        const dropPct = (netParams.dropRate / 10).toFixed(0);
+        addLog(`不可靠网络: ${enabled ? `开启 (${dropPct}%丢包 + 随机延迟 ${netParams.shortDelayMs}~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
         refreshStatus();
     }
+
 
     // ========== 快捷 Leave（从拓扑标题调用） ==========
     async function doLeaveGroupById(gid) {
@@ -938,14 +943,21 @@
 
     window.addEventListener('load', async function() {
         try {
-            const result = await api('/api/network/reliable', {method: 'GET'});
-            if (result.reliable === false) {
+            const [reliableRes, paramsRes] = await Promise.all([
+                api('/api/network/reliable', {method: 'GET'}),
+                api('/api/network/params', {method: 'GET'})
+            ]);
+            if (paramsRes) {
+                netParams = paramsRes;
+            }
+            if (reliableRes && reliableRes.reliable === false) {
                 document.getElementById('unreliableToggle').checked = true;
                 document.getElementById('unreliableLabel').textContent = '开启 (丢包+延迟)';
                 document.getElementById('unreliableLabel').style.color = '#ff4d4f';
             }
         } catch(e) {}
     });
+
 </script>
 </body>
 </html>

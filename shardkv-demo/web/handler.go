@@ -12,6 +12,7 @@ import (
 	"shardkv-demo/cluster"
 
 	"6.5840/kvsrv1/rpc"
+	"6.5840/labrpc"
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/tester1"
 )
@@ -599,7 +600,20 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"success": true, "action": "reliable", "reliable": h.cm.IsReliable()})
 }
 
+func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"dropRate":     labrpc.GetDropRate(),
+		"shortDelayMs": labrpc.GetShortDelay(),
+		"longDelayMs":  labrpc.GetLongDelay(),
+	})
+}
+
 func (h *Handler) HandleConnectAll(w http.ResponseWriter, r *http.Request) {
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -714,6 +728,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/network/connect-all", h.HandleConnectAll)
 	mux.HandleFunc("/api/network/recover-all", h.HandleRecoverAllGroups)
 	mux.HandleFunc("/api/network/partition", h.HandlePartition)
+	mux.HandleFunc("/api/network/params", h.HandleNetParams)
 	mux.HandleFunc("/api/network/reliable", h.HandleReliable)
 
 	// Chaos Monkey

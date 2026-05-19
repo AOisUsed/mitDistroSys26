@@ -60,9 +60,10 @@ import "time"
 import "sync/atomic"
 
 const (
-	SHORTDELAY = 27   // ms
-	LONGDELAY  = 7000 // ms
+	SHORTDELAY = 300  // ms
+	LONGDELAY  = 3000 // ms
 	MAXDELAY   = LONGDELAY + 100
+	DROPRATE   = 300 // drop rate per 1000 (30%)
 )
 
 type reqMsg struct {
@@ -299,8 +300,9 @@ func (rn *Network) processReq(req reqMsg) {
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
-		if reliable == false && (rand.Int()%1000) < 100 {
+		if reliable == false && (rand.Int()%1000) < DROPRATE {
 			// drop the request, return as if timeout
+
 			req.replyCh <- replyMsg{false, nil}
 			return
 		}
@@ -346,9 +348,10 @@ func (rn *Network) processReq(req reqMsg) {
 		if replyOK == false || serverDead == true {
 			// server was killed while we were waiting; return error.
 			req.replyCh <- replyMsg{false, nil}
-		} else if reliable == false && (rand.Int()%1000) < 100 {
+		} else if reliable == false && (rand.Int()%1000) < DROPRATE {
 			// drop the reply, return as if timeout
 			req.replyCh <- replyMsg{false, nil}
+
 		} else if longreordering == true && rand.Intn(900) < 600 {
 			// delay the response for a while
 			ms := 200 + rand.Intn(1+rand.Intn(2000))
@@ -584,7 +587,17 @@ func MakeService(rcvr interface{}) *Service {
 	return svc
 }
 
+// GetDropRate returns the drop rate per 1000 for unreliable network.
+func GetDropRate() int { return DROPRATE }
+
+// GetShortDelay returns the short delay in ms for unreliable network.
+func GetShortDelay() int { return SHORTDELAY }
+
+// GetLongDelay returns the long delay in ms for unreliable network.
+func GetLongDelay() int { return LONGDELAY }
+
 func (svc *Service) dispatch(methname string, req reqMsg) replyMsg {
+
 	if method, ok := svc.methods[methname]; ok {
 		// prepare space into which to read the argument.
 		// the Value's type will be a pointer to req.argsType.
