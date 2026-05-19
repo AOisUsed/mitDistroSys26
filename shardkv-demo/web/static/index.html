@@ -510,13 +510,14 @@
         });
         document.getElementById('kvResult').textContent =
             result.success
-                ? `Put: ${key} = ${value} (分片${shard}, v${result.version})`
-                : `Put 失败: ${result.err || 'unknown error'} (分片${shard})`;
+                ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
+                : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
         if (result.success) {
-            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, v${result.version})`, 'ok');
+            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
         } else {
-            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err || 'unknown error'} (分片${shard}, v${result.version})`, 'err');
+            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
         }
+
         document.getElementById('putVal').value = randomChars(3);
         refreshStatus();
     }

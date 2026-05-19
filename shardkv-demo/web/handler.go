@@ -267,19 +267,19 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 		Key     string `json:"key"`
 		Value   string `json:"value"`
 		Shard   int    `json:"shard"`
-		Version int    `json:"version,omitempty"`
+		ReqVer  int    `json:"reqVer"`
 	}{
-		Key:     req.Key,
-		Value:   req.Value,
-		Shard:   int(shard),
-		Version: int(version + 1),
+		Key:    req.Key,
+		Value:  req.Value,
+		Shard:  int(shard),
+		ReqVer: int(version),
 	}
 	if putErr == rpc.OK {
 		resp.Success = true
-		log.Printf("[Put] key=%q value=%q S%d (ver %d→%d) OK", req.Key, req.Value, shard, version, version+1)
+		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, version)
 	} else {
 		resp.Err = string(putErr)
-		log.Printf("[Put] key=%q value=%q S%d err=%s", req.Key, req.Value, shard, putErr)
+		log.Printf("[Put] key=%q value=%q S%d reqVer=%d %s", req.Key, req.Value, shard, version, putErr)
 	}
 	writeJSON(w, resp)
 }

@@ -24,6 +24,7 @@ import (
 	"6.5840/tester1"
 )
 
+// Clerk shardkv.Clerk is directly used by client to execute PUT, GET
 type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
@@ -180,10 +181,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		switch rpcErr {
 		case rpc.ErrWrongGroup, rpc.ErrRetryExhausted:
 			ck.refreshConfig()
-		case rpc.ErrMaybe:
-			// ErrMaybe means the write may already be applied; caller must re-read
-			// and decide whether to retry with a newer version.
-			return rpcErr
 		case rpc.OK, rpc.ErrVersion, rpc.ErrNoKey:
 			return rpcErr
 		default:
