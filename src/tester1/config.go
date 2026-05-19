@@ -59,6 +59,22 @@ func MakeConfig(t *testing.T, n int, reliable bool, prog string, args []string) 
 	return cfg
 }
 
+// MakeDemoConfig creates a Config suitable for non-test demo use.
+// It does not require a *testing.T, so it can be used from a regular main() binary.
+// NOTE: Do not call Config methods that use the nil t field (Fatalf, CheckTimeout, Begin, End, Cleanup).
+func MakeDemoConfig(prog string, args []string) *Config {
+	cfg := &Config{}
+	cfg.net = labrpc.MakeNetwork()
+	cfg.endName = Randstring(20)
+	cfg.trpc = newTesterRPCSrv(cfg)
+	cfg.Groups = newGroups(cfg.net, prog, args, cfg.endName)
+	cfg.MakeGroupStart(prog, args, GRP0, 1)
+	cfg.Clnts = makeClnts(cfg.net)
+	cfg.start = time.Now()
+	cfg.net.Reliable(true)
+	return cfg
+}
+
 func (cfg *Config) SetReliable(reliable bool) {
 	cfg.net.Reliable(reliable)
 }

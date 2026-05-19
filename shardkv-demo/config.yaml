@@ -1,0 +1,12 @@
+# shardkv-demo 集群启动配置
+cluster:
+  # 每组多少个副本节点
+  nsrv: 3
+  # 是否可靠网络
+  reliable: true
+
+# 初始启动的 Shard Group 列表
+# Gid1 是初始组，拥有所有 shard
+groups:
+  - gid: 1
+    servers: 3

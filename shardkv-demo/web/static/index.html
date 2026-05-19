@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShardKV 集群控制台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .subtitle { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+        .header .status-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px; border-radius: 20px; font-size: 12px;
+        }
+        .badge-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #52c41a; display: inline-block;
+        }
+
+        .container {
+            display: flex; gap: 12px; padding: 12px; max-width: 1600px; margin: 0 auto;
+            height: calc(100vh - 52px);
+        }
+        .main-panel {
+            flex: 1;
+            display: flex; flex-direction: column; gap: 12px;
+            overflow-y: auto;
+            min-width: 0;
+        }
+        .right-panel {
+            width: 380px; min-width: 360px;
+            display: flex; flex-direction: column; gap: 0;
+        }
+
+        .card {
+            background: white; border-radius: 10px; padding: 14px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .card h3 {
+            font-size: 13px; font-weight: 600; margin-bottom: 10px;
+            padding-bottom: 6px; border-bottom: 1px solid #eee;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .card h3 .actions {
+            display: flex; gap: 6px; align-items: center;
+        }
+
+        .form-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+        .form-row input, .form-row select {
+            flex: 1; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px;
+            font-size: 12px; outline: none; transition: border-color 0.2s;
+        }
+        .form-row input:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
+
+        select.dropdown {
+            padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px;
+            font-size: 12px; outline: none; background: white;
+            cursor: pointer;
+        }
+        select.dropdown:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
+
+        .btn {
+            padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer;
+            font-size: 12px; font-weight: 500; transition: all 0.2s; white-space: nowrap;
+        }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5a6fd6; }
+        .btn-danger { background: #ff4d4f; color: white; }
+        .btn-danger:hover { background: #e04345; }
+        .btn-success { background: #52c41a; color: white; }
+        .btn-success:hover { background: #49b018; }
+        .btn-warning { background: #faad14; color: white; }
+        .btn-warning:hover { background: #e8a012; }
+        .btn-sm { padding: 3px 8px; font-size: 11px; }
+        .btn-xs { padding: 2px 6px; font-size: 10px; border-radius: 4px; }
+
+        .node-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+        .group-card {
+            background: #fafafa; border: 1px solid #eee; border-radius: 8px;
+            padding: 10px; flex: 1; min-width: 240px;
+        }
+        .group-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #e8e8e8;
+        }
+        .group-header .gid { font-weight: 600; font-size: 13px; }
+        .group-header .shard-count { font-size: 11px; color: #888; }
+        .group-header .ops { display: flex; gap: 4px; align-items: center; }
+        .server-item {
+            display: flex; align-items: center; gap: 6px; padding: 3px 0;
+            font-size: 12px;
+        }
+        .server-item .dot {
+            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+            flex-shrink: 0;
+        }
+        .dot.alive { background: #52c41a; }
+        .dot.dead { background: #ff4d4f; }
+        .dot.isolated { background: #faad14; }
+        .server-item .name { font-family: 'SF Mono', Monaco, monospace; font-size: 11px; flex: 1; min-width: 0; }
+        .server-item .status-label { font-size: 10px; color: #888; }
+        .server-item .actions { display: flex; gap: 3px; margin-left: auto; flex-shrink: 0; }
+
+        .shard-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+            gap: 5px; margin-top: 6px;
+        }
+        .shard-item {
+            text-align: center; padding: 5px 3px; border-radius: 6px;
+            font-size: 10px; font-family: monospace; cursor: default;
+        }
+
+        .log-panel {
+            background: #1a1a2e; color: #e0e0e0;
+            border-radius: 10px;
+            font-family: 'SF Mono', Monaco, monospace; font-size: 11px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .log-panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 14px; background: #16213e; border-bottom: 1px solid #0f3460;
+            cursor: pointer; user-select: none;
+            flex-shrink: 0;
+        }
+        .log-panel-header .title { font-weight: 600; font-size: 13px; color: #667eea; }
+        .log-panel-header .toggle { font-size: 11px; color: #888; }
+        .log-panel-area {
+            padding: 6px 14px;
+            flex: 1;
+            overflow-y: auto;
+            line-height: 1.6;
+            min-height: 60px;
+        }
+        .log-panel-area .log-time { color: #888; }
+        .log-panel-area .log-ok { color: #52c41a; }
+        .log-panel-area .log-err { color: #ff4d4f; }
+        .log-panel-area .log-info { color: #1890ff; }
+        .log-panel-area .log-shard { color: #f6d365; }
+
+        .toggle-switch {
+            position: relative; display: inline-block;
+            width: 36px; height: 20px; cursor: pointer;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: #ccc; border-radius: 20px;
+            transition: background 0.3s;
+        }
+        .toggle-slider::before {
+            content: ''; position: absolute; left: 2px; bottom: 2px;
+            width: 16px; height: 16px; background: white; border-radius: 50%;
+            transition: transform 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: #ff4d4f; }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+        .get-result {
+            background: #f0f5ff; border: 1px solid #d6e4ff; border-radius: 6px;
+            padding: 6px 10px; font-size: 11px; font-family: monospace;
+        }
+
+        .kv-panel { display: flex; flex-direction: column; gap: 5px; }
+        .kv-row { display: flex; gap: 5px; align-items: stretch; }
+        .kv-row .kv-inputs {
+            flex: 1 1 0; display: flex; gap: 5px; min-width: 0;
+        }
+        .kv-row .kv-inputs input,
+        .kv-row .kv-inputs select {
+            flex: 1 1 0; min-width: 0; padding: 7px 10px;
+            border: 1px solid #d9d9d9; border-radius: 6px;
+            font-size: 12px; outline: none; transition: border-color 0.2s;
+        }
+        .kv-row .kv-inputs input:focus,
+        .kv-row .kv-inputs select:focus {
+            border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15);
+        }
+        .kv-row .kv-inputs .kv-input-sm { flex: 0 0 65px; min-width: 55px; }
+        .kv-row .kv-actions { flex: 0 0 auto; display: flex; gap: 5px; }
+        .kv-row .kv-actions .btn { height: 100%; display: flex; align-items: center; font-size: 12px; }
+
+        .chaos-btn {
+            font-size: 10px; padding: 2px 8px; border-radius: 10px;
+            border: none; cursor: pointer; font-weight: 500;
+            transition: all 0.2s; white-space: nowrap;
+        }
+        .chaos-btn.active { background: #ff4d4f; color: white; }
+        .chaos-btn.active:hover { background: #e04345; }
+        .chaos-btn.inactive { background: #e8e8e8; color: #999; }
+        .chaos-btn.inactive:hover { background: #d9d9d9; color: #666; }
+        .chaos-btn.loading { background: #faad14; color: white; }
+
+        .form-label {
+            font-size: 11px; color: #888; min-width: 30px;
+        }
+
+        .btn-isolate { background: #fffbe6; color: #d48806; border: 1px solid #ffe58f; }
+        .btn-isolate:hover { background: #fff1b8; }
+        .btn-recover { background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+        .btn-recover:hover { background: #d9f7be; }
+
+        .control-row {
+            display: flex; gap: 12px;
+        }
+        .control-col {
+            flex: 1; min-width: 0;
+            display: flex; flex-direction: column; gap: 6px;
+        }
+
+        .sep-line {
+            border-top: 1px solid #e8e8e8;
+            margin: 6px 0;
+        }
+
+        .net-toggle-row {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 8px;
+        }
+        .net-toggle-row .left { display: flex; align-items: center; gap: 6px; flex: 1; }
+        .net-toggle-row .right { display: flex; align-items: center; gap: 6px; }
+
+        @media (max-width: 1024px) {
+            .container { flex-direction: column; height: auto; }
+            .main-panel, .right-panel { width: 100%; min-width: auto; }
+            .right-panel { height: 300px; }
+        }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div>
+        <h1>ShardKV 集群控制台</h1>
+        <div class="subtitle">分布式键值存储系统 · 实时监控与运维</div>
+    </div>
+    <div class="status-badge">
+        <span class="badge-dot"></span>
+        <span id="clusterStatus">运行中</span>
+        <span id="configNum" style="margin-left:8px;opacity:0.7;"></span>
+    </div>
+</div>
+
+<div class="container">
+    <!-- 左主面板 -->
+    <div class="main-panel">
+
+        <!-- 控制操作 -->
+        <div class="card">
+            <h3>控制操作</h3>
+            <div class="control-row">
+                <!-- 左列：KV 操作 -->
+                <div class="control-col">
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#667eea;">KV 操作 <span id="kvShard" style="font-size:11px;font-weight:400;color:#888;"></span></div>
+                    <div class="kv-panel">
+                        <div class="kv-row">
+                            <div class="kv-inputs">
+                                <input type="text" id="putKey" placeholder="键 (Key)" oninput="kvShardHint()">
+                                <input type="text" id="putVal" placeholder="值 (Value)">
+                            </div>
+                            <div class="kv-actions">
+                                <button class="btn btn-primary" onclick="doPut()">Put</button>
+                            </div>
+                        </div>
+                        <div class="kv-row">
+                            <div class="kv-inputs">
+                                <input type="text" id="getKey" placeholder="键 (Key)" oninput="kvShardHint()">
+                            </div>
+                            <div class="kv-actions">
+                                <button class="btn btn-success" onclick="doGet()">Get</button>
+                            </div>
+                        </div>
+                        <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;">
+                            <div class="kv-inputs">
+                                <select id="targetShard" class="kv-input-sm"></select>
+                                <input type="text" id="keyPrefix" placeholder="前缀(可选)">
+                            </div>
+                            <div class="kv-actions">
+                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">生成Key</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="kvResult" class="get-result">等待操作...</div>
+                </div>
+
+                <!-- 右列：节点操作 + 组操作 + 网络可靠性 -->
+                <div class="control-col">
+                    <!-- 节点操作 -->
+                    <div>
+                        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#ff4d4f;">节点操作</div>
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span class="form-label" style="min-width:30px;">组:</span>
+                                <select id="nodeGid" class="dropdown" style="flex:1;" onchange="onNodeGidChange()">
+                                    <option value="">选择组</option>
+                                </select>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span class="form-label" style="min-width:30px;">节点:</span>
+                                <select id="nodeIdx" class="dropdown" style="flex:1;">
+                                    <option value="">选择</option>
+                                </select>
+                                <button class="btn btn-danger btn-sm" onclick="doKillNode()">Kill</button>
+                                <button class="btn btn-success btn-sm" onclick="doStartNode()">Start</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 组操作 -->
+                    <div style="margin-top:4px;">
+                        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#faad14;">组操作</div>
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span class="form-label" style="min-width:30px;">组:</span>
+                                <select id="groupGid" class="dropdown" style="flex:1;">
+                                    <option value="">选择组</option>
+                                </select>
+                                <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
+                                <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
+                                <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
+                            </div>
+                            <button class="btn btn-primary" onclick="doJoinGroup()" style="flex:1;">
+                                添加新组
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 网络可靠性（放在控制操作底部） -->
+                    <div class="sep-line"></div>
+                    <div class="net-toggle-row">
+                        <div class="left">
+                            <span style="font-size:12px;font-weight:500;">不可靠网络</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="unreliableToggle" onchange="toggleUnreliable()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span id="unreliableLabel" style="font-size:11px;color:#999;">关闭</span>
+                        </div>
+                        <button class="btn btn-success btn-xs" onclick="doRecoverAll()">
+                            恢复所有组连接
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 集群拓扑（增强版，集成网络操作） -->
+        <div class="card">
+            <h3>集群拓扑 <span id="refreshInfo" style="font-weight:400;font-size:11px;color:#888;"></span></h3>
+            <div id="topology" class="node-grid">
+                <div style="color:#888;text-align:center;width:100%;padding:20px;">正在加载...</div>
+            </div>
+        </div>
+
+        <!-- 分片分布 -->
+        <div class="card">
+            <h3>分片分布 <span id="shardInfo" style="font-weight:400;font-size:11px;color:#888;"></span></h3>
+            <div id="shardGrid" class="shard-grid">
+                <div style="color:#888;text-align:center;width:100%;padding:10px;">正在加载...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧面板：日志 -->
+    <div class="right-panel">
+        <div class="log-panel">
+            <div class="log-panel-header" onclick="toggleLog()">
+                <span class="title">操作日志</span>
+                <span class="toggle" id="logToggle">收起</span>
+            </div>
+            <div id="logArea" class="log-panel-area">
+                <div class="log-info">系统就绪，等待操作...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API = '';
+    let logCount = 0;
+    const N_SHARDS = 12;
+    let cachedTree = null;
+    let chaosStates = {};
+
+    function key2Shard(key) {
+        let hash = 0x811c9dc5 >>> 0;
+        for (let i = 0; i < key.length; i++) {
+            hash ^= key.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193) >>> 0;
+        }
+        return (hash % N_SHARDS) >>> 0;
+    }
+
+    function shardHint(key) {
+        if (!key) return '';
+        const s = key2Shard(key);
+        return `分片${s}`;
+    }
+
+    function kvShardHint() {
+        const putKey = document.getElementById('putKey').value.trim();
+        const getKey = document.getElementById('getKey').value.trim();
+        const activeKey = putKey || getKey;
+        document.getElementById('kvShard').textContent = activeKey ? `-> ${shardHint(activeKey)}` : '';
+    }
+
+    let logExpanded = true;
+    function toggleLog() {
+        const area = document.getElementById('logArea');
+        const toggle = document.getElementById('logToggle');
+        logExpanded = !logExpanded;
+        area.style.display = logExpanded ? 'block' : 'none';
+        toggle.textContent = logExpanded ? '收起' : '展开';
+    }
+
+    function addLog(message, type) {
+        const logArea = document.getElementById('logArea');
+        const time = new Date().toLocaleTimeString();
+        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'shard' ? 'log-shard' : 'log-info';
+        const entry = document.createElement('div');
+        entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
+        logArea.appendChild(entry);
+        logArea.scrollTop = logArea.scrollHeight;
+        logCount++;
+        while (logArea.children.length > 200) {
+            logArea.removeChild(logArea.firstChild);
+        }
+    }
+
+    async function api(path, options, timeoutMs) {
+        timeoutMs = timeoutMs || 1500;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const resp = await fetch(API + path, {
+                headers: {'Content-Type': 'application/json'},
+                signal: controller.signal,
+                ...options
+            });
+            clearTimeout(timer);
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error(`HTTP ${resp.status}: ${text}`);
+            }
+            return await resp.json();
+        } catch (err) {
+            clearTimeout(timer);
+            if (err.name === 'AbortError') {
+                addLog(`API 超时: ${path} (超过 ${timeoutMs/1000}s 无响应)`, 'err');
+            } else {
+                addLog(`API 错误: ${err.message}`, 'err');
+            }
+            throw err;
+        }
+    }
+
+    function randomChars(n) {
+        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        let result = '';
+        for (let i = 0; i < n; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+        return result;
+    }
+
+    function generateKeyForShard() {
+        const target = parseInt(document.getElementById('targetShard').value);
+        const prefix = document.getElementById('keyPrefix').value.trim() || 'k';
+        for (let i = 0; i < 1000; i++) {
+            const candidate = `${prefix}-${i}`;
+            if (key2Shard(candidate) === target) {
+                document.getElementById('putKey').value = candidate;
+                document.getElementById('getKey').value = candidate;
+                const val = randomChars(3);
+                document.getElementById('putVal').value = val;
+                kvShardHint();
+                addLog(`生成 key="${candidate}" value="${val}" -> 分片${target}`, 'info');
+                return;
+            }
+        }
+        addLog(`未找到能映射到分片${target} 的 key (尝试了 1000 个后缀)`, 'err');
+    }
+
+    // ========== KV 操作 ==========
+    async function doPut() {
+        const key = document.getElementById('putKey').value.trim();
+        const value = document.getElementById('putVal').value.trim();
+        if (!key) { addLog('Put: 键不能为空', 'err'); return; }
+        const shard = key2Shard(key);
+        const result = await api('/api/kv/', {
+            method: 'PUT',
+            body: JSON.stringify({key, value})
+        });
+        document.getElementById('kvResult').textContent =
+            result.success
+                ? `Put: ${key} = ${value} (分片${shard}, v${result.version})`
+                : `Put 失败: ${result.err || 'unknown error'} (分片${shard})`;
+        if (result.success) {
+            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, v${result.version})`, 'ok');
+        } else {
+            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err || 'unknown error'} (分片${shard}, v${result.version})`, 'err');
+        }
+        document.getElementById('putVal').value = randomChars(3);
+        refreshStatus();
+    }
+
+    async function doGet() {
+        const key = document.getElementById('getKey').value.trim();
+        if (!key) { addLog('Get: 键不能为空', 'err'); return; }
+        const shard = key2Shard(key);
+        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
+        document.getElementById('kvResult').textContent =
+            result.success
+                ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
+                : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
+        if (result.success) {
+            addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
+        } else {
+            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
+        }
+    }
+
+    // ========== 节点操作 ==========
+    async function doKillNode() {
+        const gid = parseInt(document.getElementById('nodeGid').value);
+        const srv = parseInt(document.getElementById('nodeIdx').value);
+        if (isNaN(gid) || isNaN(srv)) { addLog('KillNode: 请选择有效的组和节点索引', 'err'); return; }
+        const result = await api('/api/node/kill', {
+            method: 'POST',
+            body: JSON.stringify({gid, srv})
+        });
+        const detail = result.aliveGroup !== undefined ? ` | 组内存活 ${result.aliveGroup}/${result.totalGroup}` : '';
+        addLog(`KillNode: ${result.srvName || `组${gid}节点${srv}`}${detail}`, 'ok');
+        refreshStatus();
+    }
+
+    async function doStartNode() {
+        const gid = parseInt(document.getElementById('nodeGid').value);
+        const srv = parseInt(document.getElementById('nodeIdx').value);
+        if (isNaN(gid) || isNaN(srv)) { addLog('StartNode: 请选择有效的组和节点索引', 'err'); return; }
+        const result = await api('/api/node/start', {
+            method: 'POST',
+            body: JSON.stringify({gid, srv})
+        });
+        if (result.success) {
+            addLog(`StartNode: server-${gid}-${srv} 已启动并连入网络`, 'ok');
+        } else {
+            addLog(`StartNode: server-${gid}-${srv} 启动失败 - ${result.error || '未知错误'}`, 'err');
+        }
+        refreshStatus();
+    }
+
+    // ========== 网络操作 ==========
+    async function doIsolateNode(gid, srv) {
+        const result = await api('/api/node/isolate', {
+            method: 'POST',
+            body: JSON.stringify({gid, srv})
+        });
+        if (result.success) {
+            addLog(`IsolateNode: 组${gid} 节点${srv} 已隔离网络 (进程保持运行)`, 'ok');
+        } else {
+            addLog(`IsolateNode: 组${gid} 节点${srv} 隔离失败 - ${result.error}`, 'err');
+        }
+        refreshStatus();
+    }
+
+    async function doRecoverGroup(gid) {
+        const result = await api('/api/node/recover-group', {
+            method: 'POST',
+            body: JSON.stringify({gid})
+        });
+        if (result.success) {
+            addLog(`RecoverGroup: 组${gid} 全部节点网络已恢复`, 'ok');
+        } else {
+            addLog(`RecoverGroup: 组${gid} 恢复失败 - ${result.error || '未知错误'}`, 'err');
+        }
+        refreshStatus();
+    }
+
+    async function doRecoverAll() {
+        await api('/api/network/recover-all', {method: 'POST'});
+        addLog(`RecoverAll: 所有组的网络连接已恢复`, 'ok');
+        refreshStatus();
+    }
+
+    async function doKillNodeById(gid, srv) {
+        await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv})});
+        addLog(`KillNode: server-${gid}-${srv}`, 'ok');
+        refreshStatus();
+    }
+
+    async function doStartNodeById(gid, srv) {
+        const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv})});
+        if (result.success) {
+            addLog(`StartNode: server-${gid}-${srv} 已启动`, 'ok');
+        } else {
+            addLog(`StartNode: server-${gid}-${srv} 启动失败 - ${result.error || '未知错误'}`, 'err');
+        }
+        refreshStatus();
+    }
+
+    // ========== 组操作 ==========
+    async function doKillGroup() {
+        const gid = parseInt(document.getElementById('groupGid').value);
+        if (isNaN(gid)) { addLog('KillGroup: 请选择有效的组', 'err'); return; }
+        await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid})});
+        addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'ok');
+        refreshStatus();
+    }
+
+    async function doStartGroup() {
+        const gid = parseInt(document.getElementById('groupGid').value);
+        if (isNaN(gid)) { addLog('StartGroup: 请选择有效的组', 'err'); return; }
+        const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid})});
+        if (result.success) {
+            addLog(`StartGroup: 组 ${gid} 全部节点已启动`, 'ok');
+        } else {
+            addLog(`StartGroup: 组 ${gid} 启动失败 - ${result.error || '未知错误'}`, 'err');
+        }
+        refreshStatus();
+    }
+
+    async function doJoinGroup() {
+        const result = await api('/api/group/join', {method: 'POST'});
+        if (result.success) {
+            addLog(`JoinGroup: 新组 ${result.gid} 已加入集群，正在迁移分片...`, 'shard');
+        } else {
+            addLog(`JoinGroup: 组加入失败`, 'err');
+        }
+        refreshStatus();
+    }
+
+    async function doLeaveGroup() {
+        const gid = parseInt(document.getElementById('groupGid').value);
+        if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
+        const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        if (result.success) {
+            addLog(`LeaveGroup: 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
+        } else if (result.message) {
+            addLog(`LeaveGroup: ${result.message}`, 'err');
+        } else {
+            addLog(`LeaveGroup: 组 ${gid} 移除失败`, 'err');
+        }
+        refreshStatus();
+    }
+
+    async function toggleUnreliable() {
+        const toggle = document.getElementById('unreliableToggle');
+        const label = document.getElementById('unreliableLabel');
+        const enabled = toggle.checked;
+        await api('/api/network/reliable', {
+            method: 'POST',
+            body: JSON.stringify({reliable: !enabled})
+        });
+        label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
+        label.style.color = enabled ? '#ff4d4f' : '#999';
+        addLog(`不可靠网络: ${enabled ? '开启 (10%丢请求/回复 + 随机延迟)' : '关闭'}`, enabled ? 'err' : 'ok');
+        refreshStatus();
+    }
+
+    // ========== 快捷 Leave（从拓扑标题调用） ==========
+    async function doLeaveGroupById(gid) {
+        const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        if (result.success) {
+            addLog(`LeaveGroup: 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
+        } else if (result.message) {
+            addLog(`LeaveGroup: ${result.message}`, 'err');
+        } else {
+            addLog(`LeaveGroup: 组 ${gid} 移除失败`, 'err');
+        }
+        refreshStatus();
+    }
+
+    // ========== 混沌猴子 ==========
+    async function toggleChaos(gid) {
+        const btn = document.getElementById('chaosBtn_' + gid);
+        if (!btn) return;
+        const currentlyActive = chaosStates[gid];
+        const path = currentlyActive ? '/api/chaos/stop' : '/api/chaos/start';
+        btn.className = 'chaos-btn loading';
+        btn.textContent = '处理中...';
+        try {
+            const result = await api(path, {method: 'POST', body: JSON.stringify({gid})});
+            if (result.success) {
+                chaosStates[gid] = !currentlyActive;
+                if (chaosStates[gid]) {
+                    addLog(`混沌: 组 ${gid} 已启动`, 'err');
+                } else {
+                    addLog(`混沌: 组 ${gid} 已停止`, 'ok');
+                }
+            } else {
+                addLog(`混沌: 组 ${gid} 操作失败 - ${result.error || '未知错误'}`, 'err');
+            }
+        } catch (err) {}
+        refreshStatus();
+    }
+
+    async function fetchChaosStatus() {
+        try {
+            const result = await api('/api/chaos/status', {method: 'GET'});
+            if (result.success && result.states) {
+                const newChaos = {};
+                for (const s of result.states) newChaos[s.gid] = s.active;
+                chaosStates = newChaos;
+            }
+        } catch (err) {}
+    }
+
+    // ========== 渲染 ==========
+    const COLORS = [
+        '#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe',
+        '#43e97b', '#fa709a', '#f6d365', '#a18cd1', '#fbc2eb',
+        '#84fab0', '#8fd3f4', '#a6c1ee', '#fccb90', '#d57eeb',
+    ];
+
+    function getGroupColor(gid) {
+        return COLORS[(gid - 1) % COLORS.length];
+    }
+
+    function getNodeStatus(srv) {
+        if (srv.isIsolated) return 'isolated';
+        if (srv.isAlive) return 'alive';
+        return 'dead';
+    }
+
+    function getNodeStatusText(srv) {
+        if (srv.isIsolated) return '隔离';
+        if (srv.isAlive) return '在线';
+        return '离线';
+    }
+
+    function populateNodeGroupSelect(groups) {
+        const sel = document.getElementById('nodeGid');
+        const currentVal = sel.value;
+        sel.innerHTML = '<option value="">选择组</option>';
+        for (const g of groups) {
+            const opt = document.createElement('option');
+            opt.value = g.gid;
+            opt.textContent = `组 ${g.gid} (${g.servers.length} 节点)`;
+            sel.appendChild(opt);
+        }
+        if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
+            sel.value = currentVal;
+        } else {
+            document.getElementById('nodeIdx').innerHTML = '<option value="">选择</option>';
+        }
+        syncNodeIdx();
+    }
+
+    function populateGroupSelect(groups) {
+        const sel = document.getElementById('groupGid');
+        const currentVal = sel.value;
+        sel.innerHTML = '<option value="">选择组</option>';
+        for (const g of groups) {
+            const opt = document.createElement('option');
+            opt.value = g.gid;
+            opt.textContent = `组 ${g.gid} (${g.nShards} 分片)`;
+            sel.appendChild(opt);
+        }
+        if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
+            sel.value = currentVal;
+        }
+    }
+
+    function syncNodeIdx() {
+        const gid = parseInt(document.getElementById('nodeGid').value);
+        const idxSel = document.getElementById('nodeIdx');
+        const currentIdx = idxSel.value;
+        if (isNaN(gid) || !cachedTree) {
+            idxSel.innerHTML = '<option value="">选择</option>';
+            return;
+        }
+        const group = cachedTree.groups.find(g => g.gid === gid);
+        if (!group) {
+            idxSel.innerHTML = '<option value="">选择</option>';
+            return;
+        }
+        idxSel.innerHTML = '<option value="">选择</option>';
+        for (let i = 0; i < group.servers.length; i++) {
+            const srv = group.servers[i];
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = `节点 ${i} (${srv.name})`;
+            idxSel.appendChild(opt);
+        }
+        if (currentIdx && [...idxSel.options].some(o => o.value === currentIdx)) {
+            idxSel.value = currentIdx;
+        }
+    }
+
+    function onNodeGidChange() { syncNodeIdx(); }
+
+    // ========== 增强版 renderTopology（集成网络操作） ==========
+    function renderTopology(tree) {
+        const topo = document.getElementById('topology');
+        if (!tree.groups || tree.groups.length === 0) {
+            topo.innerHTML = '<div style="color:#888;text-align:center;width:100%;padding:20px;">无活跃组</div>';
+            return;
+        }
+        const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
+        let html = '';
+        for (const group of sortedGroups) {
+            const color = getGroupColor(group.gid);
+            const aliveCount = group.servers.filter(s => s.isAlive && !s.isIsolated).length;
+            const chaosActive = (chaosStates && chaosStates[group.gid]);
+            const chaosBtnClass = chaosActive ? 'chaos-btn active' : 'chaos-btn inactive';
+            const chaosBtnText = chaosActive ? '混沌中' : '混沌';
+            html += `
+                <div class="group-card" style="border-left: 3px solid ${color};">
+                    <div class="group-header">
+                        <span class="gid" style="color:${color};">组 ${group.gid} <span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span></span>
+                        <span class="ops">
+                            <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
+                                    onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
+                            <button class="btn btn-xs btn-recover" onclick="doRecoverGroup(${group.gid})">恢复全部</button>
+                            <button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">Leave</button>
+                        </span>
+                    </div>
+            `;
+            for (const srv of group.servers) {
+                const status = getNodeStatus(srv);
+                const statusText = getNodeStatusText(srv);
+                // 普通在线节点：显示 隔离 + Kill
+                // 隔离节点：显示 恢复 + Start（进程还在）
+                // 离线节点：显示 Start
+                const isolateBtn = srv.isAlive && !srv.isIsolated
+                    ? `<button class="btn btn-xs btn-isolate" onclick="doIsolateNode(${group.gid}, ${srv.index})">隔离</button>`
+                    : '';
+                const recoverBtn = srv.isIsolated
+                    ? `<button class="btn btn-xs btn-recover" onclick="doRecoverGroup(${group.gid})">恢复</button>`
+                    : '';
+                const killBtn = srv.isAlive
+                    ? `<button class="btn btn-xs btn-danger" onclick="doKillNodeById(${group.gid}, ${srv.index})">Kill</button>`
+                    : '';
+                const startBtn = !srv.isAlive
+                    ? `<button class="btn btn-xs btn-success" onclick="doStartNodeById(${group.gid}, ${srv.index})">Start</button>`
+                    : '';
+                html += `
+                    <div class="server-item">
+                        <span class="dot ${status}" title="${statusText}"></span>
+                        <span class="name">${srv.name}</span>
+                        <span class="status-label">${statusText}</span>
+                        <span class="actions">
+                            ${isolateBtn}${recoverBtn}${killBtn}${startBtn}
+                        </span>
+                    </div>
+                `;
+            }
+            html += `</div>`;
+        }
+        topo.innerHTML = html;
+    }
+
+    function renderShards(tree, config) {
+        const grid = document.getElementById('shardGrid');
+        const info = document.getElementById('shardInfo');
+        if (!tree.shards || tree.shards.length === 0) {
+            grid.innerHTML = '<div style="color:#888;text-align:center;width:100%;padding:10px;">无分片数据</div>';
+            info.textContent = '';
+            return;
+        }
+        info.textContent = `共 ${tree.shards.length} 个分片 · Config #${tree.configNum}`;
+        let html = '';
+        for (const shard of tree.shards) {
+            const color = getGroupColor(shard.gid);
+            html += `<div class="shard-item" style="background:${color}22; color:${color}; border:1px solid ${color}44;">
+                分片${shard.shard}<br><small>组${shard.gid}</small>
+            </div>`;
+        }
+        grid.innerHTML = html;
+    }
+
+    // ========== 刷新 ==========
+    let refreshing = false;
+    async function refreshStatus() {
+        if (refreshing) return;
+        refreshing = true;
+        const refreshInfo = document.getElementById('refreshInfo');
+        refreshInfo.textContent = '刷新中...';
+        await fetchChaosStatus();
+        try {
+            const [tree, config] = await Promise.all([
+                api('/api/status/tree', {method: 'GET'}),
+                api('/api/config', {method: 'GET'})
+            ]);
+            cachedTree = tree;
+            document.getElementById('configNum').textContent = `Config #${tree.configNum}`;
+            renderTopology(tree);
+            renderShards(tree, config);
+            if (tree.groups && tree.groups.length > 0) {
+                const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
+                populateNodeGroupSelect(sortedGroups);
+                populateGroupSelect(sortedGroups);
+            } else {
+                populateNodeGroupSelect([]);
+                populateGroupSelect([]);
+            }
+            refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+        } catch (err) {
+            refreshInfo.textContent = '刷新失败';
+        } finally {
+            refreshing = false;
+        }
+    }
+
+    function initShardSelect() {
+        const sel = document.getElementById('targetShard');
+        sel.innerHTML = '';
+        for (let i = 0; i < N_SHARDS; i++) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = `分片${i}`;
+            sel.appendChild(opt);
+        }
+    }
+
+    initShardSelect();
+    refreshStatus();
+    setInterval(refreshStatus, 3000);
+
+    window.addEventListener('load', async function() {
+        try {
+            const result = await api('/api/network/reliable', {method: 'GET'});
+            if (result.reliable === false) {
+                document.getElementById('unreliableToggle').checked = true;
+                document.getElementById('unreliableLabel').textContent = '开启 (丢包+延迟)';
+                document.getElementById('unreliableLabel').style.color = '#ff4d4f';
+            }
+        } catch(e) {}
+    });
+</script>
+</body>
+</html>
