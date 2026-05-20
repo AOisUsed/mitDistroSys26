@@ -528,14 +528,22 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gid := h.cm.NewGid()
-	ok, errMsg := h.cm.JoinGroup(gid)
+	ok, msg := h.cm.JoinGroup(gid)
 	resp := map[string]any{"success": ok, "action": "join", "gid": int(gid)}
 	if ok {
-		log.Printf("[JoinGroup] new group %d joined", gid)
+		if msg != "" {
+			resp["message"] = msg
+		}
+		log.Printf("[JoinGroup] new group %d joined%s", gid, func() string {
+			if msg != "" {
+				return fmt.Sprintf(" (%s)", msg)
+			}
+			return ""
+		}())
 	} else {
-		resp["error"] = errMsg
-		resp["message"] = errMsg
-		log.Printf("[JoinGroup] failed to join new group: %s", errMsg)
+		resp["error"] = msg
+		resp["message"] = msg
+		log.Printf("[JoinGroup] failed to join new group: %s", msg)
 	}
 	writeJSON(w, resp)
 }

@@ -25,6 +25,7 @@ type ClusterManager struct {
 	maxRaftState int
 	nextGid      tester.Tgid
 	groups       map[tester.Tgid]bool         // tracked groups
+	left         map[tester.Tgid]bool         // 已离开的组（防止重复 Leave 导致 nil panic）
 	isolated     map[tester.Tgid]map[int]bool // 被网络隔离的节点
 	chaosMonkeys []*ChaosMonkey               // 活跃的混沌猴子
 }
@@ -34,6 +35,7 @@ func NewClusterManager() *ClusterManager {
 	cm := &ClusterManager{
 		nextGid:      shardcfg.Gid1 + 1, // Gid1(1) 已被 Init 使用
 		groups:       make(map[tester.Tgid]bool),
+		left:         make(map[tester.Tgid]bool),
 		isolated:     make(map[tester.Tgid]map[int]bool),
 		maxRaftState: -1,
 	}
@@ -395,31 +397,35 @@ func (cm *ClusterManager) StartGroup(gid tester.Tgid) error {
 	return nil
 }
 
-// tryResolvePendingMigration 检查未完成的 shard 迁移并尝试恢复
-// 必须在锁外调用（会做 RPC），返回 true 表示已解决或无 pending
+// tryResolvePendingMigration 阻塞地恢复未完成的 shard 迁移，直到成功
+// 必须在锁外调用（会做 RPC）。
+// 返回: (recovered bool) — recovered 表示是否实际处理了 pending 迁移
+// 注意：不设超时，将一直重试直到 pending 迁移完成（controller.migrateShards 内部有 retry=5）
 func (cm *ClusterManager) tryResolvePendingMigration() bool {
-	hasPending := cm.ctl.HasPendingMigration()
-	if hasPending {
-		log.Printf("[Cluster] 检测到未完成的 shard 迁移，调用 InitController 恢复...")
-		cm.ctl.InitController()
-		// 重新检查
-		hasPending = cm.ctl.HasPendingMigration()
-		if hasPending {
-			log.Printf("[Cluster] InitController 无法完成 pending 迁移，可能因节点不可用")
-			return false
+	for {
+		if !cm.ctl.HasPendingMigration() {
+			return false // 没有 pending 迁移
 		}
+		log.Printf("[Cluster] ===== 检测到未完成的 shard 迁移，正在恢复... =====")
+		cm.ctl.InitController()
+
+		if !cm.ctl.HasPendingMigration() {
+			nextCfg := cm.ctl.QueryNext()
+			curCfg := cm.ctl.Query()
+			log.Printf("[Cluster] ===== pending 迁移已恢复 (config #%d → #%d) =====", curCfg.Num, nextCfg.Num)
+			return true
+		}
+
+		// InitController 未能完成迁移，稍后重试
+		log.Printf("[Cluster] ===== pending 迁移尚未完成，1 秒后重试 =====")
+		time.Sleep(1 * time.Second)
 	}
-	return true
 }
 
 // JoinGroup 加入新组
 func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
-	// ---- 阶段 0：先处理任何 pending migration（锁外执行 RPC）----
-	if !cm.tryResolvePendingMigration() {
-		msg := fmt.Sprintf("组 %d 加入失败：存在无法恢复的未完成迁移，请检查节点状态后重试", gid)
-		log.Printf("[Cluster] JoinGroup: %s", msg)
-		return false, msg
-	}
+	// ---- 阶段 0：先处理任何 pending migration（锁外执行 RPC，阻塞直到完成）----
+	_ = cm.tryResolvePendingMigration()
 
 	// ---- 阶段 1：加锁执行创建操作 ----
 	cm.mu.Lock()
@@ -477,9 +483,8 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	cm.ctl.ChangeConfigTo(newcfg)
 	cm.mu.Unlock()
 
-	// ---- 阶段 2：解锁，轮询等待迁移完成 ----
-	const maxWait = 100 // 100ms * 100 = 10s
-	for i := 0; i < maxWait; i++ {
+	// ---- 阶段 2：解锁，轮询等待迁移完成（不设超时，一直重试直到成功）----
+	for {
 		cur := cm.ctl.Query()
 		if cur.Num >= newcfg.Num {
 			if _, ok := cur.Groups[gid]; ok {
@@ -487,53 +492,49 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 				return true, ""
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
 
-	// ---- 阶段 3：超时，完全清理新组（不留幽灵组）----
-	cm.mu.Lock()
-	cur := cm.ctl.Query()
-	log.Printf("[Cluster] JoinGroup: 组 %d 加入超时（当前 config #%d，期望 #%d），迁移可能因节点故障失败", gid, cur.Num, newcfg.Num)
+		// pending 迁移可能存在但未完成（集群节点不稳定），重试调用 ChangeConfigTo
+		log.Printf("[Cluster] JoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试...", gid, cur.Num, newcfg.Num)
 
-	// 完全清理：shutdown 组进程、从 tester.Config 中删除
-	sg := cm.cfg.Group(gid)
-	if sg != nil {
-		sg.Shutdown()
-	}
-	delete(cm.groups, gid)
-	cm.cfg.ExitGroup(gid)
-
-	failInfo := ""
-	for existingGid := range cm.groups {
-		sg := cm.cfg.Group(existingGid)
-		if sg == nil {
-			continue
-		}
-		connected := sg.GetConnected()
-		nAlive := 0
-		for i := 0; i < sg.N(); i++ {
-			if i < len(connected) && connected[i] {
-				nAlive++
+		// 在重试前检查是否有组完全死掉（无 quorum），给用户提示但继续重试
+		cm.mu.Lock()
+		for existingGid := range cm.groups {
+			if existingGid == gid {
+				continue
+			}
+			sg := cm.cfg.Group(existingGid)
+			if sg == nil {
+				continue
+			}
+			connected := sg.GetConnected()
+			nAlive := 0
+			for i := 0; i < sg.N(); i++ {
+				if i < len(connected) && connected[i] {
+					nAlive++
+				}
+			}
+			if nAlive < sg.N()/2+1 {
+				log.Printf("[Cluster] JoinGroup 重试中: 组 %d 仅有 %d/%d 节点存活", existingGid, nAlive, sg.N())
 			}
 		}
-		quorum := sg.N()/2 + 1
-		if nAlive < quorum {
-			failInfo += fmt.Sprintf("组 %d 存活 %d/%d（需要 %d）；", existingGid, nAlive, sg.N(), quorum)
-		}
-	}
-	cm.mu.Unlock()
+		cm.mu.Unlock()
 
-	if failInfo != "" {
-		failInfo = "可能原因：" + failInfo
+		// 重试 ChangeConfigTo 以推动迁移
+		cm.ctl.ChangeConfigTo(newcfg)
+		time.Sleep(500 * time.Millisecond)
 	}
-	msg := fmt.Sprintf("组 %d 加入超时：shard 迁移未在 10 秒内完成。%s", gid, failInfo)
-	return false, msg
 }
 
 // LeaveGroup 移除组，返回 (是否成功, 错误信息)
 func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	// ---- 先检查组是否存在（锁内）----
 	cm.mu.Lock()
+	// 如果组已经离开过，直接返回成功（no-op，防止重复 Leave 导致 nil panic）
+	if cm.left[gid] {
+		cm.mu.Unlock()
+		log.Printf("[Cluster] LeaveGroup: 组 %d 已经离开（重复操作，忽略）", gid)
+		return true, ""
+	}
 	cfg := cm.ctl.Query()
 	_, inController := cfg.Groups[gid]
 	sg := cm.cfg.Group(gid)
@@ -551,19 +552,16 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		cm.mu.Lock()
 		sg.Shutdown()
 		delete(cm.groups, gid)
+		cm.left[gid] = true
 		cm.cfg.ExitGroup(gid)
 		cm.mu.Unlock()
+		cm.StopChaos(gid)
 		log.Printf("[Cluster] 组 %d 已清理（有进程但不在集群配置中）", gid)
 		return true, ""
 	}
 
-	// ---- 阶段 0：先做 pending migration 恢复（锁外 RPC）----
-	// 不管是谁的 pending，先让 controller 完成它
-	if !cm.tryResolvePendingMigration() {
-		msg := fmt.Sprintf("组 %d 离开失败：存在无法恢复的未完成迁移，请检查节点状态后重试", gid)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
+	// ---- 阶段 0：先做 pending migration 恢复（锁外 RPC，阻塞直到完成）----
+	_ = cm.tryResolvePendingMigration()
 
 	// ---- 阶段 1：加锁执行检查和新配置生成 ----
 	cm.mu.Lock()
@@ -583,8 +581,10 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		// 不在 controller config 中，直接清理
 		sg.Shutdown()
 		delete(cm.groups, gid)
+		cm.left[gid] = true
 		cm.cfg.ExitGroup(gid)
 		cm.mu.Unlock()
+		cm.StopChaos(gid)
 		log.Printf("[Cluster] 组 %d 已清理（有进程但不在集群配置中）", gid)
 		return true, ""
 	}
@@ -663,8 +663,10 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		sg.Shutdown()
 	}
 	delete(cm.groups, gid)
+	cm.left[gid] = true
 	cm.cfg.ExitGroup(gid)
 	cm.mu.Unlock()
+	cm.StopChaos(gid)
 
 	log.Printf("[Cluster] 组 %d 已离开集群（已确认无分片）", gid)
 	return true, ""

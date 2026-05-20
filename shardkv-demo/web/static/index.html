@@ -709,11 +709,17 @@
     }
 
     async function doJoinGroup() {
+        addLog(`JoinGroup: ── 发起新组加入操作 ──`, 'shard');
         const result = await api('/api/group/join', {method: 'POST'});
         if (result.success) {
-            addLog(`JoinGroup: 新组 ${result.gid} 已加入集群，正在迁移分片...`, 'shard');
+            if (result.message) {
+                addLog(`JoinGroup: ${result.message}`, 'shard');
+            }
+            addLog(`JoinGroup: ✅ 新组 ${result.gid} 已加入集群，分片迁移完成`, 'shard');
+        } else if (result.message) {
+            addLog(`JoinGroup: ❌ ${result.message}`, 'err');
         } else {
-            addLog(`JoinGroup: 组加入失败`, 'err');
+            addLog(`JoinGroup: ❌ 组加入失败`, 'err');
         }
         refreshStatus();
     }
@@ -721,13 +727,14 @@
     async function doLeaveGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
+        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
         if (result.success) {
-            addLog(`LeaveGroup: 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
+            addLog(`LeaveGroup: ✅ 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
         } else if (result.message) {
-            addLog(`LeaveGroup: ${result.message}`, 'err');
+            addLog(`LeaveGroup: ❌ ${result.message}`, 'err');
         } else {
-            addLog(`LeaveGroup: 组 ${gid} 移除失败`, 'err');
+            addLog(`LeaveGroup: ❌ 组 ${gid} 移除失败`, 'err');
         }
         refreshStatus();
     }
