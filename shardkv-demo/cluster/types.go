@@ -7,8 +7,10 @@ import (
 
 // ClusterState 集群当前状态
 type ClusterState struct {
-	Groups []GroupState          `json:"groups"`
-	Config *shardcfg.ShardConfig `json:"config"`
+	Groups              []GroupState          `json:"groups"`
+	Config              *shardcfg.ShardConfig `json:"config"`
+	HasPendingMigration bool                  `json:"hasPendingMigration"`
+	PendingConfigNum    shardcfg.Tnum         `json:"pendingConfigNum"`
 }
 
 // GroupState 单个组的状态

@@ -278,3 +278,20 @@ func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 	shardCfg := shardcfg.FromString(marshalledCfg)
 	return shardCfg
 }
+
+// QueryNext returns the next configuration (the pending migration intent).
+func (sck *ShardCtrler) QueryNext() *shardcfg.ShardConfig {
+	marshalledCfg, _, err := sck.configStore.Get("nextConfig")
+	if err != rpc.OK {
+		log.Fatal("configStore get nextConfig err:", err)
+	}
+	shardCfg := shardcfg.FromString(marshalledCfg)
+	return shardCfg
+}
+
+// HasPendingMigration returns true if there is an incomplete reconfiguration.
+func (sck *ShardCtrler) HasPendingMigration() bool {
+	cur := sck.Query()
+	next := sck.QueryNext()
+	return next.Num > cur.Num
+}

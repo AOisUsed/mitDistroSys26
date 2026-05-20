@@ -45,6 +45,18 @@ func (gs *Groups) lookupGroup(gid Tgid) *ServerGrp {
 	return gs.grps[gid]
 }
 
+// Gids returns all registered GIDs
+func (gs *Groups) Gids() []Tgid {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	gids := make([]Tgid, 0, len(gs.grps))
+	for gid := range gs.grps {
+		gids = append(gids, gid)
+	}
+	return gids
+}
+
 func (gs *Groups) delete(gid Tgid) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()

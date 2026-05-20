@@ -344,7 +344,7 @@
                         </div>
                     </div>
 
-                    <!-- 网络可靠性（放在控制操作底部） -->
+                    <!-- 网络可靠性 -->
                     <div class="sep-line"></div>
                     <div class="net-toggle-row">
                         <div class="left">
@@ -355,17 +355,36 @@
                             </label>
                             <span id="unreliableLabel" style="font-size:11px;color:#999;">关闭</span>
                         </div>
-                        <button class="btn btn-success btn-xs" onclick="doRecoverAll()">
-                            恢复所有组连接
-                        </button>
                     </div>
+
+                    <!-- CAS 并发竞赛 -->
+                    <div class="sep-line"></div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
+                        CAS 并发 Put <span style="font-weight:400;font-size:11px;color:#888;">（乐观锁保护演示）</span>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <input type="text" id="raceKey" placeholder="竞赛 Key（与生成Key同步）" style="flex:1;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
+                            <span style="font-size:11px;color:#888;white-space:nowrap;">客户端数:</span>
+                            <input type="number" id="raceNClient" value="5" min="1" max="20" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
+                            <button class="btn btn-primary" onclick="doCasRace()" style="flex-shrink:0;">开始</button>
+                        </div>
+                        <div style="font-size:10px;color:#888;margin-top:2px;">
+                            每个客户端用随机不同 value 同时 CAS Put，结果看下方日志
+                        </div>
+                    </div>
+                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
                 </div>
             </div>
         </div>
 
         <!-- 集群拓扑（增强版，集成网络操作） -->
         <div class="card">
-            <h3>集群拓扑 <span id="refreshInfo" style="font-weight:400;font-size:11px;color:#888;"></span></h3>
+            <h3>集群拓扑 <span id="refreshInfo" style="font-weight:400;font-size:11px;color:#888;"></span>
+                <span id="pendingMigrationBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:11px;background:#fff3cd;color:#856404;border:1px solid #ffeeba;cursor:pointer;" onclick="doInitController()" title="点击尝试恢复分片迁移">
+                    ⚠ 分片迁移未完成
+                </span>
+            </h3>
             <div id="topology" class="node-grid">
                 <div style="color:#888;text-align:center;width:100%;padding:20px;">正在加载...</div>
             </div>
@@ -400,6 +419,39 @@
     const N_SHARDS = 12;
     let cachedTree = null;
     let chaosStates = {};
+
+    // 前端 KV 并发限制（浏览器同域名连接池有限，一般 6 个）
+    // 最多允许 2 个并发 KV 操作，避免其他请求（status refresh）被阻塞
+    let kvInFlight = 0;
+    const MAX_KV_INFLIGHT = 2;
+    const kvQueue = [];
+
+    function kvAcquire() {
+        return new Promise(resolve => {
+            if (kvInFlight < MAX_KV_INFLIGHT) {
+                kvInFlight++;
+                resolve();
+            } else {
+                kvQueue.push(resolve);
+            }
+        });
+    }
+    function kvRelease() {
+        if (kvQueue.length > 0) {
+            const next = kvQueue.shift();
+            next(); // next request proceeds without changing kvInFlight count
+        } else {
+            kvInFlight--;
+        }
+    }
+    async function kvLimit(fn) {
+        await kvAcquire();
+        try {
+            return await fn();
+        } finally {
+            kvRelease();
+        }
+    }
 
     function key2Shard(key) {
         let hash = 0x811c9dc5 >>> 0;
@@ -447,7 +499,7 @@
     }
 
     async function api(path, options, timeoutMs) {
-        timeoutMs = timeoutMs || 15000;
+        timeoutMs = timeoutMs || 30000;
 
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -499,44 +551,48 @@
         addLog(`未找到能映射到分片${target} 的 key (尝试了 1000 个后缀)`, 'err');
     }
 
-    // ========== KV 操作 ==========
+    // ========== KV 操作（受 kvLimit 并发保护） ==========
     async function doPut() {
-        const key = document.getElementById('putKey').value.trim();
-        const value = document.getElementById('putVal').value.trim();
-        if (!key) { addLog('Put: 键不能为空', 'err'); return; }
-        const shard = key2Shard(key);
-        const result = await api('/api/kv/', {
-            method: 'PUT',
-            body: JSON.stringify({key, value})
-        });
-        document.getElementById('kvResult').textContent =
-            result.success
-                ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
-                : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
-        if (result.success) {
-            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
-        } else {
-            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
-        }
+        return kvLimit(async () => {
+            const key = document.getElementById('putKey').value.trim();
+            const value = document.getElementById('putVal').value.trim();
+            if (!key) { addLog('Put: 键不能为空', 'err'); return; }
+            const shard = key2Shard(key);
+            const result = await api('/api/kv/', {
+                method: 'PUT',
+                body: JSON.stringify({key, value})
+            });
+            document.getElementById('kvResult').textContent =
+                result.success
+                    ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
+                    : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
+            if (result.success) {
+                addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
+            } else {
+                addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
+            }
 
-        document.getElementById('putVal').value = randomChars(3);
-        refreshStatus();
+            document.getElementById('putVal').value = randomChars(3);
+            refreshStatus();
+        });
     }
 
     async function doGet() {
-        const key = document.getElementById('getKey').value.trim();
-        if (!key) { addLog('Get: 键不能为空', 'err'); return; }
-        const shard = key2Shard(key);
-        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
-        document.getElementById('kvResult').textContent =
-            result.success
-                ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
-                : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
-        if (result.success) {
-            addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
-        } else {
-            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
-        }
+        return kvLimit(async () => {
+            const key = document.getElementById('getKey').value.trim();
+            if (!key) { addLog('Get: 键不能为空', 'err'); return; }
+            const shard = key2Shard(key);
+            const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
+            document.getElementById('kvResult').textContent =
+                result.success
+                    ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
+                    : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
+            if (result.success) {
+                addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
+            } else {
+                addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
+            }
+        });
     }
 
     // ========== 节点操作 ==========
@@ -583,13 +639,26 @@
         refreshStatus();
     }
 
+    async function doRecoverNode(gid, srv) {
+        const result = await api('/api/node/recover-node', {
+            method: 'POST',
+            body: JSON.stringify({gid, srv})
+        });
+        if (result.success) {
+            addLog(`RecoverNode: 组${gid} 节点${srv} 网络已恢复`, 'ok');
+        } else {
+            addLog(`RecoverNode: 组${gid} 节点${srv} 恢复失败 - ${result.error || '未知错误'}`, 'err');
+        }
+        refreshStatus();
+    }
+
     async function doRecoverGroup(gid) {
         const result = await api('/api/node/recover-group', {
             method: 'POST',
             body: JSON.stringify({gid})
         });
         if (result.success) {
-            addLog(`RecoverGroup: 组${gid} 全部节点网络已恢复`, 'ok');
+            addLog(`RecoverGroup: 组${gid} 全部存活节点网络已恢复`, 'ok');
         } else {
             addLog(`RecoverGroup: 组${gid} 恢复失败 - ${result.error || '未知错误'}`, 'err');
         }
@@ -707,7 +776,7 @@
             if (result.success) {
                 chaosStates[gid] = !currentlyActive;
                 if (chaosStates[gid]) {
-                    addLog(`混沌: 组 ${gid} 已启动`, 'err');
+                    addLog(`混沌: 组 ${gid} 已启动，每1-3s随机kill节点，但会保证大多数节点在线`, 'err');
                 } else {
                     addLog(`混沌: 组 ${gid} 已停止`, 'ok');
                 }
@@ -741,15 +810,15 @@
     }
 
     function getNodeStatus(srv) {
+        if (!srv.isAlive) return 'dead';
         if (srv.isIsolated) return 'isolated';
-        if (srv.isAlive) return 'alive';
-        return 'dead';
+        return 'alive';
     }
 
     function getNodeStatusText(srv) {
+        if (!srv.isAlive) return '离线';
         if (srv.isIsolated) return '隔离';
-        if (srv.isAlive) return '在线';
-        return '离线';
+        return '在线';
     }
 
     function populateNodeGroupSelect(groups) {
@@ -835,7 +904,6 @@
                         <span class="ops">
                             <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
                                     onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
-                            <button class="btn btn-xs btn-recover" onclick="doRecoverGroup(${group.gid})">恢复全部</button>
                             <button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">Leave</button>
                         </span>
                     </div>
@@ -849,8 +917,8 @@
                 const isolateBtn = srv.isAlive && !srv.isIsolated
                     ? `<button class="btn btn-xs btn-isolate" onclick="doIsolateNode(${group.gid}, ${srv.index})">隔离</button>`
                     : '';
-                const recoverBtn = srv.isIsolated
-                    ? `<button class="btn btn-xs btn-recover" onclick="doRecoverGroup(${group.gid})">恢复</button>`
+                const recoverBtn = srv.isAlive && srv.isIsolated
+                    ? `<button class="btn btn-xs btn-recover" onclick="doRecoverNode(${group.gid}, ${srv.index})">恢复</button>`
                     : '';
                 const killBtn = srv.isAlive
                     ? `<button class="btn btn-xs btn-danger" onclick="doKillNodeById(${group.gid}, ${srv.index})">Kill</button>`
@@ -918,6 +986,14 @@
                 populateNodeGroupSelect([]);
                 populateGroupSelect([]);
             }
+            // Show/hide pending migration badge
+            const pendingBadge = document.getElementById('pendingMigrationBadge');
+            if (tree.hasPendingMigration) {
+                pendingBadge.style.display = 'inline';
+                document.getElementById('configNum').textContent += ` (pending → #${tree.pendingConfigNum})`;
+            } else {
+                pendingBadge.style.display = 'none';
+            }
             refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
         } catch (err) {
             refreshInfo.textContent = '刷新失败';
@@ -957,6 +1033,106 @@
             }
         } catch(e) {}
     });
+
+    // ========== CAS 并发竞赛（前端异步并发，每条日志实时显示） ==========
+    //
+    // 流式 API：先 Get 版本号，再并发发起 N 个独立 POST 到 /api/put-cas，
+    // 每个请求独立经历网络丢包&延迟，收到一个响应立即输出一条日志。
+    //
+    async function doCasRace() {
+        const key = document.getElementById('raceKey').value.trim();
+        const nClient = parseInt(document.getElementById('raceNClient').value) || 5;
+        if (!key) {
+            addLog('CAS 竞赛: Key 不能为空', 'err');
+            return;
+        }
+        if (nClient < 1 || nClient > 20) {
+            addLog('CAS 竞赛: 客户端数必须在 1~20 之间', 'err');
+            return;
+        }
+        document.getElementById('putKey').value = key;
+        document.getElementById('getKey').value = key;
+
+        const resultDiv = document.getElementById('raceResult');
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `<div style="color:#764ba2;">CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
+        addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}" (40%丢包, 随机延迟0-7s)`, 'shard');
+
+        // 1. 先获取当前版本号
+        let version;
+        try {
+            const verResp = await api('/api/cas-get-version?key=' + encodeURIComponent(key), {method: 'GET'});
+            if (!verResp.success) {
+                resultDiv.textContent = `获取版本号失败: ${verResp.err}`;
+                addLog(`CAS 竞赛: 获取版本号失败: ${verResp.err}`, 'err');
+                return;
+            }
+            version = verResp.version;
+            addLog(`[Get] key="${key}" version=${version} (基线版本)`, 'info');
+        } catch (err) {
+            resultDiv.textContent = `获取版本号异常: ${err.message}`;
+            addLog(`CAS 竞赛: 获取版本号异常: ${err.message}`, 'err');
+            return;
+        }
+
+        // 2. 并发发起 N 个独立请求，每个完成即输出日志
+        let successCount = 0;
+        let versionErrCount = 0;
+        let completedCount = 0;
+        const promises = [];
+
+        for (let i = 0; i < nClient; i++) {
+            // 每个客户端随机生成 value
+            const val = randomChars(3);
+
+            // 独立的 fetch，不做 await，立即并发（加30s超时，网络不可靠时请求可能卡住）
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
+            const p = fetch(API + '/api/put-cas', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                signal: controller.signal,
+                body: JSON.stringify({key, value: val, version})
+            })
+            .then(resp => { clearTimeout(timer); return resp; })
+            .then(resp => resp.json())
+            .then(res => {
+                const shard = key2Shard(key);
+                if (res.success) {
+                    successCount++;
+                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} OK`, 'ok');
+                } else {
+                    versionErrCount++;
+                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} ${res.err || 'ErrVersion'}`, 'err');
+                }
+                completedCount++;
+                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功${successCount}, 冲突${versionErrCount})</div>`;
+            })
+            .catch(err => {
+                versionErrCount++;
+                completedCount++;
+                addLog(`CAS 竞赛请求异常: ${err.message}`, 'err');
+                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功${successCount}, 冲突${versionErrCount})</div>`;
+            });
+
+            promises.push(p);
+        }
+
+        // 3. 等待所有请求完成
+        await Promise.all(promises);
+
+        // 4. 验证最终值
+        let finalValue = '';
+        try {
+            const finalResp = await api(API + '/api/kv/' + encodeURIComponent(key), {method: 'GET'});
+            if (finalResp.success) {
+                finalValue = finalResp.value;
+                document.getElementById('putVal').value = finalResp.value || '';
+            }
+        } catch (err) {}
+        resultDiv.innerHTML = `<div style="color:#764ba2;">成功 <strong>${successCount}</strong> / 版本冲突 <strong>${versionErrCount}</strong> | 最终 "${finalValue}"</div>`;
+        addLog(`CAS 竞赛完成: 成功=${successCount} 版本冲突=${versionErrCount} → 最终 "${finalValue}"`, 'shard');
+    }
 
 </script>
 </body>

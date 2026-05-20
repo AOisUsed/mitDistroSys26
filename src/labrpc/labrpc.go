@@ -60,7 +60,7 @@ import "time"
 import "sync/atomic"
 
 const (
-	SHORTDELAY = 300  // ms
+	SHORTDELAY = 50   // ms
 	LONGDELAY  = 3000 // ms
 	MAXDELAY   = LONGDELAY + 100
 	DROPRATE   = 300 // drop rate per 1000 (30%)

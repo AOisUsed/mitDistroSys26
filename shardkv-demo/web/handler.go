@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,7 +66,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		state = r.state
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[Status] 超时: configStore 无响应（可能网络不可靠）")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询集群状态超时（网络不可靠或 configStore 无响应）",
@@ -94,7 +95,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		state = r.state
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[StatusTree] 超时: configStore 无响应")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询集群拓扑超时",
@@ -113,11 +114,15 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		NShards int                   `json:"nShards"`
 	}
 	tree := struct {
-		ConfigNum shardcfg.Tnum `json:"configNum"`
-		Groups    []GroupNode   `json:"groups"`
-		Shards    []ShardNode   `json:"shards"`
+		ConfigNum           shardcfg.Tnum `json:"configNum"`
+		HasPendingMigration bool          `json:"hasPendingMigration"`
+		PendingConfigNum    shardcfg.Tnum `json:"pendingConfigNum"`
+		Groups              []GroupNode   `json:"groups"`
+		Shards              []ShardNode   `json:"shards"`
 	}{
-		ConfigNum: state.Config.Num,
+		ConfigNum:           state.Config.Num,
+		HasPendingMigration: state.HasPendingMigration,
+		PendingConfigNum:    state.PendingConfigNum,
 	}
 	for _, gs := range state.Groups {
 		tree.Groups = append(tree.Groups, GroupNode{
@@ -211,7 +216,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	shard := shardcfg.Key2Shard(req.Key)
 
-	// 超时保护的 Get：在 goroutine 中执行，5s 超时
+	// 超时保护的 Get：在 goroutine 中执行，20s 超时
 	type getResult struct {
 		val     string
 		version rpc.Tversion
@@ -235,7 +240,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		version = gres.version
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[Put] key=%q S%d Get 超时: 集群无响应 (Raft 可能无 leader)", req.Key, shard)
 		writeJSON(w, map[string]any{
 			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
@@ -253,7 +258,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 	var putErr rpc.Err
 	select {
 	case putErr = <-putCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[Put] key=%q S%d 超时: PUT 无响应", req.Key, shard)
 		writeJSON(w, map[string]any{
 			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
@@ -314,7 +319,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	select {
 	case gres := <-getCh:
 		value, version, getErr = gres.val, gres.version, gres.err
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[Get] key=%q 超时: 集群无响应 (Raft 可能无 leader)", key)
 		writeJSON(w, map[string]any{
 			"success": false, "key": key,
@@ -427,7 +432,26 @@ func (h *Handler) HandleIsolateNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"success": true, "action": "isolate", "gid": req.GID, "srv": req.Srv})
 }
 
-// HandleRecoverGroup 恢复指定组的全部网络连接（取消所有节点分区）
+// HandleRecoverNode 恢复单个节点的网络连接（只影响该节点，不影响已下线节点）
+func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		GID int `json:"gid"`
+		Srv int `json:"srv"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	h.cm.RecoverNode(tester.Tgid(req.GID), req.Srv)
+	log.Printf("[RecoverNode] group=%d server=%d 网络已恢复", req.GID, req.Srv)
+	writeJSON(w, map[string]any{"success": true, "action": "recover-node", "gid": req.GID, "srv": req.Srv})
+}
+
+// HandleRecoverGroup 恢复指定组的全部网络连接（取消所有节点分区，但只操作存活节点）
 func (h *Handler) HandleRecoverGroup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -441,7 +465,7 @@ func (h *Handler) HandleRecoverGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.RecoverGroup(tester.Tgid(req.GID))
-	log.Printf("[RecoverGroup] group=%d 网络已恢复", req.GID)
+	log.Printf("[RecoverGroup] group=%d 网络已恢复（仅操作存活节点）", req.GID)
 	writeJSON(w, map[string]any{"success": true, "action": "recover-group", "gid": req.GID})
 }
 
@@ -558,7 +582,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		cfg = r.cfg
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		log.Printf("[Config] 超时: configStore 无响应")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询配置超时（网络不可靠或 configStore 无响应）",
@@ -693,6 +717,98 @@ func (h *Handler) HandleChaosStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"success": true, "states": states})
 }
 
+// HandleInitController 手动触发 InitController 恢复 pending 迁移
+func (h *Handler) HandleInitController(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	log.Printf("[InitController] 手动触发 InitController 恢复...")
+	h.cm.InitController()
+	writeJSON(w, map[string]any{"success": true, "message": "InitController 已触发"})
+}
+
+// --- API: CAS Put（单次 CAS 写入，前端并发调用，每条实时可见） ---
+// 前端先 Get 当前版本号，然后并发发起 N 个独立的 POST 到 /api/put-cas，
+// 每个请求独立经历网络延迟/丢包，前端收到响应后立即输出日志。
+
+func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Key     string       `json:"key"`
+		Value   string       `json:"value"`
+		Version rpc.Tversion `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	shard := shardcfg.Key2Shard(req.Key)
+
+	// 超时保护的 Put：在 goroutine 中执行，20s 超时
+	putCh := make(chan rpc.Err, 1)
+	go func() {
+		putCh <- h.cm.Put(req.Key, req.Value, req.Version)
+	}()
+
+	var putErr rpc.Err
+	select {
+	case putErr = <-putCh:
+	case <-time.After(20 * time.Second):
+		log.Printf("[Put] key=%q S%d CAS 超时: PUT 无响应 (Raft 可能无 leader)", req.Key, shard)
+		writeJSON(w, map[string]any{
+			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version),
+			"err": "ErrTimeout", "message": "PUT 超时（可能是 Raft 组无 leader）",
+		})
+		return
+	}
+
+	if putErr == rpc.OK {
+		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, req.Version)
+		writeJSON(w, map[string]any{"success": true, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version)})
+	} else {
+		log.Printf("[Put] key=%q value=%q S%d reqVer=%d %s", req.Key, req.Value, shard, req.Version, putErr)
+		writeJSON(w, map[string]any{"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version), "err": string(putErr)})
+	}
+}
+
+// HandleCasGetVersion 获取当前 key 的版本号，用于 CAS 竞赛
+func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		http.Error(w, "key query param required", http.StatusBadRequest)
+		return
+	}
+	_, curVer, getErr := h.cm.Get(key)
+	if getErr == rpc.OK || getErr == rpc.ErrNoKey {
+		writeJSON(w, map[string]any{"success": true, "key": key, "version": int(curVer)})
+	} else {
+		writeJSON(w, map[string]any{"success": false, "err": string(getErr)})
+	}
+}
+
+// randomString 生成 n 位随机字母（小写）
+func randomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -716,6 +832,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/node/kill", h.HandleKillNode)
 	mux.HandleFunc("/api/node/start", h.HandleStartNode)
 	mux.HandleFunc("/api/node/isolate", h.HandleIsolateNode)
+	mux.HandleFunc("/api/node/recover-node", h.HandleRecoverNode)
 	mux.HandleFunc("/api/node/recover-group", h.HandleRecoverGroup)
 
 	// Group operations
@@ -731,10 +848,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/network/params", h.HandleNetParams)
 	mux.HandleFunc("/api/network/reliable", h.HandleReliable)
 
+	// CAS Put（独立单次，前端并发调用实时显示）
+	mux.HandleFunc("/api/put-cas", h.HandlePutCas)
+	mux.HandleFunc("/api/cas-get-version", h.HandleCasGetVersion)
+
 	// Chaos Monkey
 	mux.HandleFunc("/api/chaos/start", h.HandleChaosStart)
 	mux.HandleFunc("/api/chaos/stop", h.HandleChaosStop)
 	mux.HandleFunc("/api/chaos/status", h.HandleChaosStatus)
+
+	// InitController (手动恢复 pending 迁移)
+	mux.HandleFunc("/api/init-controller", h.HandleInitController)
 }
 
 // HandleKV dispatches KV requests by HTTP method

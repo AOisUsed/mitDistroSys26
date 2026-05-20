@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.5840/debug"
 	"6.5840/shardkv1/shardcfg"
@@ -118,6 +119,10 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
+	// 选举/分区 backoff：避免 leader 隔离后 tight loop
+	backoff := 200 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+
 	for {
 		cachedConfig := ck.getConfig()
 		// consult the config to know the shard group responsible for the key
@@ -142,7 +147,12 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		val, version, rpcErr := clerk.Get(reqId, key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted {
+			// refreshConfig 后如果配置无变化（leader 选举中），加 backoff 避免 tight loop
 			ck.refreshConfig()
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+			}
 		} else {
 			return val, version, rpcErr
 		}
@@ -156,6 +166,11 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	reqId := ck.nextReqId()
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
+
+	// 选举/分区 backoff：避免 leader 隔离后 tight loop
+	backoff := 200 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+
 	for {
 		config := ck.getConfig()
 		// consult the config to know the shard group responsible for the key
@@ -180,7 +195,12 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
 		case rpc.ErrWrongGroup, rpc.ErrRetryExhausted:
+			// refreshConfig 后如果配置无变化（leader 选举中），加 backoff 避免 tight loop
 			ck.refreshConfig()
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+			}
 		case rpc.OK, rpc.ErrVersion, rpc.ErrNoKey:
 			return rpcErr
 		default:
