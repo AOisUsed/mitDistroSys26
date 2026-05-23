@@ -231,7 +231,7 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num > localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Absent:
-				kv.InstallShardState(request.Shard, request.State)
+				kv.installShardState(request.Shard, request.State)
 				kv.shardStatuses[request.Shard] = Serving
 				kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
 				reply = shardrpc.InstallShardReply{
@@ -334,7 +334,7 @@ func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 }
 
 // need to used within Write Lock
-func (kv *KVServer) InstallShardState(shid shardcfg.Tshid, shardstate []byte) {
+func (kv *KVServer) installShardState(shid shardcfg.Tshid, shardstate []byte) {
 	r := bytes.NewBuffer(shardstate)
 	d := labgob.NewDecoder(r)
 	var shardState ShardState

@@ -60,10 +60,10 @@ import "time"
 import "sync/atomic"
 
 const (
-	SHORTDELAY = 50   // ms
-	LONGDELAY  = 3000 // ms
+	SHORTDELAY = 27   // ms
+	LONGDELAY  = 7000 // ms
 	MAXDELAY   = LONGDELAY + 100
-	DROPRATE   = 300 // drop rate per 1000 (30%)
+	DROPRATE   = 100 // drop rate per 1000 (10%)
 )
 
 type reqMsg struct {

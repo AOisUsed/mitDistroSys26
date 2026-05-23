@@ -4,11 +4,11 @@ import "log"
 
 // Debugging
 const DebugAll3 = true
-const CancelAllPrint3 = true
+const CancelAllPrint3 = false
 
-const Debug3A = true
-const Debug3B = true
-const Debug3C = true
+const Debug3A = false
+const Debug3B = false
+const Debug3C = false
 const Debug3D = true
 
 func D3APrintf(format string, a ...interface{}) {
