@@ -1,0 +1,496 @@
+## 表5.1 Raft 节点状态
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| state | enum | follower / candidate / leader |
+| CurrentTerm | int | 当前任期，单调递增 |
+| VotedFor | int | 当前任期投票给谁，-1 表示未投票 |
+| Log | []LogEntry | 日志条目（索引从 1 开始，Log[0] 为占位） |
+| commitIndex | int | 已提交的最高日志索引 |
+| lastApplied | int | 已应用到状态机的最高日志索引 |
+| lastHeardTime | time.Time | 最近一次有效 RPC 时间，用于选举超时判定 |
+| nextIndex[] | []int | [leader only] 每个 follower 下一个待发送日志索引 |
+| matchIndex[] | []int | [leader only] 每个 follower 上已知已复制的最高日志索引 |
+
+## 表5.2 RequestVote RPC
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Term | int | 候选者任期 |
+| 请求 | CandidateId | int | 候选者节点 ID |
+| 请求 | LastLogIndex | int | 候选者最后一条日志索引 |
+| 请求 | LastLogTerm | int | 候选者最后一条日志任期 |
+| 回复 | VoteGranted | bool | 是否同意投票 |
+| 回复 | Term | int | 接收方当前任期 |
+
+## 表5.3 AppendEntries RPC
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Term | int | 领导者任期 |
+| 请求 | LeaderId | int | 领导者节点 ID |
+| 请求 | PrevLogIndex | int | 新日志前一条日志的索引 |
+| 请求 | PrevLogTerm | int | 新日志前一条日志的任期 |
+| 请求 | Entries | []LogEntry | 待追加的日志条目 |
+| 请求 | LeaderCommit | int | 领导者的已提交索引 |
+| 回复 | Success | bool | 日志是否一致 |
+| 回复 | Term | int | 接收方当前任期 |
+| 回复 | ConflictTerm | int | 冲突位置的任期；-1 表示日志太短 |
+| 回复 | ConflictIndex | int | 冲突位置索引 |
+
+## 表5.4 InstallSnapshot RPC
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Term | int | 领导者任期 |
+| 请求 | LeaderId | int | 领导者节点 ID |
+| 请求 | LastIncludedIndex | int | 快照包含的最后一条日志索引 |
+| 请求 | LastIncludedTerm | int | 快照包含的最后一条日志任期 |
+| 请求 | Data | []byte | 快照数据 |
+| 回复 | Term | int | 接收方当前任期 |
+
+
+## 持久化存储
+
+Raft 使用 Persister 来原子化保存持久状态和快照数据：
+
+| 方法 | 说明 |
+|------|------|
+| Save(raftstate, snapshot) | 原子地保存 Raft 状态和快照 |
+| ReadRaftState() | 读取持久化的 Raft 状态 |
+| ReadSnapshot() | 读取持久化的快照数据 |
+| RaftStateSize() | 获取 Raft 状态占用的字节数 |
+
+持久化的 Raft 状态包含以下字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| CurrentTerm | int | 当前任期 |
+| VotedFor | int | 当前任期投票对象，-1 表示未投票 |
+| Log | []LogEntry | 日志条目 |
+| SnapshotIndex | int | 快照包含的最后一条日志索引 |
+
+
+算法 持久化 (persist)
+
+persist() {
+    encoding = encode(PersistedState{
+        CurrentTerm:   CurrentTerm,
+        VotedFor:      VotedFor,
+        Log:           Log,
+        SnapshotIndex: LastIncludedIndex,
+    })
+    persister.Save(encoding, SnapshotData)
+}
+
+算法 读取持久化状态 (readPersist)
+
+readPersist(raftStateData, snapshotData) { // 从持久器读取并恢复Raft状态和快照数据
+    if raftStateData 为空 { return }  // 首次启动，无持久化状态
+    decoded = decode(raftStateData)
+    CurrentTerm   = decoded.CurrentTerm
+    VotedFor      = decoded.VotedFor
+    Log           = decoded.Log
+    LastIncludedIndex = decoded.SnapshotIndex
+    lastApplied   = LastIncludedIndex
+    commitIndex   = LastIncludedIndex
+    SnapshotData  = snapshotData
+}
+
+
+# 算法 选举触发 (ticker)
+
+循环执行 {
+    electionTimeout = 300~600 ms
+    if 当前为follower/candidate 且 lastHeardTime-当前时间 > electionTimeout { startElection() }
+    休眠 electionTimeout
+}
+
+
+算法 发起选举 (startElection)
+
+startElection() {
+    CurrentTerm++, state = candidate, VotedFor = me, lastHeardTime = 当前时间
+    persist()
+    构造 args = RequestVoteArgs{
+        Term: CurrentTerm,
+        CandidateId: me,
+        LastLogIndex: lastLogIndex(),
+        LastLogTerm: lastLogTerm()
+    }
+    voteCount = 1
+    对除自己外所有节点，并发执行 {
+        reply = sendRequestVote(args)
+        if 发送失败 { return }
+        if reply.Term > CurrentTerm { 转为follower, 更新lastHeardTime, persist(); return }
+        if reply.VoteGranted && state == candidate && 任期未变 {
+            voteCount++
+            if voteCount > N/2 { state = leader; nextIndex[] 都重置为 lastLogIndex() + 1; matchIndex[] 都重置为 0 }
+        }
+    }
+}
+
+
+# 算法 投票请求处理 (RequestVote)
+
+RequestVote(args, reply) {
+    if args.Term > CurrentTerm { 转为follower }
+    if args.Term >= CurrentTerm && (VotedFor == -1 || VotedFor == args.CandidateId)
+       && (args.LastLogTerm > lastLogTerm() || (args.LastLogTerm == lastLogTerm() && args.LastLogIndex >= lastLogIndex())) {
+        reply.VoteGranted = true; lastHeardTime = 当前时间; VotedFor = args.CandidateId; state = follower
+    } else {
+        reply.Term = CurrentTerm; reply.VoteGranted = false;
+    }
+    persist()
+}
+
+
+算法 心跳
+
+sendHeartbeat() {
+    循环执行 {
+        if 当前是leader {
+            对除自己外所有节点 并发执行 replicateToFollower()
+        }
+        休眠 100ms
+    }
+}
+
+
+算法 异步复制日志
+
+第一阶段：Start() 追加日志
+Start(command) {
+    if 当前是leader {
+        Log.append({Term: CurrentTerm, Command: command})
+        persist()
+        // 非阻塞发送信号，若通道已满则跳过（已有待处理信号）
+        向 logAppendedCh 非阻塞发送信号
+        return lastLogIndex, CurrentTerm, true
+    }else {return -1, -1, false}
+}
+
+第二阶段：replicationDispatcher 分发信号
+replicationDispatcher() {
+循环等待 logAppendedCh 信号 {
+        if 不再是leader { continue }
+        遍历所有跟随者 {
+            if nextIndex[i] <= lastLogIndex() {  // 该节点日志落后
+                向 replicateReadyCh[i] 非阻塞发送信号
+            }
+        }
+    }
+}
+
+replicationWorker() {
+    循环等待 replicateReadyCh[i] 信号
+    收到信号后执行 synchroniseFollower(i)
+}
+
+
+第三阶段：synchroniseFollower 循环追赶
+synchroniseFollower(i) {
+    needReplicate = (nextIndex[i] <= lastLogIndex())
+    while needReplicate {
+        replicateToFollower(i)  // 发送 AppendEntries 或 InstallSnapshot，推进 nextIndex
+        needReplicate = (nextIndex[i] <= lastLogIndex())  // 完成后继续检查是否还需推进
+    }
+}
+
+算法 日志/快照复制 (replicateToFollower)
+
+replicateToFollower(i) {
+    if 不再是leader { return }
+    if LastIncludedIndex >= nextIndex[i] { // 需要发送的条目因日志压缩而已不存在在此节点上，
+        发送 InstallSnapshot; 更新 nextIndex[i]/matchIndex[i]; return
+    }
+    构造 args = AppendEntriesArgs{
+        Term: CurrentTerm, LeaderId: me,
+        PrevLogIndex: nextIndex[i]-1,
+        PrevLogTerm: Log[nextIndex[i]-1].Term,
+        Entries: Log[nextIndex[i]:],
+        LeaderCommit: commitIndex
+    }
+    reply = sendAppendEntries(args)
+    if reply.Term > CurrentTerm { 转为follower, persist(); return }
+    if reply.Success {
+        if 回复未过时 { matchIndex[i] = PrevLogIndex + len(Entries); nextIndex[i] = matchIndex[i] + 1 }
+        advanceCommitIndex() // 尝试推进CommitIndex: 找到已存在于大多数节点的最大的日志索引，并设为CommitIndex
+    } else {
+        // 冲突修复
+        nextIndex[i] = reply.ConflictIndex
+        if reply.ConflictTerm != -1 {
+            从后向前搜索 ConflictTerm，若存在则 nextIndex[i] = 该term最后一条索引 + 1
+        }
+    }
+    persist()
+}
+
+
+算法 日志追加处理 (AppendEntries)
+
+AppendEntries(args, reply) {
+    if args.Term < CurrentTerm { reply.Term = CurrentTerm; reply.Success = false; persist(); return }
+    if args.Term >= CurrentTerm { lastHeardTime = 当前时间; 转为follower }
+    // 冲突检测：三种不匹配情况
+    if args.PrevLogIndex < LastIncludedIndex {
+        reply ConflictIndex = LastIncludedIndex + 1, ConflictTerm = -1, Success = false
+    } else if args.PrevLogIndex > lastLogIndex() {
+        reply ConflictIndex = lastLogIndex() + 1, ConflictTerm = -1, Success = false
+    } else if Log[PrevLogIndex].Term != args.PrevLogTerm {
+        reply ConflictTerm = Log[PrevLogIndex].Term, ConflictIndex = 该term的第一个索引, Success = false
+    } else {
+        Success = true
+        // 日志一致，依次比较 args.Entries，遇到任期不匹配则截断，追加新日志
+        if args.Entries 不为空 {
+            找到第一个任期不匹配的位置，截断后面的所有日志，追加 args.Entries 的剩余条目
+        }
+        if args.LeaderCommit > commitIndex { commitIndex = min(args.LeaderCommit, lastLogIndex()) }
+        reply Success
+        向 ApplyReadyCh 非阻塞发送信号
+    }
+    reply.Term = CurrentTerm; persist()
+}
+
+
+算法 推进提交索引 (advanceCommitIndex) — Leader 侧
+
+advanceCommitIndex() {
+    // 从最新日志向前扫描，找到第一个满足以下条件的 N：
+    // N > commitIndex，Log[N].Term == CurrentTerm，且多数节点 matchIndex[j] >= N
+    for N = lastLogIndex() downto commitIndex+1 {
+        if Log[physicalIndex(N)].Term != CurrentTerm {
+            continue  // 只提交当前任期的日志（旧任期通过当前任期间接提交）
+        }
+        count = 1  // 自己
+        for j = 0 to len(peers)-1 {
+            if j != me && matchIndex[j] >= N {
+                count++
+            }
+        }
+        if count > len(peers)/2 {  // 多数节点已复制该日志
+            commitIndex = N
+            向 applyReadyCh 非阻塞发送信号  // 通知 applier 有新的已提交条目可应用
+            break
+        }
+    }
+}
+
+
+算法 应用日志/快照到状态机 (applier)
+
+applier() {
+    循环等待 applyReadyCh 信号 {
+        循环执行 {  // 收到一次信号即循环操作，直到将 lastApplied 推进到与 commitIndex 相等为止
+            if snapshotPending {  // 如果接收到了新的快照，优先应用快照
+                构造 snapshotMsg = ApplyMsg {
+                    SnapshotValid: true,
+                    Snapshot:      SnapshotData,
+                    SnapshotTerm:  Log[physicalIndex(LastIncludedIndex)].Term,
+                    SnapshotIndex: LastIncludedIndex,
+                }
+                snapshotPending = false
+                applyCh <- snapshotMsg         // 通过通道阻塞地发送给上层状态机
+                lastApplied = snapshotMsg.SnapshotIndex
+            } else if lastApplied < commitIndex { // 如果没有新快照则以日志条目方式逐条发送给状态机
+                构造 logMsg = ApplyMsg {
+                    CommandValid: true,
+                    Command:      Log[physicalIndex(lastApplied + 1)].Command,
+                    CommandIndex: lastApplied + 1,
+                }
+                applyCh <- logMsg              // 通过通道阻塞地发送给上层状态机
+                lastApplied++
+            } else {
+                break  // 没有更多可应用的条目，退出内层循环，继续等待下一个信号
+            }
+        }
+    }
+}
+
+
+算法 快照安装处理 (InstallSnapshot)
+
+InstallSnapshot(args, reply) {
+    reply.Term = CurrentTerm
+    if CurrentTerm > args.Term { return }  // 自身任期更高，忽略
+    lastHeardTime = 当前时间
+    if CurrentTerm < args.Term { 转为follower并更新任期 }
+    if LastIncludedIndex < args.LastIncludedIndex {  // 收到更新的快照
+        SnapshotData = args.Data  // 保存快照数据
+        if lastLogIndex() >= args.LastIncludedIndex && Log[physicalIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm {
+            // follower日志包含LastIncludedIndex条目且任期匹配: 截断至 LastIncludedIndex
+            Log = Log[physicalIndex(args.LastIncludedIndex):]; LastIncludedIndex = args.LastIncludedIndex
+        } else {
+            // follower日志落后或不匹配：丢弃全部日志，创建占位条目
+            Log = [{Term: args.LastIncludedTerm, Command: nil}]; LastIncludedIndex = args.LastIncludedIndex
+        }
+        // 判断状态机是否需要更新：
+        if lastApplied < args.LastIncludedIndex {
+            commitIndex = max(args.LastIncludedIndex, commitIndex)
+            snapshotPending = true // 标记有快照需要应用到状态机
+            向 applyReadyCh 非阻塞发送信号  // 通知 applier 应用快照
+        }
+        // 若 lastApplied >= args.LastIncludedIndex，状态机比快照包含的内容新,则不快照到应用状态机中
+    }
+    persist()
+}
+
+
+ 算法 日志压缩 (Snapshot)
+
+Snapshot(index, snapshot) {
+    if index <= LastIncludedIndex { return }  // 过时的快照，忽略
+    Log = Log[physicalIndex(index):]          // 截断日志，保留 index 及之后的条目
+    LastIncludedIndex = index                 // 更新快照边界
+    SnapshotData = snapshot                   // 保存快照数据
+    persist()
+}
+
+
+ 算法 AppendEntries 处理中的提交推进触发
+
+// 在 AppendEntries 处理中（follower 侧），检查 LeaderCommit：
+if args.LeaderCommit > commitIndex {
+    commitIndex = min(args.LeaderCommit, lastLogIndex())
+    // 只有在 commitIndex 被推进时才通知 applier
+    向 applyReadyCh 非阻塞发送信号
+}
+
+
+
+
+# 系统模块
+
+## 数据结构
+
+Op {
+    Me  int       // 节点 ID
+    Id  int64     // 本地唯一操作标识（用于检测日志覆盖）
+    Req any       // 业务请求
+}
+
+
+## StateMachine 接口
+
+| 方法 | 说明 |
+|------|------|
+| DoOp(req any) any | 执行业务操作并返回结果 |
+| Snapshot() []byte | 制作状态机快照 |
+| Restore(data []byte) | 从快照恢复状态机 |
+
+
+算法 RSM 初始化 (MakeRSM)
+
+MakeRSM(servers, me, persister, maxraftstate, sm) {
+    rsm = {
+        applyCh:           make(chan ApplyMsg),
+        sm:                sm,
+        resultByCommandId: make(map[int]chan applyResult),
+        opId:              0,
+        stopSubmit:        make(chan struct{}),
+    }
+    // 从持久化存储恢复状态机快照
+    snapshot = persister.ReadSnapshot()
+    if snapshot 不为空 {
+        rsm.sm.Restore(snapshot)
+    }
+    // 创建 Raft 实例，传入 applyCh
+    rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
+    // 启动 readApply 协程处理已提交的日志和快照
+    go rsm.readApply()
+    return rsm
+}
+
+
+算法 提交请求 (Submit)
+
+Submit(req) {
+    // 1. 封装操作
+    OpId = nextOpId() // 递增请求id
+    构造 op = Op{Me: me, Id: OpId, Req: req}
+
+    // 2. 检查是否为 leader
+    _, isLeader = rf.GetState()
+    if 不是 leader { return ErrWrongLeader }
+
+    // 3. 通过 Raft 提交日志
+    commandId, termAtStart, isLeader = rf.Start(op)
+    if 不是 leader { return ErrWrongLeader }
+
+    // 4. 注册等待的结果通道（容量为 1，防止发送方阻塞）
+    resultCh = 容量为 1 的通道
+    resultByCommandId[commandId] = resultCh     // 注册等待
+
+    // 5. 等待结果或 leader 变化（三路等待）
+    循环 {
+        同时等待以下三个事件之一 {
+            事件 1: 超时（100ms）{
+                // 周期性检查 leader 状态
+                currentTerm, isStillLeader = rf.GetState()
+                if 不再是 leader 或 term 已变化 {
+                    // 再次检查结果是否刚好到达（避免竞态）
+                    if resultCh 有数据 {
+                        result = 读取 resultCh
+                        if result.opId == OpId {
+                            return OK, result.value
+                        }
+                        // opId 不匹配 → 该索引被其他请求覆盖
+                        return ErrWrongLeader
+                    }
+                    delete(resultByCommandId, commandId)
+                    return ErrWrongLeader
+                }
+            }
+            事件 2: resultCh 返回了结果 {
+                result = 读取 resultCh
+                if result.opId == OpId {
+                    return OK, result.value
+                }
+                // opId 不匹配，该索引被其他请求覆盖
+                return ErrWrongLeader
+            }
+            事件 3: stopSubmit 信号 {
+                // Raft 实例终止，所有等待立即退出
+                return ErrWrongLeader
+            }
+        }
+    }
+}
+
+
+算法 应用已提交消息 (readApply)
+
+readApply() {
+    循环读取 applyCh { // 按顺序获取已得到共识的命令
+        if 消息是日志命令 {
+            opMsg = applyMsg.Command.(Op)
+            // 执行具体业务逻辑
+            result = sm.DoOp(opMsg.Req)
+            // 检查是否需要触发 Raft 快照
+            if maxraftstate != -1 && rf.PersistBytes() >= maxraftstate {
+                snapshot = sm.Snapshot()
+                rf.Snapshot(commandId, snapshot)
+            }
+            // 通知等待的 Submit()
+            ch = resultByCommandId[commandId]  // Submit()中等待共识结果的通道
+            if ch 存在 {
+                ch <- applyResult{opId: opMsg.Id, value: result}
+            }
+        } else if 消息是快照 {
+            // 恢复状态机
+            sm.Restore(applyMsg.Snapshot)
+            // 快照跳跃了日志索引，所有 ≤ SnapshotIndex 的等待都过期
+            for commandId, ch := range resultByCommandId {
+                if commandId <= applyMsg.SnapshotIndex {
+                    ch <- applyResult{opId: -1}  // 标记过期
+                }
+            }
+        }
+    }
+
+
+    // applyCh 关闭说明 Raft 终止
+    close(stopSubmit)  // 通知所有 Submit() 退出
+}
+
+

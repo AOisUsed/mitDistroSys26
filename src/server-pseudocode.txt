@@ -1,0 +1,751 @@
+## 表S.1 ShardGrp 核心数据结构
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| kvm | [NShards]map[string]*VersionedValue | 每个分片的键值映射（NShards = 12） |
+| lastPutByClientId | map[uint64]*LastPut | 客户端最近一次写请求记录，用于去重 |
+| cfgNumByShid | map[Tshid]Tnum | 每个分片已知的最高配置编号 |
+| shardStatuses | [NShards]ShardStatus | 每个分片的当前状态（Absent/Serving/Frozen） |
+| shardClients | [NShards]map[uint64]struct{} | 每个分片上活跃过的客户端集合 |
+| rwMu | sync.Mutex | 全局读写锁 |
+
+## 表S.2 分片状态定义
+
+| 状态 | 含义 | 可接受的操作 |
+|------|------|------|
+| Absent | 分片不属于此组，或旧副本已被清理 | InstallShard |
+| Serving | 分片当前归本组负责，正常提供服务 | Get, Put, FreezeShard |
+| Frozen | 分片已冻结，等待被迁出 | DeleteShard |
+
+状态转换：Absent --[InstallShard]--> Serving --[FreezeShard]--> Frozen --[DeleteShard]--> Absent
+
+## 表S.3 VersionedValue
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Value | string | 键对应的值 |
+| Version | Tversion | 当前版本号，每次写操作后自增 |
+
+## 表S.4 LastPut
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| RequestId | uint64 | 最近一次已处理的写请求序列号 |
+| Reply | PutReply | 该请求对应的回复缓存 |
+
+## 表S.5 ShardState（迁移数据传输结构）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Kv | map[string]*VersionedValue | 该分片的键值映射 |
+| LastPutByClientId | map[uint64]*LastPut | 该分片上活跃客户端的最新写请求记录 |
+
+## 表S.6 SnapshotData（快照数据结构）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Kvm | [NShards]map[string]*VersionedValue | 每个分片的键值映射（快照时深拷贝） |
+| LastPutByClientId | map[uint64]*LastPut | 客户端去重表（快照时深拷贝） |
+| CfgNumByShid | map[Tshid]Tnum | 每个分片已知的最高配置编号 |
+| ShardStatuses | [NShards]ShardStatus | 每个分片的当前状态 |
+| ShardClients | [NShards]map[uint64]struct{} | 每个分片上活跃过的客户端集合 |
+
+## 表S.7 Get RPC 数据结构
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | ClientId | uint64 | 客户端唯一标识，用于去重 |
+| 请求 | RequestId | uint64 | 请求序列号，单调递增 |
+| 请求 | Key | string | 要查询的键 |
+| 回复 | Value | string | 键对应的值 |
+| 回复 | Version | Tversion | 键当前的版本号 |
+| 回复 | Err | Err | 错误码（OK / ErrNoKey / ErrWrongGroup） |
+
+## 表S.8 Put RPC 数据结构
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | ClientId | uint64 | 客户端唯一标识，用于去重 |
+| 请求 | RequestId | uint64 | 请求序列号，单调递增 |
+| 请求 | Key | string | 要写入的键 |
+| 请求 | Value | string | 要写入的值 |
+| 请求 | Version | Tversion | 客户端声明的预期版本号 |
+| 回复 | Err | Err | 错误码（OK / ErrVersion / ErrNoKey / ErrWrongGroup） |
+
+## 表S.9 FreezeShard RPC 数据结构
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Shard | Tshid | 要冻结的分片编号 |
+| 请求 | Num | Tnum | 请求对应的配置编号 |
+| 回复 | State | []byte | 冻结的分片状态数据（序列化后的 ShardState） |
+| 回复 | Num | Tnum | 实际生效的配置编号 |
+| 回复 | Err | Err | 错误码 |
+
+## 表S.10 InstallShard RPC 数据结构
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Shard | Tshid | 要安装的分片编号 |
+| 请求 | State | []byte | 分片状态数据（序列化后的 ShardState） |
+| 请求 | Num | Tnum | 请求对应的配置编号 |
+| 回复 | Err | Err | 错误码 |
+
+## 表S.11 DeleteShard RPC 数据结构
+
+| 方向 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 请求 | Shard | Tshid | 要删除的分片编号 |
+| 请求 | Num | Tnum | 请求对应的配置编号 |
+| 回复 | Err | Err | 错误码 |
+
+
+算法 服务层 DoOp — Get 处理
+
+DoOp(req) {
+    switch req 的类型 {
+    case GetArgs:
+        shid = Key2Shard(req.Key)
+        获取写锁
+        延迟释放写锁
+
+        if shardStatuses[shid] == Absent {
+            return GetReply{Err: ErrWrongGroup}
+        }
+        // shardStatuses[shid] 为 Serving 或 Frozen：
+        //   Serving：正常执行 Get
+        //   Frozen：Get 应被拒绝（论文 5.5.1 要求），否则返回 WrongGroup
+        if shardStatuses[shid] != Serving {
+            return GetReply{Err: ErrWrongGroup}
+        }
+
+        verVal, exists = kvm[shid][req.Key]
+        if 不存在 {
+            return GetReply{Err: ErrNoKey}
+        } else {
+            return GetReply{Value: verVal.Value, Version: verVal.Version, Err: OK}
+        }
+    }
+}
+
+
+算法 服务层 DoOp — Put 处理
+
+DoOp(req) {
+    switch req 的类型 {
+    case PutArgs:
+        shid = Key2Shard(req.Key)
+        // 分片状态检查
+        if shardStatuses[shid] != Serving {
+            return PutReply{Err: ErrWrongGroup}
+        }
+        // 去重检查
+        lastPut, exists = lastPutByClientId[req.ClientId]
+        if exists && req.RequestId <= lastPut.RequestId {
+            // 重复请求，返回缓存结果
+            return lastPut.Reply
+        }
+        // 版本化写入
+        kvshard = kvm[shid]
+        if kvshard[req.Key] 存在 {
+            v = kvshard[req.Key]
+            if v.Version == req.Version {       // 版本匹配，执行写入
+                v.Value = req.Value
+                v.Version += 1
+                reply = PutReply{Err: OK}
+            } else {                            // 版本不匹配
+                reply = PutReply{Err: ErrVersion}
+            }
+        } else {
+            if req.Version == 0 {               // 创建新键
+                kvshard[req.Key] = VersionedValue{Value: req.Value, Version: 1}
+                reply = PutReply{Err: OK}
+            } else {                            // 键不存在但版本非0
+                reply = PutReply{Err: ErrNoKey}
+            }
+        }
+        // 更新去重记录和分片客户端记录
+        lastPutByClientId[req.ClientId] = LastPut{RequestId: req.RequestId, Reply: reply}
+        shardClients[shid][req.ClientId] = struct{}{}
+        return reply
+    }
+}
+
+
+算法 服务层 DoOp — FreezeShard 处理
+
+DoOp(req) {
+    switch req 的类型 {
+    case FreezeShardArgs:
+        获取写锁
+        延迟释放写锁
+
+        shid = req.Shard
+        localCfgNum = cfgNumByShid[shid]
+        reqCfgNum = req.Num
+
+        if reqCfgNum > localCfgNum {
+            switch shardStatuses[shid] {
+            case Serving:
+                shardStatuses[shid] = Frozen          // 冻结分片
+                cfgNumByShid[shid] = reqCfgNum        // 更新配置编号
+                return FreezeShardReply{
+                    State: marshallShardState(shid),  // 序列化分片状态用于迁移
+                    Num:   reqCfgNum,
+                    Err:   OK,
+                }
+            case Absent, Frozen:
+                return FreezeShardReply{
+                    State: nil,
+                    Num:   localCfgNum,
+                    Err:   ErrIllegalOperation,       // 非 Serving 状态下不能冻结
+                }
+            }
+        } else if reqCfgNum == localCfgNum {
+            switch shardStatuses[shid] {
+            case Frozen, Absent:
+                return FreezeShardReply{
+                    State: marshallShardState(shid),  // 幂等返回（Absent 时状态为空）
+                    Num:   reqCfgNum,
+                    Err:   OK,
+                }
+            case Serving:
+                return FreezeShardReply{
+                    State: nil,
+                    Num:   reqCfgNum,
+                    Err:   ErrIllegalOperation,       // 分片尚未冻结却要求相同编号的冻结
+                }
+            }
+        } else { // reqCfgNum < localCfgNum
+            return FreezeShardReply{
+                State: nil,
+                Num:   localCfgNum,
+                Err:   OK,                            // 过时请求，直接返回 OK
+            }
+        }
+    }
+}
+
+
+算法 服务层 DoOp — InstallShard 处理
+
+DoOp(req) {
+    switch req 的类型 {
+    case InstallShardArgs:
+        获取写锁
+        延迟释放写锁
+
+        localCfgNum = cfgNumByShid[req.Shard]
+
+        if req.Num > localCfgNum {
+            switch shardStatuses[req.Shard] {
+            case Absent:
+                installShardState(req.Shard, req.State)  // 安装键值数据和去重信息
+                shardStatuses[req.Shard] = Serving        // 分片开始服务
+                cfgNumByShid[req.Shard] = req.Num         // 更新配置编号
+                return InstallShardReply{Err: OK}
+            case Frozen, Serving:
+                return InstallShardReply{Err: ErrIllegalOperation}
+            }
+        } else if req.Num == localCfgNum {
+            switch shardStatuses[req.Shard] {
+            case Serving:
+                return InstallShardReply{Err: OK}          // 幂等返回
+            case Absent, Frozen:
+                return InstallShardReply{Err: ErrIllegalOperation}
+            }
+        } else { // req.Num < localCfgNum
+            return InstallShardReply{Err: OK}              // 过时请求
+        }
+    }
+}
+
+
+算法 服务层 DoOp — DeleteShard 处理
+
+DoOp(req) {
+    switch req 的类型 {
+    case DeleteShardArgs:
+        获取写锁
+        延迟释放写锁
+
+        shid = req.Shard
+        localCfgNum = cfgNumByShid[shid]
+
+        if req.Num == localCfgNum {
+            switch shardStatuses[shid] {
+            case Frozen:
+                kvm[shid] = nil                            // 清除该分片键值数据
+                shardClients[shid] = nil                   // 清除该分片客户端记录
+                // 不清除 lastPutByClientId（无法确定某客户端最近一次写是否属于该分片）
+                shardStatuses[shid] = Absent               // 分片变为 Absent
+                cfgNumByShid[shid] = req.Num
+                return DeleteShardReply{Err: OK}
+            case Absent:
+                return DeleteShardReply{Err: OK}           // 幂等返回
+            case Serving:
+                return DeleteShardReply{Err: ErrIllegalOperation}
+            }
+        } else if req.Num > localCfgNum {
+            return DeleteShardReply{Err: ErrIllegalOperation}  // 不能跳过冻结直接删除
+        } else { // req.Num < localCfgNum
+            return DeleteShardReply{Err: OK}                   // 过时请求
+        }
+    }
+}
+
+
+算法 序列化分片状态 (marshallShardState)
+
+marshallShardState(shid) {
+    // 创建编码器
+    encoder = newEncoder()
+
+    // 收集该分片上活跃客户端的最近写请求
+    构造 lastPutMap = map[uint64]*LastPut
+    for each client in range shardClients[shid] {
+        lastPutMap[client] = lastPutByClientId[client]
+    }
+
+    // 深拷贝该分片的键值映射表
+    kvm = deepCopy(kvm[shid])
+
+    // 构造 ShardState 并编码
+    shardState = ShardState{
+        Kv:                kvm,
+        LastPutByClientId: lastPutMap,
+    }
+    return encode(shardState)
+}
+
+
+算法 安装分片状态 (installShardState)
+
+installShardState(shid, shardStateData) {
+    shardState = decode(shardStateData)
+
+    // 安装键值映射
+    kvm[shid] = deepCopy(shardState.Kv)
+
+    // 合并去重信息："保留较大请求号"
+    shardClients[shid] = empty set
+    for clientId, incomingPut := range shardState.LastPutByClientId {
+        shardClients[shid][clientId] = struct{}{}      // 记录活跃客户端
+        existingReq = lastPutByClientId[clientId]
+        if existingReq 不存在 或 incomingPut.RequestId > existingReq.RequestId {
+            lastPutByClientId[clientId] = incomingPut  // 保留较大请求号
+        }
+    }
+}
+
+
+算法 快照 (Snapshot)
+
+Snapshot() {
+    加写锁
+    // 深拷贝 kvm（NShards 个分片各自深拷贝）
+    for each shid in 0..NShards-1 {
+        for each key, val in kvm[shid] {
+            copiedKvm[shid][key] = VersionedValue{Value: val.Value, Version: val.Version}
+        }
+    }
+    // 深拷贝 lastPutByClientId
+    for each clientId, lastPut in lastPutByClientId {
+        copiedLastPut[clientId] = LastPut{RequestId: lastPut.RequestId, Reply: lastPut.Reply}
+    }
+    // 浅拷贝 cfgNumByShid（值类型）、shardStatuses（值类型）
+    // 深拷贝 shardClients
+    for each shid in 0..NShards-1 {
+        copiedShardClients[shid] = copySet(shardClients[shid])
+    }
+    还写锁
+
+    snapshot = SnapshotData{
+        Kvm:               copiedKvm,
+        LastPutByClientId: copiedLastPut,
+        CfgNumByShid:      copiedCfgNumByShid,
+        ShardStatuses:     copiedShardStatuses,
+        ShardClients:      copiedShardClients,
+    }
+    return encode(snapshot)
+}
+
+
+算法 恢复 (Restore)
+
+Restore(data) {
+    if data 为空或长度 < 1 { return }
+
+    snapshot = decode(data)
+
+    获取写锁
+    延迟释放写锁
+
+    kvm               = snapshot.Kvm
+    lastPutByClientId = snapshot.LastPutByClientId
+    cfgNumByShid      = snapshot.CfgNumByShid
+    shardStatuses     = snapshot.ShardStatuses
+    shardClients      = snapshot.ShardClients
+}
+
+
+算法 RPC 处理函数
+
+Get(args, reply) {
+    rpcErr, rep = rsm.Submit(*args)   // 通过 RSM 提交到 Raft
+    if rpcErr == OK {
+        *reply = rep.(GetReply)       // DoOp 执行结果
+    } else {
+        reply.Err = rpcErr            // ErrWrongLeader
+    }
+}
+
+Put(args, reply) {
+    rpcErr, rep = rsm.Submit(*args)
+    if rpcErr == OK {
+        *reply = rep.(PutReply)
+    } else {
+        reply.Err = rpcErr
+    }
+}
+
+FreezeShard(args, reply) {
+    rpcErr, rep = rsm.Submit(*args)
+    if rpcErr == OK {
+        *reply = rep.(FreezeShardReply)
+    } else {
+        reply.Err = rpcErr
+    }
+}
+
+InstallShard(args, reply) {
+    rpcErr, rep = rsm.Submit(*args)
+    if rpcErr == OK {
+        *reply = rep.(InstallShardReply)
+    } else {
+        reply.Err = rpcErr
+    }
+}
+
+DeleteShard(args, reply) {
+    rpcErr, rep = rsm.Submit(*args)
+    if rpcErr == OK {
+        *reply = rep.(DeleteShardReply)
+    } else {
+        reply.Err = rpcErr
+    }
+}
+
+
+算法 分片组初始化 (StartServerShardGrp)
+
+StartServerShardGrp(servers, gid, me, persister, maxraftstate) {
+    注册 labgob 类型：PutArgs, GetArgs, PutReply, GetReply,
+                  FreezeShardArgs, InstallShardArgs, DeleteShardArgs,
+                  rsm.Op, ShardState
+
+    kv = {gid: gid, me: me}
+
+    // 初始化 kvm：每个分片创建空映射
+    for i = 0 to NShards-1 {
+        kvm[i] = empty map
+    }
+
+    // 初始化 cfgNumByShid
+    for i = 0 to NShards-1 {
+        if gid == Gid1 {
+            cfgNumByShid[i] = 1      // 初始组配置编号为 1
+        } else {
+            cfgNumByShid[i] = 0      // 非初始组配置编号为 0
+        }
+    }
+
+    // 初始化 shardStatuses
+    for i = 0 to NShards-1 {
+        if gid == Gid1 {
+            shardStatuses[i] = Serving  // 初始组拥有全部分片
+        } else {
+            shardStatuses[i] = Absent   // 非初始组无分片
+        }
+    }
+
+    // 初始化 shardClients
+    for i = 0 to NShards-1 {
+        shardClients[i] = empty set
+    }
+
+    // 初始化 RSM（可能从持久化快照覆盖当前状态）
+    kv.rsm = MakeRSM(servers, me, persister, maxraftstate, kv)
+
+
+算法 控制器 — saveNextConfig（CAS 写入迁移意图）
+
+saveNextConfig(newCfg) {
+    existingNextConfig, ver = queryNextConfig() // 从配置仓库读取 nextConfig
+    if existingNextConfig.Num >= newCfg.Num {
+        return false                    // 已有更新的迁移意图，无需覆盖
+    }
+    err = configStore.Put("nextConfig", newCfg.String(), ver)
+    switch err {
+    case OK:          return true       // CAS 成功，本控制器获得迁移权
+    case ErrVersion:  return false      // 版本冲突，其他控制器已写入
+    case ErrMaybe:                      // 不确定是否写入成功, 查询并比对
+        writtenCfg = queryNextConfig()
+        if writtenCfg.EqualTo(newCfg) {
+            return true                 // 查询确认写入成功
+        }
+        return false
+    }
+}
+
+
+算法 控制器 — ChangeConfigTo（配置变更入口）
+
+ChangeConfigTo(newCfg) {
+    // 步骤 1：检查新配置是否比当前配置更新
+    oldCfg, ver = queryCurrentConfig() // 从配置仓库查询currentConfig
+    if newCfg.Num <= oldCfg.Num {
+        return                          // 过时配置，忽略
+    }
+
+    // 步骤 2：CAS 写入 nextConfig，将迁移意图通知其他控制器
+    if !saveNextConfig(newCfg) {
+        return                          // 使用 CAS 写入迁移意图，并由版本化写入实现互斥
+    }
+
+    // 步骤 3：执行实际分片迁移
+    migrateShards(oldCfg, ver, newCfg)
+}
+
+
+算法 控制器 — migrateShards（分片迁移三步协议）
+
+migrateShards(oldCfg, ver, newCfg) {
+    for each shid in 0..NShards-1 { // 遍历新旧配置，找到分片发生变动的组
+        oldGid = oldCfg.Shards[shid]
+        newGid = newCfg.Shards[shid]
+        if newGid == oldGid {
+            continue                    // 分片归属不变，跳过
+        }
+        并行执行: {  // 三阶段迁移
+            // 步骤 1：Freeze — 通知旧组冻结该分片
+            for 最多重试 5 次 {
+                data, err = FreezeShard(shid, newCfg.Num)
+                if err == OK { break }
+                if 被新配置替代 { return }
+                等待 100ms
+            }
+            if 重试耗尽 { return }
+
+            // 步骤 2：Install — 通知新组安装该分片
+            for 最多重试 5 次 {
+                err = InstallShard(shid, data, newCfg.Num)
+                if err == OK { break }
+                if 被新配置替代 { return }
+                等待 100ms
+            }
+            if 重试耗尽 { return }
+
+            // 步骤 3：Delete — 通知旧组清理冻结的分片
+            for 最多重试 5 次 {
+                err = DeleteShard(shid, newCfg.Num)
+                if err == OK { break }
+                if 被新配置替代 { return }
+                等待 100ms
+            }
+            if 重试耗尽 { return }
+        }
+    }
+    等待所有分片迁移完成
+
+    if 任一迁移失败 { return }
+
+    // 步骤 4：CAS 更新 currentConfig
+    configStore.Put("currentConfig", newCfg.String(), ver)
+    // currentConfig = nextConfig 表明迁移已完全生效
+    // CAS 版本冲突不影响正确性：
+    //   因 currentConfig 仅来自 nextConfig，哪个控制器写入结果相同
+}
+
+
+算法 控制器 — InitController（崩溃恢复）
+
+InitController() {
+    currentConfig, ver = queryCurrentConfig()
+    nextConfig, _   = queryNextConfig()
+
+    // 若 currentConfig.Num < nextConfig.Num，说明上次迁移未完成
+    if currentConfig.Num < nextConfig.Num {
+        migrateShards(currentConfig, ver, nextConfig)  // 续传上次迁移
+    }
+    // 若两者相等，则配置已完全生效，无需恢复
+}
+
+
+算法 ShardGroup Clerk — RPC 处理
+
+ShardGroup Clerk 将五个 RPC（Get、Put、FreezeShard、InstallShard、DeleteShard）
+抽象为统一的 Leader 发现与重试流程：
+sendRequest(serviceMethod, args, reply, terminalErrors) {
+    加锁读取: leader, maxAttempts = len(servers), serverNum, backoffTime
+    解锁
+
+    attempts = 0
+    for attempts <= maxAttempts {
+        发送请求至 servers[leader].serviceMethod(args, reply)
+        attempts++
+        if 请求成功 {
+            switch reply.Err {
+            case terminalErrors:           // 终态错误：OK、ErrNoKey、ErrVersion、ErrWrongGroup 等
+                更新 leader 缓存 = leader   // 记录成功节点
+                return reply
+            case ErrWrongLeader:           // 不是 Leader，继续轮询
+            }
+        }
+        // 请求失败或 ErrWrongLeader：轮换到下一节点
+        leader = (leader + 1) % len(servers)
+        if attempts % serverNum == 0 {
+            sleep(backoffTime)             // 每轮一轮后短暂退避
+        }
+    }
+    return ErrRetryExhausted               // 所有节点均无法成功
+}
+
+
+各 RPC 的 terminalErrors 集合：
+
+| RPC | 终态错误码 | 返回类型 |
+|-----|-----------|---------|
+| Get | OK, ErrNoKey, ErrWrongGroup | (value, version, err) |
+| Put | OK, ErrNoKey, ErrWrongGroup, ErrVersion | err |
+| FreezeShard | OK, ErrWrongGroup | (state, err) |
+| InstallShard | OK, ErrWrongGroup | err |
+| DeleteShard | OK, ErrWrongGroup | err |
+
+
+## 算法 ShardKV Clerk — Put
+
+ShardKV Clerk 封装了分片路由逻辑，通过缓存配置和单次查询（single-flight）减少对控制器的查询压力。
+
+data ShardKVClerk {
+    sck:            *ShardCtrler    // 控制器，用于查询配置
+    rcks:           map[gid]*shardgrp.Clerk  // 到各分片组的 Clerk 缓存
+    clerkId:        uint64           // 客户端唯一标识
+    requestId:      uint64           // 请求序列号，单调递增
+    cachedConfig:   *ShardConfig     // 缓存的配置快照
+    fetching:       bool             // 是否有正在进行的配置查询
+    fetchingDone:   chan struct{}    // 用于通知等待者查询完成
+}
+
+Put(key, value, version) {
+    reqId = nextReqId()
+    shardId = Key2Shard(key)
+    backoff = 200ms
+    maxBackoff = 2s
+
+    for {
+        // 1. 获取配置（优先缓存，必要时 single-flight 刷新）
+        config = getConfig()
+
+        // 2. 从配置中查到该分片所属的组及服务器地址
+        gid, servers = config.GidServers(shardId)
+
+        // 3. 获取/缓存到该组的 shardgrp.Clerk
+        clerk = rcks[gid]
+        if !exists {
+            clerk = MakeShardGrpClerk(clnt, servers, clerkId)
+            rcks[gid] = clerk
+        }
+
+        // 4. 通过 shardgrp.Clerk 发送 Put RPC
+        err = clerk.Put(reqId, key, value, version)
+
+        switch err {
+        case WrongGroup, ErrRetryExhausted:
+            // 分片已迁移或 leader 不可达，刷新配置后重试
+            refreshConfig()
+            sleep(backoff)
+            if backoff < maxBackoff {
+                backoff *= 2
+            }
+        case OK, ErrVersion, ErrNoKey:
+            return err  // 终态结果，直接返回
+        }
+    }
+}
+
+
+算法 ShardKV Clerk — Get
+Get 与 Put 共享相同流程，仅 RPC 返回类型不同。
+
+Get(key){
+    reqId = nextReqId()
+    shardId = Key2Shard(key)
+    backoff = 200ms
+    maxBackoff = 2s
+    for {
+        config = getConfig()
+        gid, servers = config.GidServers(shardId)
+
+        clerk = shardGrpClerk[gid]
+        if !exists {
+            clerk = MakeShardGrpClerk(clnt, servers, clerkId)
+            shardGrpClerk[gid] = clerk
+        }
+        val, version, err = clerk.Get(reqId, key)
+        switch err {
+        case WrongGroup, ErrRetryExhausted:
+            refreshConfig()
+            sleep(backoff)
+            if backoff < maxBackoff {
+                backoff *= 2
+            }
+        case OK, ErrNoKey:
+            return val, version, err
+        }
+    }
+}
+
+
+算法 ShardKV Clerk — 配置缓存管理
+
+getConfig() {
+    // 双检查锁模式：先读锁检查缓存
+    读锁
+    fetching = ck.fetching
+    cfg = ck.cachedConfig
+    释放读锁
+
+    if 没有正在进行的查询 && 缓存非空 {
+        return cfg                     // 直接返回缓存
+    }
+
+    // 需要刷新：通过 single-flight 机制确保只有一个协程查询
+    refreshConfig()
+    等待 fetchingDone 关闭              // 等待查询完成
+    返回 cachedConfig
+}
+
+refreshConfig() {
+    写锁
+    if fetching {                       // 已有查询在进行
+        释放写锁
+        return                          // 直接退出，等待者会收到 fetchingDone 通知
+    }
+
+    // 标记正在查询，然后释放写锁让等待者能读到 fetching=true
+    fetching = true
+    释放写锁
+
+    // 实际查询控制器
+    cfg = sck.Query()
+
+    写锁
+    fetchingDone = ck.fetchingDone     // 1. 保存旧 channel
+    cachedConfig = cfg                 // 2. 更新缓存
+    fetching = false                   // 3. 清除查询标志
+    ck.fetchingDone = make(chan)       // 4. 创建新 channel（以备下次使用）
+    close(fetchingDone)                // 5. 通知所有等待者
+    释放写锁
+}
+
