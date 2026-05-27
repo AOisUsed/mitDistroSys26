@@ -4,7 +4,7 @@ import "log"
 
 // Debugging
 const DebugAll3 = true
-const CancelAllPrint3 = false
+const CancelAllPrint3 = true
 
 const Debug3A = false
 const Debug3B = false

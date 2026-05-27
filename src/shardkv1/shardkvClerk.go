@@ -115,7 +115,6 @@ func (ck *Clerk) refreshConfig() {
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
 
-	reqId := ck.nextReqId()
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
@@ -144,7 +143,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		}
 
 		debug.D5APrintf("client -Get(key: %v) in shard %v-> group %v\n", key, shardId, gid)
-		val, version, rpcErr := clerk.Get(reqId, key)
+		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpc.ErrWrongGroup || rpcErr == rpc.ErrRetryExhausted {
 			// refreshConfig 后如果配置无变化（leader 选举中），加 backoff 避免 tight loop

@@ -39,12 +39,8 @@ func (ck *Clerk) Leader() int {
 }
 
 // Get return OK, ErrNoKey, ErrWrongGroup as rpc.Err
-func (ck *Clerk) Get(requestId uint64, key string) (string, rpc.Tversion, rpc.Err) {
+func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	args := rpc.GetArgs{
-		RequestInfo: rpc.RequestInfo{
-			ClientId:  ck.clientId,
-			RequestId: requestId,
-		},
 		Key: key,
 	}
 
@@ -57,14 +53,14 @@ func (ck *Clerk) Get(requestId uint64, key string) (string, rpc.Tversion, rpc.Er
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
+		debug.D5APrintf("shardkvclerk %v -> %v: Get %s\n", ck.servers[leader], ck.clientId, key)
 		attempts++
 		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey, rpc.ErrWrongGroup:
-				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Get %s, reply: value:%v, Version: %v, Err: %v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply.Value, reply.Version, reply.Err)
+				debug.D5APrintf("shardkvclerk %v <- %v: Get %s, reply: value:%v, Version: %v, Err: %v \n", ck.clientId, ck.servers[leader], key, reply.Value, reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -80,7 +76,7 @@ func (ck *Clerk) Get(requestId uint64, key string) (string, rpc.Tversion, rpc.Er
 		}
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
-	debug.D5APrintf("shardkvclerk %v: Get %s retry exhausted after %d attempts\n", args.ClientId, key, attempts)
+	debug.D5APrintf("shardkvclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
 	return "", 0, rpc.ErrRetryExhausted
 }
 

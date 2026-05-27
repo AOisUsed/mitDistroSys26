@@ -65,8 +65,7 @@ type KVServer struct {
 	cfgNumByShid  map[shardcfg.Tshid]shardcfg.Tnum
 	shardStatuses [shardcfg.NShards]ShardStatus
 	shardClients  [shardcfg.NShards]map[uint64]struct{} // record which clients have done operation on the shard
-
-	rwMu sync.Mutex
+	rwMu          sync.Mutex
 }
 
 func (kv *KVServer) DoOp(req any) any {

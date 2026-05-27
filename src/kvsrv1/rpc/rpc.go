@@ -39,7 +39,6 @@ type PutReply struct {
 }
 
 type GetArgs struct {
-	RequestInfo
 	Key string
 }
 
