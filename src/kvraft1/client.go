@@ -62,10 +62,6 @@ func (ck *Clerk) Leader() int {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	args := rpc.GetArgs{
-		RequestInfo: rpc.RequestInfo{
-			ClientId:  ck.clientId,
-			RequestId: ck.nextReqId(),
-		},
 		Key: key,
 	}
 
@@ -73,12 +69,12 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	leader := ck.leader
 	ck.mu.Unlock()
 	for {
-		debug.D4BPrintf("clerk%v -> %v: reqId:%5v, Get %s\n", args.ClientId, ck.servers[leader], args.RequestId, key)
+		debug.D4BPrintf("clerk%v -> %v: Get %s\n", ck.clientId, ck.servers[leader], key)
 
 		reply := rpc.GetReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
-			debug.D4BPrintf("clerk%v <- %v: reqId:%5v, Get %s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, reply)
+			debug.D4BPrintf("clerk%v <- %v: Get %s, reply:%v \n", ck.clientId, ck.servers[leader], key, reply)
 
 			switch reply.Err {
 			case rpc.OK, rpc.ErrNoKey:
@@ -132,8 +128,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	leader := ck.leader
 	ck.mu.Unlock()
 
-	firstTry := true
-
 	for {
 		//debug.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
 		debug.D4BPrintf("clerk%v -> %v: reqId:%5v, Put %s:%s \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
@@ -146,33 +140,21 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			debug.D4BPrintf("clerk%v <- %v: reqId:%5v, Put %s:%s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 
 			switch reply.Err {
-			case rpc.OK, rpc.ErrNoKey:
+			case rpc.OK, rpc.ErrNoKey, rpc.ErrVersion:
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
 				return reply.Err
-			case rpc.ErrVersion:
-				if firstTry {
-					return rpc.ErrVersion
-				} else {
-					return rpc.ErrMaybe
-				}
 			case rpc.ErrWrongLeader:
-				firstTry = false
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined error: %v", reply.Err))
 			}
-		} else {
-			// RPC fails: it may have been executed or not.
-			// Note: whether it's firstTry isn't associated with the specific server
-			// but with the command. Once RPC fails, no matter whom the client communicated with,
-			// firstTry need to be set to false. Because leadership can quickly change and
-			// the Command propagates between the servers.
-			firstTry = false
-			leader = (leader + 1) % len(ck.servers)
-			continue
 		}
+		// RPC fails: it may have been executed or not.
+		// Note: whether it's firstTry isn't associated with the specific server
+		// but with the command. Once RPC fails, no matter whom the client communicated with,
+		// firstTry need to be set to false. Because leadership can quickly change and
+		// the Command propagates between the servers.
+		leader = (leader + 1) % len(ck.servers)
 	}
 }

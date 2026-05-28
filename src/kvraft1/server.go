@@ -18,14 +18,14 @@ type VersionedValue struct {
 	Version rpc.Tversion
 }
 
-type LastWrite struct {
+type LastPut struct {
 	RequestId uint64
 	Reply     rpc.PutReply // for this KVServer, this is rpc.PutReply.
 }
 
 type SnapshotData struct {
-	Kvm                 map[string]*VersionedValue
-	LastWriteByClientId map[uint64]*LastWrite
+	Kvm               map[string]*VersionedValue
+	LastPutByClientId map[uint64]*LastPut
 }
 
 type KVServer struct {
@@ -33,9 +33,9 @@ type KVServer struct {
 	rsm *rsm.RSM
 
 	// Your definitions here.
-	kvm                 map[string]*VersionedValue
-	lastWriteByClientId map[uint64]*LastWrite
-	rwMu                sync.RWMutex
+	kvm               map[string]*VersionedValue
+	lastPutByClientId map[uint64]*LastPut
+	rwMu              sync.RWMutex
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -51,18 +51,18 @@ func (kv *KVServer) DoOp(req any) any {
 	case rpc.GetArgs:
 		//// deduplicate request
 		//kv.rwMu.RLock()
-		//lastReq, exists := kv.lastWriteByClientId[typedReq.ClientId]
+		//lastPut, exists := kv.lastPutByClientId[typedReq.ClientId]
 		//kv.rwMu.RUnlock()
 		//if exists {
 		//	// if the request has been executed, simply return the result and not execute it again.
-		//	if typedReq.RequestId <= lastReq.RequestId {
-		//		// note that typedReq.reqId < lastReq.reqId condition should not occur if client functions correctly
+		//	if typedReq.RequestId <= lastPut.RequestId {
+		//		// note that typedReq.reqId < lastPut.reqId condition should not occur if client functions correctly
 		//		// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-		//		if typedReq.RequestId < lastReq.RequestId {
-		//			debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastReq id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastReq.RequestId)
+		//		if typedReq.RequestId < lastPut.RequestId {
+		//			debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastPut id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastPut.RequestId)
 		//		}
 		//		debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
-		//		return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+		//		return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
 		//	}
 		//}
 		// execute the operation
@@ -84,18 +84,18 @@ func (kv *KVServer) DoOp(req any) any {
 	case rpc.PutArgs:
 		// deduplicate request
 		kv.rwMu.RLock()
-		lastReq, exists := kv.lastWriteByClientId[typedReq.ClientId]
+		lastPut, exists := kv.lastPutByClientId[typedReq.ClientId]
 		kv.rwMu.RUnlock()
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
-			if typedReq.RequestId <= lastReq.RequestId {
-				// note that typedReq.Id < lastReq.Id condition should not occur if client functions correctly
+			if typedReq.RequestId <= lastPut.RequestId {
+				// note that typedReq.Id < lastPut.Id condition should not occur if client functions correctly
 				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-				if typedReq.RequestId < lastReq.RequestId {
+				if typedReq.RequestId < lastPut.RequestId {
 					debug.D4BPrintf("server%v:client %v sending request with impossible id:%v!\n", kv.me, typedReq.ClientId, typedReq.RequestId)
 				}
 				debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
-				return lastReq.Reply // if client bugs (i.e. sending request of the id smaller than lastReq), server is not responsible for sending the correct reply, and will just send reply of lastReq (which doesn't reflect the truth).
+				return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
 			}
 		}
 		// execute the operation
@@ -126,8 +126,8 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		debug.D4BPrintf("server%v: DoOp: Put req %v, reply:%v \n", kv.me, req, reply)
-		// Save to LastWriteByClientId
-		kv.lastWriteByClientId[typedReq.ClientId] = &LastWrite{
+		// Save to LastPutByClientId
+		kv.lastPutByClientId[typedReq.ClientId] = &LastPut{
 			RequestId: typedReq.RequestId,
 			Reply:     reply.(rpc.PutReply),
 		}
@@ -155,20 +155,20 @@ func (kv *KVServer) Snapshot() []byte {
 	}
 
 	// make a copy of LastPutByClientId
-	var lastReqByClientId = make(map[uint64]*LastWrite)
-	for clientId, lastRequest := range kv.lastWriteByClientId {
-		copiedReq := &LastWrite{
+	var lastPutByClientId = make(map[uint64]*LastPut)
+	for clientId, lastRequest := range kv.lastPutByClientId {
+		copiedReq := &LastPut{
 			RequestId: lastRequest.RequestId,
 			Reply:     lastRequest.Reply,
 		}
-		lastReqByClientId[clientId] = copiedReq
+		lastPutByClientId[clientId] = copiedReq
 	}
 	kv.rwMu.RUnlock()
 
 	// snapshot
 	snapshot := SnapshotData{
-		Kvm:                 kvm,
-		LastWriteByClientId: lastReqByClientId,
+		Kvm:               kvm,
+		LastPutByClientId: lastPutByClientId,
 	}
 
 	// encode copied snapshot
@@ -212,7 +212,7 @@ func (kv *KVServer) Restore(data []byte) {
 	kv.rwMu.Lock()
 	defer kv.rwMu.Unlock()
 	kv.kvm = snapshot.Kvm
-	kv.lastWriteByClientId = snapshot.LastWriteByClientId
+	kv.lastPutByClientId = snapshot.LastPutByClientId
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -267,7 +267,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	// and it should not be overwritten.
 	if kv.kvm == nil {
 		kv.kvm = make(map[string]*VersionedValue)
-		kv.lastWriteByClientId = make(map[uint64]*LastWrite)
+		kv.lastPutByClientId = make(map[uint64]*LastPut)
 	}
 	return []any{kv, kv.rsm.Raft()}
 }
