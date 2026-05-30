@@ -27,7 +27,7 @@ func main() {
 		log.Fatalf("获取当前目录失败: %v", err)
 	}
 
-	// 必须将工作目录切换到 src/ 下，因为 daemon 进程（kvsrv1d, shardgrp1d）
+	// 必须将工作目录切换到 src/ 下，因为 daemon 进程（kvsrv, shardgrp）
 	// 会通过 cwd 中的 "src" 来定位二进制文件路径
 	srcDir, err := filepath.Abs("../src")
 	if err != nil {

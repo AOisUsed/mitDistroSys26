@@ -12,10 +12,10 @@ import (
 
 	"shardkv-demo/cluster"
 
-	"6.5840/kvsrv1/rpc"
-	"6.5840/rpc"
-	"6.5840/shardkv1/shardcfg"
-	"6.5840/tester1"
+	"kvstore/kvsrv/rpcapi"
+	"kvstore/rpc"
+	"kvstore/shardkv/shardcfg"
+	"kvstore/tester"
 )
 
 type Handler struct {
@@ -55,7 +55,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	type statusResult struct {
 		state *cluster.ClusterState
-		err   rpc.Err
+		err   rpcapi.Err
 	}
 	ch := make(chan statusResult, 1)
 	go func() {
@@ -84,7 +84,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 
 	type treeResult struct {
 		state *cluster.ClusterState
-		err   rpc.Err
+		err   rpcapi.Err
 	}
 	ch := make(chan treeResult, 1)
 	go func() {
@@ -138,14 +138,14 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 }
 
 // ErrTimeoutStr 定义超时字符串常量，与 rpcapi.Err 同类型
-const ErrTimeoutStr rpc.Err = "ErrTimeout"
+const ErrTimeoutStr rpcapi.Err = "ErrTimeout"
 
 // timeoutGet 对返回 (string, Tversion, Err) 的函数做超时保护
-func timeoutGet(fn func() (string, rpc.Tversion, rpc.Err), timeout time.Duration) (string, rpc.Tversion, rpc.Err) {
+func timeoutGet(fn func() (string, rpcapi.Tversion, rpcapi.Err), timeout time.Duration) (string, rpcapi.Tversion, rpcapi.Err) {
 	type getRes struct {
 		val     string
-		version rpc.Tversion
-		err     rpc.Err
+		version rpcapi.Tversion
+		err     rpcapi.Err
 	}
 	ch := make(chan getRes, 1)
 	go func() {
@@ -161,8 +161,8 @@ func timeoutGet(fn func() (string, rpc.Tversion, rpc.Err), timeout time.Duration
 }
 
 // timeoutPut 对返回 rpcapi.Err 的函数做超时保护
-func timeoutPut(fn func() rpc.Err, timeout time.Duration) rpc.Err {
-	ch := make(chan rpc.Err, 1)
+func timeoutPut(fn func() rpcapi.Err, timeout time.Duration) rpcapi.Err {
+	ch := make(chan rpcapi.Err, 1)
 	go func() {
 		ch <- fn()
 	}()
@@ -175,10 +175,10 @@ func timeoutPut(fn func() rpc.Err, timeout time.Duration) rpc.Err {
 }
 
 // timeoutAny 对任意返回 rpcapi.Err 的只读查询做超时保护
-func timeoutQuery[T any](fn func() (T, rpc.Err), timeout time.Duration) (T, rpc.Err) {
+func timeoutQuery[T any](fn func() (T, rpcapi.Err), timeout time.Duration) (T, rpcapi.Err) {
 	type qRes struct {
 		val T
-		err rpc.Err
+		err rpcapi.Err
 	}
 	ch := make(chan qRes, 1)
 	go func() {
@@ -219,8 +219,8 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 	// 超时保护的 Get：在 goroutine 中执行，20s 超时
 	type getResult struct {
 		val     string
-		version rpc.Tversion
-		err     rpc.Err
+		version rpcapi.Tversion
+		err     rpcapi.Err
 	}
 	getCh := make(chan getResult, 1)
 	go func() {
@@ -228,10 +228,10 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 		getCh <- getResult{v, ver, e}
 	}()
 
-	var version rpc.Tversion
+	var version rpcapi.Tversion
 	select {
 	case gres := <-getCh:
-		if gres.err != rpc.OK && gres.err != rpc.ErrNoKey {
+		if gres.err != rpcapi.OK && gres.err != rpcapi.ErrNoKey {
 			log.Printf("[Put] key=%q S%d Get 失败: %s", req.Key, shard, gres.err)
 			writeJSON(w, map[string]any{
 				"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
@@ -250,12 +250,12 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 超时保护的 Put
-	putCh := make(chan rpc.Err, 1)
+	putCh := make(chan rpcapi.Err, 1)
 	go func() {
 		putCh <- h.cm.Put(req.Key, req.Value, version)
 	}()
 
-	var putErr rpc.Err
+	var putErr rpcapi.Err
 	select {
 	case putErr = <-putCh:
 	case <-time.After(20 * time.Second):
@@ -280,7 +280,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 		Shard:  int(shard),
 		ReqVer: int(version),
 	}
-	if putErr == rpc.OK {
+	if putErr == rpcapi.OK {
 		resp.Success = true
 		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, version)
 	} else {
@@ -304,8 +304,8 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	// 超时保护的 Get
 	type getResult struct {
 		val     string
-		version rpc.Tversion
-		err     rpc.Err
+		version rpcapi.Tversion
+		err     rpcapi.Err
 	}
 	getCh := make(chan getResult, 1)
 	go func() {
@@ -314,8 +314,8 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	var value string
-	var version rpc.Tversion
-	var getErr rpc.Err
+	var version rpcapi.Tversion
+	var getErr rpcapi.Err
 	select {
 	case gres := <-getCh:
 		value, version, getErr = gres.val, gres.version, gres.err
@@ -329,20 +329,20 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := struct {
-		Success bool         `json:"success"`
-		Key     string       `json:"key"`
-		Value   string       `json:"value,omitempty"`
-		Version rpc.Tversion `json:"version,omitempty"`
-		Err     string       `json:"err,omitempty"`
+		Success bool            `json:"success"`
+		Key     string          `json:"key"`
+		Value   string          `json:"value,omitempty"`
+		Version rpcapi.Tversion `json:"version,omitempty"`
+		Err     string          `json:"err,omitempty"`
 	}{
 		Key: key,
 	}
-	if getErr == rpc.OK {
+	if getErr == rpcapi.OK {
 		resp.Success = true
 		resp.Value = value
 		resp.Version = version
 		log.Printf("[Get] key=%q value=%q version=%d OK", key, value, version)
-	} else if getErr == rpc.ErrNoKey {
+	} else if getErr == rpcapi.ErrNoKey {
 		resp.Err = "ErrNoKey"
 		log.Printf("[Get] key=%q ErrNoKey", key)
 	} else {
@@ -746,9 +746,9 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Key     string       `json:"key"`
-		Value   string       `json:"value"`
-		Version rpc.Tversion `json:"version"`
+		Key     string          `json:"key"`
+		Value   string          `json:"value"`
+		Version rpcapi.Tversion `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -762,12 +762,12 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 	shard := shardcfg.Key2Shard(req.Key)
 
 	// 超时保护的 Put：在 goroutine 中执行，20s 超时
-	putCh := make(chan rpc.Err, 1)
+	putCh := make(chan rpcapi.Err, 1)
 	go func() {
 		putCh <- h.cm.Put(req.Key, req.Value, req.Version)
 	}()
 
-	var putErr rpc.Err
+	var putErr rpcapi.Err
 	select {
 	case putErr = <-putCh:
 	case <-time.After(20 * time.Second):
@@ -779,7 +779,7 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if putErr == rpc.OK {
+	if putErr == rpcapi.OK {
 		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, req.Version)
 		writeJSON(w, map[string]any{"success": true, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version)})
 	} else {
@@ -800,7 +800,7 @@ func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, curVer, getErr := h.cm.Get(key)
-	if getErr == rpc.OK || getErr == rpc.ErrNoKey {
+	if getErr == rpcapi.OK || getErr == rpcapi.ErrNoKey {
 		writeJSON(w, map[string]any{"success": true, "key": key, "version": int(curVer)})
 	} else {
 		writeJSON(w, map[string]any{"success": false, "err": string(getErr)})

@@ -1,8 +1,8 @@
 package cluster
 
 import (
-	"6.5840/shardkv1/shardcfg"
-	"6.5840/tester1"
+	"kvstore/shardkv/shardcfg"
+	"kvstore/tester"
 )
 
 // ClusterState 集群当前状态

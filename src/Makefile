@@ -20,8 +20,8 @@ shardkv: .FORCE check-version shardkv-build
 	cd shardkv; go test -timeout 15m $(VERB) $(RACE) $(RUN)
 
 shardkv-build: .FORCE check-version
-	go build $(RACE) -o main/kvsrvd main/kvsrv.go
-	go build $(RACE) -o main/shardgrpd main/shardgrp.go
+	go build $(RACE) -o main/kvsrv main/kvsrv.go
+	go build $(RACE) -o main/shardgrp main/shardgrp.go
 
 .PHONY: .FORCE $(MAINS) $(MAIN_BUILDS)
 

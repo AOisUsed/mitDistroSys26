@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/6.5840.iml" filepath="$PROJECT_DIR$/.idea/6.5840.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/distributedkvstore.iml" filepath="$PROJECT_DIR$/.idea/distributedkvstore.iml" />
     </modules>
   </component>
 </project>

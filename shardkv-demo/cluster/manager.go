@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
-	"6.5840/shardkv1"
-	"6.5840/shardkv1/shardcfg"
-	"6.5840/shardkv1/shardctrler"
-	"6.5840/tester1"
+	"kvstore/kvsrv/rpcapi"
+	"kvstore/kvtest"
+	"kvstore/shardkv"
+	"kvstore/shardkv/shardcfg"
+	"kvstore/shardkv/shardctrler"
+	"kvstore/tester"
 )
 
 // ClusterManager 管理集群生命周期
@@ -55,8 +55,8 @@ func (cm *ClusterManager) Init() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// 创建 tester Config（使用 kvsrv1d 作为 config store）
-	cm.cfg = tester.MakeDemoConfig("kvsrv1d", []string{})
+	// 创建 tester Config（使用 kvsrv 作为 config store）
+	cm.cfg = tester.MakeDemoConfig("kvsrv", []string{})
 
 	// 创建 shard controller
 	cm.clnt = cm.cfg.MakeClient()
@@ -65,7 +65,7 @@ func (cm *ClusterManager) Init() error {
 	// 初始化 config store 的配置
 	scfg := shardcfg.MakeShardConfig()
 	args := cm.getArgs()
-	cm.cfg.MakeGroupStart("shardgrp1d", args, shardcfg.Gid1, 3)
+	cm.cfg.MakeGroupStart("shardgrp", args, shardcfg.Gid1, 3)
 	scfg.JoinBalance(map[tester.Tgid][]string{
 		shardcfg.Gid1: cm.cfg.Group(shardcfg.Gid1).SrvNames(),
 	})
@@ -194,12 +194,12 @@ func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
 }
 
 // Put 写入键值（带乐观锁版本号）
-func (cm *ClusterManager) Put(key, value string, version rpc.Tversion) rpc.Err {
+func (cm *ClusterManager) Put(key, value string, version rpcapi.Tversion) rpcapi.Err {
 	return cm.ck.Put(key, value, version)
 }
 
 // Get 读取键
-func (cm *ClusterManager) Get(key string) (string, rpc.Tversion, rpc.Err) {
+func (cm *ClusterManager) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	return cm.ck.Get(key)
 }
 
@@ -431,7 +431,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	cm.mu.Lock()
 
 	args := cm.getArgs()
-	cm.cfg.MakeGroupStart("shardgrp1d", args, gid, 3)
+	cm.cfg.MakeGroupStart("shardgrp", args, gid, 3)
 	srvs := cm.cfg.Group(gid).SrvNames()
 
 	cfg := cm.ctl.Query()
