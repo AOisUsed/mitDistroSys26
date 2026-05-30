@@ -13,7 +13,7 @@ import (
 	"shardkv-demo/cluster"
 
 	"6.5840/kvsrv1/rpc"
-	"6.5840/labrpc"
+	"6.5840/rpc"
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/tester1"
 )
@@ -137,7 +137,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, tree)
 }
 
-// ErrTimeoutStr 定义超时字符串常量，与 rpc.Err 同类型
+// ErrTimeoutStr 定义超时字符串常量，与 rpcapi.Err 同类型
 const ErrTimeoutStr rpc.Err = "ErrTimeout"
 
 // timeoutGet 对返回 (string, Tversion, Err) 的函数做超时保护
@@ -160,7 +160,7 @@ func timeoutGet(fn func() (string, rpc.Tversion, rpc.Err), timeout time.Duration
 	}
 }
 
-// timeoutPut 对返回 rpc.Err 的函数做超时保护
+// timeoutPut 对返回 rpcapi.Err 的函数做超时保护
 func timeoutPut(fn func() rpc.Err, timeout time.Duration) rpc.Err {
 	ch := make(chan rpc.Err, 1)
 	go func() {
@@ -174,7 +174,7 @@ func timeoutPut(fn func() rpc.Err, timeout time.Duration) rpc.Err {
 	}
 }
 
-// timeoutAny 对任意返回 rpc.Err 的只读查询做超时保护
+// timeoutAny 对任意返回 rpcapi.Err 的只读查询做超时保护
 func timeoutQuery[T any](fn func() (T, rpc.Err), timeout time.Duration) (T, rpc.Err) {
 	type qRes struct {
 		val T
@@ -638,9 +638,9 @@ func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"dropRate":     labrpc.GetDropRate(),
-		"shortDelayMs": labrpc.GetShortDelay(),
-		"longDelayMs":  labrpc.GetLongDelay(),
+		"dropRate":     rpc.GetDropRate(),
+		"shortDelayMs": rpc.GetShortDelay(),
+		"longDelayMs":  rpc.GetLongDelay(),
 	})
 }
 

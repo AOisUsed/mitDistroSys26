@@ -1,4 +1,4 @@
-module 6.5840
+module kvstore
 
 go 1.22
 

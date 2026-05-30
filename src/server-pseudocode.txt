@@ -440,7 +440,7 @@ DeleteShard(args, reply) {
 算法 分片组初始化 (StartServerShardGrp)
 
 StartServerShardGrp(servers, gid, me, persister, maxraftstate) {
-    注册 labgob 类型：PutArgs, GetArgs, PutReply, GetReply,
+    注册 gob 类型：PutArgs, GetArgs, PutReply, GetReply,
                   FreezeShardArgs, InstallShardArgs, DeleteShardArgs,
                   rsm.Op, ShardState
 
