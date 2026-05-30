@@ -54,7 +54,7 @@ func (sck *ShardCtrler) InitController() {
 
 	// if currentConfig has smaller Num, it means that previous shard reconfiguration wasn't completed, therefore redo it.
 	if currentConfig.Num < nextConfig.Num {
-		sck.migrateShards(currentConfig, ver, nextConfig)
+		sck.migrateShards(currentConfig, ver, nextConfig, true)
 	}
 }
 
@@ -119,27 +119,30 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
 	oldCfg, ver := sck.queryCurrentConfig()
 	// don't change config if newCfg has smaller config version (Num)
 	if newCfg.Num <= oldCfg.Num {
-		debug.D5APrintf("controller ChangeConfig called with older config: %v < current: %v , does nothing\n", oldCfg.Num, newCfg.Num)
+		debug.D5APrintf("controller %v ChangeConfig called with older config: %v < current: %v , does nothing\n", sck.controllerId, oldCfg.Num, newCfg.Num)
 		return
 	}
 	if !sck.saveNextConfig(newCfg) { // it fails to save reconfiguration intention
 		return
 	}
 
-	debug.D5APrintf("controller: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
-	sck.migrateShards(oldCfg, ver, newCfg)
+	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
+	sck.migrateShards(oldCfg, ver, newCfg, false)
 }
 
-// check if the config has been superseded by a newer config
+// check if the config has been superseded by a newer config ,
+// or a config with the same config Num: config comes from configstore, configs of the same Num are identical.
 func (sck *ShardCtrler) isSuperseded(newCfg *shardcfg.ShardConfig) bool {
 	curCfg, _ := sck.queryCurrentConfig()
 	return curCfg.Num >= newCfg.Num
 }
 
-// migrateShards is called in ChangeConfigTo and InitController. ver is the version of currentConfig value, for CAS Put
-func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tversion, newCfg *shardcfg.ShardConfig) {
+// migrateShards is called in ChangeConfigTo and InitController. ver is the version of currentConfig value, for CAS Put.
+// fromRecovery says whether this function is invoked from recovery (InitController) or a brand-new ChangeConfigTo(),
+// if it's from ChangeConfigTo(). it should retry indefinitely. But if it's from recovery, it should exit delete when reaching max retry (reasons explained below)
+func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tversion, newCfg *shardcfg.ShardConfig, fromRecovery bool) {
 	var wg sync.WaitGroup
-	var anyFailed atomic.Bool
+	var isSuperseded atomic.Bool
 
 	// compare the oldCfg and newCfg configuration, find the difference, and act accordingly
 	for shid, oldGid := range oldCfg.Shards {
@@ -147,92 +150,85 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpc.Tver
 		// but the execution concerning one shard should be sequential (i.e. strictly follow step 1 to 3)
 		newGid := newCfg.Shards[shid]
 
-		// if the shard belongs to the same group, ignore
+		// if the shard belongs to the same group in both old config and new config, skip the migration.
 		if newGid == oldGid {
 			continue
 		}
-		debug.D5APrintf("controller start moving shard %v from %v to %v\n", shid, oldGid, newGid)
+		debug.D5APrintf("controller %v start moving shard %v from %v to %v\n", sck.controllerId, shid, oldGid, newGid)
 		wg.Add(1)
 		go func(shid shardcfg.Tshid, oldGid tester.Tgid, newGid tester.Tgid) {
 			defer wg.Done()
-
-			// each retry internally does len(servers) round-robin + 100ms backoff,
-			//
-			// this maximum retry num is introduced as there is a corner case as follows:
-			// t0: controller A migrates shards, but crashes soon at the last step - Put "currentConfig" to configStore,
-			//     meaning that the shard migration was completed but the currentConfig wasn't updated at the configStore.
-			// t1: some groups leave because after all shards of it have been removed.
-			// t2: controller B picks up the work undone from InitConfig().
-			//	   but since some groups have already left, it gets ErrRetryExhausted indefinitely.
-			//
-			// therefore we need maximum retries, if the maximum is reached, we can conclude that it's due to the group leave.
-			// because kv server is fault-tolerant with raft, in the case that the majority is dead isn't unlikely.
-			const shardOpRetries = 5
 
 			// 1. freeze the shard of shid in oldGid: oldGrp.freeze(shid, newCfg.Num)
 			oldGrpClerk := sck.clerk(oldCfg, oldGid)
 			var data []byte
 			var err rpc.Err = rpc.ErrRetryExhausted
-			for retries := 0; retries < shardOpRetries && err == rpc.ErrRetryExhausted; retries++ {
+			for err == rpc.ErrRetryExhausted {
 				data, err = oldGrpClerk.FreezeShard(shid, newCfg.Num)
-				debug.D5APrintf("controller -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", shid, newCfg.Num, oldGid, err)
+				debug.D5APrintf("controller %v -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", sck.controllerId, shid, newCfg.Num, oldGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
-						anyFailed.Store(true)
+						isSuperseded.Store(true)
 						return
 					}
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond) // back off a few as it may be in election
 				}
-			}
-			if err == rpc.ErrRetryExhausted {
-				debug.D5APrintf("controller -FreezeShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
-				anyFailed.Store(true)
-				return
 			}
 
 			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
 			newGrpClerk := sck.clerk(newCfg, newGid)
 			err = rpc.ErrRetryExhausted // set to ErrRetryExhausted to trigger action
-			for retries := 0; retries < shardOpRetries && err == rpc.ErrRetryExhausted; retries++ {
+			for err == rpc.ErrRetryExhausted {
 				err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
-				debug.D5APrintf("controller -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", shid, len(data), newCfg.Num, newGid, err)
+				debug.D5APrintf("controller %v -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, len(data), newCfg.Num, newGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
-						anyFailed.Store(true)
+						isSuperseded.Store(true)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
 				}
-			}
-			if err == rpc.ErrRetryExhausted {
-				debug.D5APrintf("controller -InstallShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
-				anyFailed.Store(true)
-				return
 			}
 
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
+
+			// there is a corner case to consider if the parameter fromRecovery is true (meaning that this function isn't invoked in ChangeConfigTo() but in controller initialisation)
+			//
+			// t0: controller A migrates shards, but crashes soon at the last step - Put "currentConfig" to configStore,
+			//     meaning that the shard migration was completed but the currentConfig wasn't updated in the configStore. currentConfig < nextConfig
+			// t1: some groups leave because after all shards of them have been removed.
+			// t2: controller B picks up the work undone from InitConfig().
+			//	   but since some groups have already left, it gets ErrRetryExhausted indefinitely.
+			//
+			// therefore we need a maximum of retry numbers, if the maximum is reached, we can conclude that it's due to the group leave.
+			// because kv server is fault-tolerant with raft, the case that the majority is dead isn't likely to happen.
+
 			err = rpc.ErrRetryExhausted // set to ErrRetryExhausted to trigger action
-			for retries := 0; retries < shardOpRetries && err == rpc.ErrRetryExhausted; retries++ {
+			maxAttempts := 5
+			attempts := 0
+			for err == rpc.ErrRetryExhausted {
+
 				err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
-				debug.D5APrintf("controller -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", shid, newCfg.Num, newGid, err)
+				debug.D5APrintf("controller %v -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, newCfg.Num, newGid, err)
 				if err == rpc.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
-						anyFailed.Store(true)
+						isSuperseded.Store(true)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
 				}
+				attempts++
+				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left
+					break
+				}
 			}
-			if err == rpc.ErrRetryExhausted {
-				debug.D5APrintf("controller -DeleteShard(shard:%v) gave up after %v retries\n", shid, shardOpRetries)
-				anyFailed.Store(true)
-				return
-			}
+			// check if the group is removed from the new
+
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}
 	wg.Wait()
 
-	if anyFailed.Load() {
+	if isSuperseded.Load() { // if shard migration fails at any stage, don't save newCfg to configStore !
 		return
 	}
 

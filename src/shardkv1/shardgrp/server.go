@@ -65,7 +65,7 @@ type KVServer struct {
 	cfgNumByShid  map[shardcfg.Tshid]shardcfg.Tnum
 	shardStatuses [shardcfg.NShards]ShardStatus
 	shardClients  [shardcfg.NShards]map[uint64]struct{} // record which clients have done operation on the shard
-	rwMu          sync.Mutex
+	rwMu          sync.RWMutex
 }
 
 func (kv *KVServer) DoOp(req any) any {
@@ -78,8 +78,8 @@ func (kv *KVServer) DoOp(req any) any {
 	case rpc.GetArgs:
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
+		kv.rwMu.RLock()
+		defer kv.rwMu.RUnlock()
 
 		// check whether it's serving for the shard
 		if kv.shardStatuses[shid] == Absent {

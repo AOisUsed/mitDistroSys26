@@ -103,7 +103,7 @@ func (rsm *RSM) nextOpId() int64 {
 
 func (rsm *RSM) readApply() {
 	for applyMsg := range rsm.applyCh {
-		// whenever getting new apply message, meaning that either a command or a snapshot has been commited, safe to execute on the server
+		// whenever getting new apply message, meaning that either a command or a snapshot has been committed, safe to execute on the server
 		if applyMsg.CommandValid { // if it's a command, let the respective Submit() rpc knows about it
 			commandId := applyMsg.CommandIndex
 			var applyRes applyResult

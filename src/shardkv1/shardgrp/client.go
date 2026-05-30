@@ -29,8 +29,8 @@ func MakeClerk(clnt *tester.Clnt, servers []string, clientId uint64) *Clerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	ck.leader = 0
 	ck.clientId = clientId
-	ck.maxAttempts = len(ck.servers) //  try one round + one time
-	ck.backoffTime = 100 * time.Millisecond
+	ck.maxAttempts = len(ck.servers) * 2 //  try one round + one time
+	ck.backoffTime = 200 * time.Millisecond
 	return ck
 }
 
@@ -247,7 +247,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				return reply.Err
 			case rpc.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined error: %v", reply.Err))
+				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
