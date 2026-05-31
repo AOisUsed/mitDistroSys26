@@ -5,13 +5,10 @@ package rpc
 // simulates a network that can lose requests, lose replies,
 // delay messages, and entirely disconnect particular hosts.
 //
-// we will use the original labrpc.go to test your code for grading.
-// so, while you can modify this code to help you debug, please
-// test against the original before submitting.
 //
 // adapted from Go net/rpc/server.go.
 //
-// sends labgob-encoded values to ensure that RPCs
+// sends testgob-encoded values to ensure that RPCs
 // don't include references to program objects.
 //
 // net := MakeNetwork() -- holds network, clients, servers.
@@ -48,7 +45,7 @@ package rpc
 //   pass svc to srv.AddService()
 //
 
-import "kvstore/gob"
+import "kvstore/testgob"
 import "bytes"
 import "reflect"
 import "sync"
@@ -79,7 +76,7 @@ type replyMsg struct {
 
 func Marshall(args interface{}) []byte {
 	qb := new(bytes.Buffer)
-	qe := gob.NewEncoder(qb)
+	qe := testgob.NewEncoder(qb)
 	if err := qe.Encode(args); err != nil {
 		log.Fatalf("Marshall fatal: encode arg err %v", err)
 	}
@@ -88,7 +85,7 @@ func Marshall(args interface{}) []byte {
 
 func Unmarshall(b []byte, repl interface{}) {
 	rb := bytes.NewBuffer(b)
-	rd := gob.NewDecoder(rb)
+	rd := testgob.NewDecoder(rb)
 	if err := rd.Decode(repl); err != nil {
 		log.Fatalf("Unmarshall fatal: decode reply err %v", err)
 	}
@@ -616,7 +613,7 @@ func (svc *Service) dispatch(methname string, req reqMsg) replyMsg {
 
 		// encode the reply.
 		rb := new(bytes.Buffer)
-		re := gob.NewEncoder(rb)
+		re := testgob.NewEncoder(rb)
 		re.EncodeValue(replyv)
 
 		return replyMsg{true, rb.Bytes()}

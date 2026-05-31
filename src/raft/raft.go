@@ -15,11 +15,10 @@ import (
 	"time"
 
 	"kvstore/debug"
-	"kvstore/gob"
-	//	"kvstore/labgob"
 	"kvstore/raftapi"
 	"kvstore/rpc"
 	"kvstore/tester"
+	"kvstore/testgob"
 )
 
 type LogEntry struct {
@@ -107,7 +106,7 @@ func (rf *Raft) GetState() (int, bool) {
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
+	e := testgob.NewEncoder(w)
 	persistedState := PersistedState{
 		CurrentTerm:   rf.CurrentTerm,
 		VotedFor:      rf.VotedFor,
@@ -129,7 +128,7 @@ func (rf *Raft) readPersist(raftStateData []byte, snapshotData []byte) {
 		return
 	}
 	r := bytes.NewBuffer(raftStateData)
-	d := gob.NewDecoder(r)
+	d := testgob.NewDecoder(r)
 	var raftState PersistedState
 	err := d.Decode(&raftState)
 	if err != nil {

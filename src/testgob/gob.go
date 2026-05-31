@@ -1,4 +1,4 @@
-package gob
+package testgob
 
 //
 // trying to send non-capitalized fields over RPC produces a range of

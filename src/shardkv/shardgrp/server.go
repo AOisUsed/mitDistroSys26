@@ -6,17 +6,13 @@ import (
 	"sync"
 
 	"kvstore/debug"
-	"kvstore/gob"
 	"kvstore/kvraft/rsm"
 	"kvstore/kvsrv/rpcapi"
 	"kvstore/rpc"
 	"kvstore/shardkv/shardcfg"
 	"kvstore/shardkv/shardgrp/shardrpc"
 	"kvstore/tester"
-)
-
-const (
-	ENVKEY = "65840ENV"
+	"kvstore/testgob"
 )
 
 type VersionedValue struct {
@@ -56,7 +52,6 @@ type KVServer struct {
 	rsm *rsm.RSM
 	gid tester.Tgid
 
-	// Your code here
 	// for kv
 	kvm               [shardcfg.NShards]map[string]*VersionedValue
 	lastPutByClientId map[uint64]*LastPut
@@ -65,7 +60,9 @@ type KVServer struct {
 	cfgNumByShid  map[shardcfg.Tshid]shardcfg.Tnum
 	shardStatuses [shardcfg.NShards]ShardStatus
 	shardClients  [shardcfg.NShards]map[uint64]struct{} // record which clients have done operation on the shard
-	rwMu          sync.RWMutex
+
+	//rwMutex
+	rwMu sync.RWMutex
 }
 
 func (kv *KVServer) DoOp(req any) any {
@@ -78,9 +75,6 @@ func (kv *KVServer) DoOp(req any) any {
 	case rpcapi.GetArgs:
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
-		kv.rwMu.RLock()
-		defer kv.rwMu.RUnlock()
-
 		// check whether it's serving for the shard
 		if kv.shardStatuses[shid] == Absent {
 			reply = rpcapi.GetReply{
@@ -109,9 +103,6 @@ func (kv *KVServer) DoOp(req any) any {
 	case rpcapi.PutArgs:
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
-
 		// check whether it's serving for the shard
 		if kv.shardStatuses[shid] != Serving {
 			reply = rpcapi.PutReply{
@@ -174,8 +165,6 @@ func (kv *KVServer) DoOp(req any) any {
 	// == FreezeShard == //
 	case shardrpc.FreezeShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp Freeze(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 		reqCfgNum := request.Num
@@ -223,8 +212,6 @@ func (kv *KVServer) DoOp(req any) any {
 	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
 		// check config Num
 		localCfgNum := kv.cfgNumByShid[request.Shard]
 		if request.Num > localCfgNum {
@@ -262,9 +249,6 @@ func (kv *KVServer) DoOp(req any) any {
 	// == DeleteShard == //
 	case shardrpc.DeleteShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp DeleteShard(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-
-		kv.rwMu.Lock()
-		defer kv.rwMu.Unlock()
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 
@@ -309,7 +293,7 @@ func (kv *KVServer) DoOp(req any) any {
 // marshallShardState into bytes
 func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
+	e := testgob.NewEncoder(w)
 	lastPutByClientId := make(map[uint64]*LastPut)
 	Clnts := kv.shardClients[shid] // clients that did Ops on this shard
 	for client := range Clnts {    // we only care about the lastPut of clients that worked on this shard
@@ -335,7 +319,7 @@ func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 // need to used within Write Lock
 func (kv *KVServer) installShardState(shid shardcfg.Tshid, shardstate []byte) {
 	r := bytes.NewBuffer(shardstate)
-	d := gob.NewDecoder(r)
+	d := testgob.NewDecoder(r)
 	var shardState ShardState
 	err := d.Decode(&shardState)
 	if err != nil {
@@ -431,7 +415,7 @@ func (kv *KVServer) Snapshot() []byte {
 
 	// encode copied snapshot
 	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
+	e := testgob.NewEncoder(w)
 	err := e.Encode(snapshot)
 	if err != nil {
 		log.Fatalf("Fatal: %v", err)
@@ -447,7 +431,7 @@ func (kv *KVServer) Restore(data []byte) {
 
 	debug.D5APrintf("shardkvserver %v: Restore()\n", kv.me)
 	r := bytes.NewBuffer(data)
-	d := gob.NewDecoder(r)
+	d := testgob.NewDecoder(r)
 	var snapshot SnapshotData
 	err := d.Decode(&snapshot)
 	if err != nil {
@@ -473,9 +457,6 @@ func (kv *KVServer) Restore(data []byte) {
 }
 
 func (kv *KVServer) Get(args *rpcapi.GetArgs, reply *rpcapi.GetReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a GetReply: rep.(rpc.GetReply)
 
 	rpcErr, rep := kv.rsm.Submit(*args)
 	if rpcErr == rpcapi.OK { // if rpc is ok, meaning rsm used DoOp(), just use the result DoOp() returns
@@ -488,9 +469,6 @@ func (kv *KVServer) Get(args *rpcapi.GetArgs, reply *rpcapi.GetReply) {
 }
 
 func (kv *KVServer) Put(args *rpcapi.PutArgs, reply *rpcapi.PutReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a PutReply: rep.(rpc.PutReply)
 
 	//log.Printf("shardkvserver %v Put called", kv.me)
 	//defer log.Printf("server %v Put done", kv.me)
@@ -507,7 +485,6 @@ func (kv *KVServer) Put(args *rpcapi.PutArgs, reply *rpcapi.PutReply) {
 // Freeze the specified shard (i.e., reject future Get/Puts for this
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
-	// Your code here
 	rpcErr, rep := kv.rsm.Submit(*args)
 	if rpcErr == rpcapi.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
 		*reply = rep.(shardrpc.FreezeShardReply)
@@ -521,8 +498,6 @@ func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.
 // Install the supplied state for the specified shard.
 // DoOp() only returns OK or WrongLeader
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
-	// Your code here
-
 	debug.D5APrintf("shardkvserver %v <-InstallShard(shard: %v, stateSize: %v, Num: %v) \n", kv.me, args.Shard, len(args.State), args.Num)
 	rpcErr, rep := kv.rsm.Submit(*args)
 	if rpcErr == rpcapi.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
@@ -536,7 +511,6 @@ func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrp
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
-	// Your code here
 	rpcErr, rep := kv.rsm.Submit(*args)
 	if rpcErr == rpcapi.OK { // if rpc is ok, meaning rsm called DoOp(), just use the result DoOp() returns
 		*reply = rep.(shardrpc.DeleteShardReply)
@@ -550,17 +524,17 @@ func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.
 // StartShardServerGrp() and MakeRSM() must return quickly, so they should
 // start goroutines for any long-running work.
 func StartServerShardGrp(servers []*rpc.ClientEnd, gid tester.Tgid, me int, persister *tester.Persister, maxraftstate int) []any {
-	// call labgob.Register on structures you want
+	// call testgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	gob.Register(rpcapi.PutArgs{})
-	gob.Register(rpcapi.GetArgs{})
-	gob.Register(rpcapi.PutReply{})
-	gob.Register(rpcapi.GetReply{})
-	gob.Register(shardrpc.FreezeShardArgs{})
-	gob.Register(shardrpc.InstallShardArgs{})
-	gob.Register(shardrpc.DeleteShardArgs{})
-	gob.Register(rsm.Op{})
-	gob.Register(ShardState{})
+	testgob.Register(rpcapi.PutArgs{})
+	testgob.Register(rpcapi.GetArgs{})
+	testgob.Register(rpcapi.PutReply{})
+	testgob.Register(rpcapi.GetReply{})
+	testgob.Register(shardrpc.FreezeShardArgs{})
+	testgob.Register(shardrpc.InstallShardArgs{})
+	testgob.Register(shardrpc.DeleteShardArgs{})
+	testgob.Register(rsm.Op{})
+	testgob.Register(ShardState{})
 
 	// initialisations:
 
