@@ -813,7 +813,7 @@
     ];
 
     function getGroupColor(gid) {
-        return COLORS[(gid - 1) % COLORS.length];
+        return COLORS[(gid) % COLORS.length];
     }
 
     function getNodeStatus(srv) {
@@ -835,7 +835,7 @@
         for (const g of groups) {
             const opt = document.createElement('option');
             opt.value = g.gid;
-            opt.textContent = `组 ${g.gid} (${g.servers.length} 节点)`;
+            opt.textContent = g.gid === 0 ? `ConfigStore (${g.servers.length} 节点)` : `组 ${g.gid} (${g.servers.length} 节点)`;
             sel.appendChild(opt);
         }
         if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
@@ -853,7 +853,7 @@
         for (const g of groups) {
             const opt = document.createElement('option');
             opt.value = g.gid;
-            opt.textContent = `组 ${g.gid} (${g.nShards} 分片)`;
+            opt.textContent = g.gid === 0 ? `ConfigStore (${g.nShards} 分片)` : `组 ${g.gid} (${g.nShards} 分片)`;
             sel.appendChild(opt);
         }
         if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
@@ -907,11 +907,11 @@
             html += `
                 <div class="group-card" style="border-left: 3px solid ${color};">
                     <div class="group-header">
-                        <span class="gid" style="color:${color};">组 ${group.gid} <span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span></span>
+                        <span class="gid" style="color:${color};">${group.gid === 0 ? 'ConfigStore' : `组 ${group.gid}`} <span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span></span>
                         <span class="ops">
                             <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
                                     onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
-                            <button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">Leave</button>
+                            ${group.gid === 0 ? '' : `<button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">Leave</button>`}
                         </span>
                     </div>
             `;

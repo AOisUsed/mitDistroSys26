@@ -44,6 +44,12 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 	return sck
 }
 
+// SetConfigStore replaces the configStore clerk (e.g., with a kvraft clerk for Raft-based config store).
+// The configStoreClerk must implement kvtest.IKVClerk (Get/Put methods).
+func (sck *ShardCtrler) SetConfigStore(c kvtest.IKVClerk) {
+	sck.configStore = c
+}
+
 // The tester calls InitController() before starting a new
 // controller. In part A, this method doesn't need to do anything. In
 // B and C, this method implements recovery.

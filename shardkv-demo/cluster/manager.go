@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"kvstore/kvraft"
 	"kvstore/kvsrv/rpcapi"
 	"kvstore/kvtest"
 	"kvstore/shardkv"
@@ -28,6 +29,10 @@ type ClusterManager struct {
 	left         map[tester.Tgid]bool         // 已离开的组（防止重复 Leave 导致 nil panic）
 	isolated     map[tester.Tgid]map[int]bool // 被网络隔离的节点
 	chaosMonkeys []*ChaosMonkey               // 活跃的混沌猴子
+
+	// cachedConfig 缓存最后一次成功查询的 config，当 configStore（kvraft）无响应时使用
+	cachedConfig     *shardcfg.ShardConfig
+	cachedNextConfig *shardcfg.ShardConfig
 }
 
 // NewClusterManager 创建一个新的集群管理器
@@ -50,17 +55,22 @@ func (cm *ClusterManager) getArgs() []string {
 	return []string{}
 }
 
-// Init 初始化集群，包括 config store 和初始 shard group
+// Init 初始化集群，包括 config store（kvraft Raft 组）和初始 shard group
 func (cm *ClusterManager) Init() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// 创建 tester Config（使用 kvsrv 作为 config store）
-	cm.cfg = tester.MakeDemoConfig("kvsrv", []string{})
+	// 创建 tester Config，使用 kvraft（3 节点 Raft 组）作为 config store
+	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, 3)
 
 	// 创建 shard controller
 	cm.clnt = cm.cfg.MakeClient()
 	cm.ctl = shardctrler.MakeShardCtrler(cm.clnt)
+
+	// 用 kvraft clerk 替换 ShardCtrler 的 configStore（连接 GRP0 的 3 节点 Raft 组）
+	grp0Srvs := cm.cfg.Group(tester.GRP0).SrvNames()
+	kvraftCk := kvraft.MakeClerk(cm.clnt, grp0Srvs)
+	cm.ctl.SetConfigStore(kvraftCk)
 
 	// 初始化 config store 的配置
 	scfg := shardcfg.MakeShardConfig()
@@ -70,13 +80,17 @@ func (cm *ClusterManager) Init() error {
 		shardcfg.Gid1: cm.cfg.Group(shardcfg.Gid1).SrvNames(),
 	})
 	cm.ctl.InitConfig(scfg)
+
+	// 将 GRP0（configStore）和 Gid1 都加入管理，GRP0 也会显示在拓扑中，
+	// 并支持 kill/partition/chaos 等操作
+	cm.groups[tester.GRP0] = true
 	cm.groups[shardcfg.Gid1] = true
 
 	// 创建 shardkv clerk
 	cm.ck = shardkv.MakeClerk(cm.clnt, cm.ctl)
 
-	log.Printf("[Cluster] 初始化完成: Gid1=%v 拥有全部 %d 个 shard",
-		cm.cfg.Group(shardcfg.Gid1).SrvNames(), shardcfg.NShards)
+	log.Printf("[Cluster] 初始化完成: configStore(GRP0)=%v Gid1=%v 拥有全部 %d 个 shard",
+		grp0Srvs, cm.cfg.Group(shardcfg.Gid1).SrvNames(), shardcfg.NShards)
 	return nil
 }
 
@@ -115,23 +129,96 @@ func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 	return cm.cfg.Group(gid)
 }
 
-// Status 返回完整集群状态
+// tryQueryConfig 尝试查询 config，超时则使用缓存，确保不会阻塞 Status() 刷新节点状态。
+func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
+	type result struct {
+		cfg *shardcfg.ShardConfig
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ch <- result{cfg: cm.ctl.Query()}
+	}()
+	select {
+	case r := <-ch:
+		if r.cfg != nil {
+			cm.mu.Lock()
+			cm.cachedConfig = r.cfg
+			cm.mu.Unlock()
+		}
+		return r.cfg
+	case <-time.After(1 * time.Second):
+		cm.mu.Lock()
+		cached := cm.cachedConfig
+		cm.mu.Unlock()
+		if cached != nil {
+			log.Printf("[Status] configStore 超时，使用缓存的 config #%d", cached.Num)
+			return cached
+		}
+		log.Printf("[Status] configStore 超时且无缓存，返回 nil")
+		return nil
+	}
+}
+
+func (cm *ClusterManager) tryHasPendingMigration() bool {
+	ch := make(chan bool, 1)
+	go func() {
+		ch <- cm.ctl.HasPendingMigration()
+	}()
+	select {
+	case r := <-ch:
+		return r
+	case <-time.After(1 * time.Second):
+		return false
+	}
+}
+
+func (cm *ClusterManager) tryQueryNextConfig() *shardcfg.ShardConfig {
+	type result struct {
+		cfg *shardcfg.ShardConfig
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ch <- result{cfg: cm.ctl.QueryNext()}
+	}()
+	select {
+	case r := <-ch:
+		if r.cfg != nil {
+			cm.mu.Lock()
+			cm.cachedNextConfig = r.cfg
+			cm.mu.Unlock()
+		}
+		return r.cfg
+	case <-time.After(1 * time.Second):
+		cm.mu.Lock()
+		cached := cm.cachedNextConfig
+		cm.mu.Unlock()
+		return cached
+	}
+}
+
+// Status 返回完整集群状态。
+// 使用非阻塞查询：configStore（kvraft）无响应时使用缓存，但节点存活信息（GetConnected）始终是实时准确的。
 func (cm *ClusterManager) Status() *ClusterState {
-	// Query() 是 RPC 调用，在不可靠网络下可能延迟，
-	// 必须在锁外执行，否则所有需要 cm.mu 的操作（恢复、隔离等）会被阻塞。
-	cfg := cm.ctl.Query()
-	hasPending := cm.ctl.HasPendingMigration()
-	nextCfg := cm.ctl.QueryNext()
+	// Query() 是 RPC 调用，使用超时保护避免阻塞。
+	// cm.mu 在 goroutine 中不持有，以免死锁。
+	cfg := cm.tryQueryConfig()
+	hasPending := cm.tryHasPendingMigration()
+	nextCfg := cm.tryQueryNextConfig()
 
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+
+	if cfg == nil {
+		// configStore 完全无响应且无缓存，退化为仅显示节点状态
+		cfg = shardcfg.MakeShardConfig()
+	}
 
 	state := &ClusterState{
 		Config:              cfg,
 		HasPendingMigration: hasPending,
 		PendingConfigNum:    nextCfg.Num,
 	}
-	// 只展示 cm.groups 中追踪的组（排除 configStore GRP0，也不展示"幽灵组"）
+	// 展示 cm.groups 中追踪的所有组（包括 configStore GRP0）
 	for gid := range cm.groups {
 		sg := cm.cfg.Group(gid)
 		if sg == nil {
@@ -147,7 +234,7 @@ func (cm *ClusterManager) Status() *ClusterState {
 				gs.NShards++
 			}
 		}
-		// Server states
+		// Server states — 实时从 GetConnected() 获取，不受 configStore 影响
 		gs.Servers = make([]ServerState, sg.N())
 		connected := sg.GetConnected()
 		isoMap := cm.isolated[gid]
@@ -177,11 +264,6 @@ func (cm *ClusterManager) Stop() {
 		if sg != nil {
 			sg.Shutdown()
 		}
-	}
-	// Cleanup the config store group (GRP0)
-	grp0 := cm.cfg.Group(tester.GRP0)
-	if grp0 != nil {
-		grp0.Shutdown()
 	}
 	log.Printf("[Cluster] 所有组已关闭")
 }
@@ -672,9 +754,13 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	return true, ""
 }
 
-// QueryConfig 查询当前 shard 配置
+// QueryConfig 查询当前 shard 配置，使用非阻塞 tryQueryConfig（configStore 无响应时返回缓存）
 func (cm *ClusterManager) QueryConfig() *shardcfg.ShardConfig {
-	return cm.ctl.Query()
+	cfg := cm.tryQueryConfig()
+	if cfg == nil {
+		return shardcfg.MakeShardConfig()
+	}
+	return cfg
 }
 
 // InitController 初始化控制器（用于恢复）

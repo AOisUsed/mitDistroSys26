@@ -66,7 +66,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		state = r.state
-	case <-time.After(20 * time.Second):
+	case <-time.After(5 * time.Second):
 		log.Printf("[Status] 超时: configStore 无响应（可能网络不可靠）")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询集群状态超时（网络不可靠或 configStore 无响应）",
@@ -95,7 +95,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		state = r.state
-	case <-time.After(20 * time.Second):
+	case <-time.After(5 * time.Second):
 		log.Printf("[StatusTree] 超时: configStore 无响应")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询集群拓扑超时",
@@ -590,7 +590,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	select {
 	case r := <-ch:
 		cfg = r.cfg
-	case <-time.After(20 * time.Second):
+	case <-time.After(5 * time.Second):
 		log.Printf("[Config] 超时: configStore 无响应")
 		writeJSON(w, map[string]any{
 			"err": "ErrTimeout", "message": "查询配置超时（网络不可靠或 configStore 无响应）",

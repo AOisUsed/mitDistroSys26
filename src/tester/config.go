@@ -63,12 +63,18 @@ func MakeConfig(t *testing.T, n int, reliable bool, prog string, args []string) 
 // It does not require a *testing.T, so it can be used from a regular main() binary.
 // NOTE: Do not call Config methods that use the nil t field (Fatalf, CheckTimeout, Begin, End, Cleanup).
 func MakeDemoConfig(prog string, args []string) *Config {
+	return MakeDemoConfigN(prog, args, 1)
+}
+
+// MakeDemoConfigN creates a Config with a specified number of servers for GRP0.
+// Useful for demo scenarios where the config store should be replicated (e.g., kvraft with 3 nodes).
+func MakeDemoConfigN(prog string, args []string, n int) *Config {
 	cfg := &Config{}
 	cfg.net = rpc.MakeNetwork()
 	cfg.endName = Randstring(20)
 	cfg.trpc = newTesterRPCSrv(cfg)
 	cfg.Groups = newGroups(cfg.net, prog, args, cfg.endName)
-	cfg.MakeGroupStart(prog, args, GRP0, 1)
+	cfg.MakeGroupStart(prog, args, GRP0, n)
 	cfg.Clnts = makeClnts(cfg.net)
 	cfg.start = time.Now()
 	cfg.net.Reliable(true)
