@@ -189,7 +189,7 @@ func (ts *Test) shutdownLeader(ck *kvtest.TestClerk, gid tester.Tgid) int {
 // Get()s don't succeed.
 func (ts *Test) checkShutdownSharding(down tester.Tgid, ka []string, va []string) {
 	const NSEC = 2
-	const NWKR = 10 // limit concurrent goroutines to avoid gob contention
+	const NWKR = 30 // limit concurrent goroutines to avoid gob contention
 
 	ts.Group(down).Shutdown()
 
