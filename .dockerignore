@@ -1,0 +1,16 @@
+# Git
+.git
+.gitignore
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Documentation
+docs/
+*.md
+

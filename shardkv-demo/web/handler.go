@@ -4,18 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
-
-	"shardkv-demo/cluster"
 
 	"kvstore/kvsrv/rpcapi"
 	"kvstore/rpc"
 	"kvstore/shardkv/shardcfg"
 	"kvstore/tester"
+	"shardkv-demo/cluster"
 )
 
 type Handler struct {
@@ -139,60 +136,6 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 
 // ErrTimeoutStr 定义超时字符串常量，与 rpcapi.Err 同类型
 const ErrTimeoutStr rpcapi.Err = "ErrTimeout"
-
-// timeoutGet 对返回 (string, Tversion, Err) 的函数做超时保护
-func timeoutGet(fn func() (string, rpcapi.Tversion, rpcapi.Err), timeout time.Duration) (string, rpcapi.Tversion, rpcapi.Err) {
-	type getRes struct {
-		val     string
-		version rpcapi.Tversion
-		err     rpcapi.Err
-	}
-	ch := make(chan getRes, 1)
-	go func() {
-		v, ver, e := fn()
-		ch <- getRes{v, ver, e}
-	}()
-	select {
-	case r := <-ch:
-		return r.val, r.version, r.err
-	case <-time.After(timeout):
-		return "", 0, ErrTimeoutStr
-	}
-}
-
-// timeoutPut 对返回 rpcapi.Err 的函数做超时保护
-func timeoutPut(fn func() rpcapi.Err, timeout time.Duration) rpcapi.Err {
-	ch := make(chan rpcapi.Err, 1)
-	go func() {
-		ch <- fn()
-	}()
-	select {
-	case err := <-ch:
-		return err
-	case <-time.After(timeout):
-		return ErrTimeoutStr
-	}
-}
-
-// timeoutAny 对任意返回 rpcapi.Err 的只读查询做超时保护
-func timeoutQuery[T any](fn func() (T, rpcapi.Err), timeout time.Duration) (T, rpcapi.Err) {
-	type qRes struct {
-		val T
-		err rpcapi.Err
-	}
-	ch := make(chan qRes, 1)
-	go func() {
-		v, e := fn()
-		ch <- qRes{v, e}
-	}()
-	select {
-	case r := <-ch:
-		return r.val, r.err
-	case <-time.After(timeout):
-		var zero T
-		return zero, ErrTimeoutStr
-	}
-}
 
 // --- API: KV 操作 (带超时保护) ---
 
@@ -807,16 +750,6 @@ func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// randomString 生成 n 位随机字母（小写）
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
-}
-
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -879,21 +812,4 @@ func (h *Handler) HandleKV(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-// parseGIDAndSrv parses "gid,srv" from a query string
-func parseGIDAndSrv(s string) (int, int, error) {
-	parts := strings.Split(s, ",")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid format: expected gid,srv")
-	}
-	gid, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid gid: %v", err)
-	}
-	srv, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid srv: %v", err)
-	}
-	return gid, srv, nil
 }
