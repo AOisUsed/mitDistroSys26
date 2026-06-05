@@ -3,3 +3,12 @@ pkg/
 .idea
 .github
 .DS_Store
+
+# 忽略编译产物
+src/main/kvsrv
+src/main/kvraft
+src/main/shardgrp
+src/main/raft
+
+# shardkv-demo 本身的二进制
+shardkv-demo/shardkv-demo
