@@ -7,11 +7,7 @@
 ---
 
 ## 快速开始
-
-
-
 ### 方式一：使用 Docker 启动
-
 ```bash
 # 构建镜像
 make docker
@@ -19,7 +15,6 @@ make docker
 # 启动容器（访问 http://localhost:8080）
 make run
 ```
-
 ### 方式二：本地启动
 #### 前置条件
 
@@ -37,10 +32,11 @@ make run
 
 ```bash
 cd src
-make shardkv          # 全部 ShardKV 测试
 make raft             # Raft 测试
+make shardkv          # 全部 ShardKV 测试
 make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
 ```
+
 ---
 
 ## 主要特性
@@ -147,7 +143,7 @@ make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
 
 适用于测试系统在网络故障下的容错能力 
 
-（注：可以通过修改 [rpc 包](src/rpc/rpc.go) 内`DROPRATE`, `SHORTDELAY`,`LONGDELAY`来改变丢包率和延迟)
+> 注：可以通过修改 [src/rpc/rpc.go](src/rpc/rpc.go) 内`DROPRATE`, `SHORTDELAY`, `LONGDELAY`来改变丢包率和延迟
 
 ### CAS 并发竞赛
 
