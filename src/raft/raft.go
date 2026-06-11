@@ -706,7 +706,6 @@ func (rf *Raft) replicateToFollower(i int) {
 		newMatchIndex := args.PrevLogIndex + len(args.Entries)
 		if rf.matchIndex[i] >= newMatchIndex {
 			//D3BPrintf("%v-AppendEntries->%v till %v, without updating matchIndex", rf.me, i, rf.matchIndex[i])
-			rf.persist()
 			rf.mu.Unlock()
 			return
 		}
