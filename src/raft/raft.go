@@ -532,19 +532,22 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
+// replicationWorker listens for signal, and synchronise specific follower (by append log entries or sending snapshot)
+func (rf *Raft) replicationWorker(i int) {
+	for {
+		// if the follower is ready to replicate log, trigger synchroniseFollower
+		<-rf.replicateReadyChs[i]
+		rf.synchroniseFollower(i)
+	}
+}
+
 func (rf *Raft) replicationDispatcher() {
-	//this part spawn long-running goroutines for each follower to listen for log replication requests
+	//this part spawns long-running replicationWorkers for each follower to listen for log replication requests
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
 		}
-		// if the follower is ready to replicate log, trigger synchroniseFollower
-		go func(i int) {
-			for {
-				<-rf.replicateReadyChs[i]
-				rf.synchroniseFollower(i)
-			}
-		}(i)
+		go rf.replicationWorker(i)
 	}
 
 	//this part recurringly listens for logAppendedCh and notify each replicateReadyCh to execute synchroniseFollower
