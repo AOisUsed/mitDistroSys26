@@ -67,7 +67,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 				return reply.Value, reply.Version, reply.Err
 			case rpcapi.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
+				panic(fmt.Sprintf("Get: undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
@@ -117,7 +117,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 				return reply.Err
 			case rpcapi.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
+				panic(fmt.Sprintf("Put: undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
@@ -164,7 +164,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 				return reply.State, reply.Err
 			case rpcapi.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
+				panic(fmt.Sprintf("FreezeShard: undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
@@ -206,7 +206,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				return reply.Err
 			case rpcapi.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
+				panic(fmt.Sprintf("InstallShard: undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
@@ -247,7 +247,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 				return reply.Err
 			case rpcapi.ErrWrongLeader:
 			default:
-				panic(fmt.Sprintf("undefined rpc error type: %v", reply.Err))
+				panic(fmt.Sprintf("DeleteShard: undefined rpc error type: %v", reply.Err))
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
