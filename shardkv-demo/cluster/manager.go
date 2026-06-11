@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"shardkv-demo/config"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 // ClusterManager 管理集群生命周期
 type ClusterManager struct {
+	dcfg         config.DemoConfig // 集群启动配置
 	mu           sync.Mutex
 	cfg          *tester.Config
 	ctl          *shardctrler.ShardCtrler
@@ -35,9 +37,10 @@ type ClusterManager struct {
 	cachedNextConfig *shardcfg.ShardConfig
 }
 
-// NewClusterManager 创建一个新的集群管理器
-func NewClusterManager() *ClusterManager {
+// NewClusterManager 创建一个新的集群管理器，使用给定配置
+func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 	cm := &ClusterManager{
+		dcfg:         dcfg,
 		nextGid:      shardcfg.Gid1 + 1, // Gid1(1) 已被 Init 使用
 		groups:       make(map[tester.Tgid]bool),
 		left:         make(map[tester.Tgid]bool),
@@ -56,41 +59,89 @@ func (cm *ClusterManager) getArgs() []string {
 }
 
 // Init 初始化集群，包括 config store（kvraft Raft 组）和初始 shard group
+// 使用 cm.dcfg 中配置的组数和节点数
+//
+// 初始化流程：
+//  1. 启动所有配置的 shard group 进程
+//  2. configStore 写入初始配置：所有 shard → Gid1（与真实数据位置一致）
+//  3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard 到各组分担
 func (cm *ClusterManager) Init() error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
-	// 创建 tester Config，使用 kvraft（3 节点 Raft 组）作为 config store
-	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, 3)
+	// 从配置中读取参数
+	nsrv := cm.dcfg.Cluster.Nsrv
+	if nsrv <= 0 {
+		nsrv = 3
+	}
+	reliable := cm.dcfg.Cluster.Reliable
+
+	// 创建 tester Config，使用 kvraft（nsrv 节点 Raft 组）作为 config store
+	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, nsrv)
+	cm.cfg.SetReliable(reliable)
 
 	// 创建 shard controller
 	cm.clnt = cm.cfg.MakeClient()
 	cm.ctl = shardctrler.MakeShardCtrler(cm.clnt)
 
-	// 用 kvraft clerk 替换 ShardCtrler 的 configStore（连接 GRP0 的 3 节点 Raft 组）
+	// 用 kvraft clerk 替换 ShardCtrler 的 configStore（连接 GRP0 的 nsrv 节点 Raft 组）
 	grp0Srvs := cm.cfg.Group(tester.GRP0).SrvNames()
 	kvraftCk := kvraft.MakeClerk(cm.clnt, grp0Srvs)
 	cm.ctl.SetConfigStore(kvraftCk)
 
-	// 初始化 config store 的配置
-	scfg := shardcfg.MakeShardConfig()
+	// 构建初始组映射
+	initGroups := cm.dcfg.Groups
+	if len(initGroups) == 0 {
+		initGroups = []config.GroupConfig{{Gid: int(shardcfg.Gid1), Servers: nsrv}}
+	}
+
+	// 1. 启动所有配置的 shard group 进程
 	args := cm.getArgs()
-	cm.cfg.MakeGroupStart("shardgrp", args, shardcfg.Gid1, 3)
-	scfg.JoinBalance(map[tester.Tgid][]string{
-		shardcfg.Gid1: cm.cfg.Group(shardcfg.Gid1).SrvNames(),
-	})
+	servers := make(map[tester.Tgid][]string)
+	for _, g := range initGroups {
+		gid := tester.Tgid(g.Gid)
+		srvN := g.Servers
+		if srvN <= 0 {
+			srvN = nsrv
+		}
+		cm.cfg.MakeGroupStart("shardgrp", args, gid, srvN)
+		servers[gid] = cm.cfg.Group(gid).SrvNames()
+		cm.groups[gid] = true
+	}
+
+	// 2. 初始配置：所有 shard → Gid1（与真实数据位置一致）
+	//    不使用 JoinBalance，因为那会声称"shard 已均匀分布"但实际上从未迁移。
+	//    先 Join 添加 Gid1 到 Groups，再 Rebalance 将所有 shard 分配给 Gid1。
+	scfg := shardcfg.MakeShardConfig()
+	scfg.Join(map[tester.Tgid][]string{shardcfg.Gid1: servers[shardcfg.Gid1]})
+	scfg.Rebalance() // 将全部 12 个 shard 分配给唯一的组 Gid1
 	cm.ctl.InitConfig(scfg)
 
-	// 将 GRP0（configStore）和 Gid1 都加入管理，GRP0 也会显示在拓扑中，
-	// 并支持 kill/partition/chaos 等操作
+	// GRP0 也加入管理
 	cm.groups[tester.GRP0] = true
-	cm.groups[shardcfg.Gid1] = true
 
-	// 创建 shardkv clerk
+	cm.mu.Unlock()
+
+	// 3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard
+	//    必须在锁外执行（涉及 RPC）
+	for _, g := range initGroups {
+		gid := tester.Tgid(g.Gid)
+		if gid == shardcfg.Gid1 {
+			continue
+		}
+		cm.initJoinGroup(gid, servers[gid])
+	}
+
+	// 创建 shardkv clerk（在所有迁移完成后，才能正确路由到各组的 shard）
+	cm.mu.Lock()
 	cm.ck = shardkv.MakeClerk(cm.clnt, cm.ctl)
+	cm.mu.Unlock()
 
-	log.Printf("[Cluster] 初始化完成: configStore(GRP0)=%v Gid1=%v 拥有全部 %d 个 shard",
-		grp0Srvs, cm.cfg.Group(shardcfg.Gid1).SrvNames(), shardcfg.NShards)
+	// 构建日志描述
+	gidDescs := make([]string, 0, len(initGroups))
+	for _, g := range initGroups {
+		gidDescs = append(gidDescs, fmt.Sprintf("Gid%d=%v", g.Gid, servers[tester.Tgid(g.Gid)]))
+	}
+	log.Println("[Cluster] 初始化完成")
 	return nil
 }
 
@@ -504,6 +555,31 @@ func (cm *ClusterManager) tryResolvePendingMigration() bool {
 	}
 }
 
+// initJoinGroup 在进程已启动的情况下，将指定组通过 ChangeConfigTo 加入集群（含实际 shard 迁移）。
+// 这是 Init() 内部使用的，因为多组流程中进程都已提前启动，不能再用 MakeGroupStart。
+func (cm *ClusterManager) initJoinGroup(gid tester.Tgid, srvs []string) {
+	cfg := cm.ctl.Query()
+	newcfg := cfg.Copy()
+	newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs})
+
+	log.Printf("[Cluster] initJoinGroup: 正在将组 %d 加入集群（迁移 shard）...", gid)
+	cm.ctl.ChangeConfigTo(newcfg)
+
+	// 轮询等待迁移完成（不设超时，一直重试直到成功）
+	for {
+		cur := cm.ctl.Query()
+		if cur.Num >= newcfg.Num {
+			if _, ok := cur.Groups[gid]; ok {
+				log.Printf("[Cluster] initJoinGroup: 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
+				return
+			}
+		}
+		log.Printf("[Cluster] initJoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试...", gid, cur.Num, newcfg.Num)
+		cm.ctl.ChangeConfigTo(newcfg)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // JoinGroup 加入新组
 func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	// ---- 阶段 0：先处理任何 pending migration（锁外执行 RPC，阻塞直到完成）----
@@ -511,9 +587,12 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 
 	// ---- 阶段 1：加锁执行创建操作 ----
 	cm.mu.Lock()
-
+	nsrv := cm.dcfg.Cluster.Nsrv
+	if nsrv <= 0 {
+		nsrv = 3
+	}
 	args := cm.getArgs()
-	cm.cfg.MakeGroupStart("shardgrp", args, gid, 3)
+	cm.cfg.MakeGroupStart("shardgrp", args, gid, nsrv)
 	srvs := cm.cfg.Group(gid).SrvNames()
 
 	cfg := cm.ctl.Query()

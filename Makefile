@@ -11,8 +11,11 @@ docker:
 	docker build -t shardkv-demo:latest -f Dockerfile .
 
 # 启动容器（映射本机 8080 端口）
+# 通过 -v 挂载本地的 config.yaml，修改配置后无需重新 build 镜像
 run:
-	docker run --rm -p 8080:8080 shardkv-demo:latest
+	docker run --rm -p 8080:8080 \
+		-v "$(PWD)/shardkv-demo/config.yaml:/app/shardkv-demo/config.yaml:ro" \
+		shardkv-demo:latest
 
 # 清理运行中的容器
 clean:

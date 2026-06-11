@@ -5,8 +5,19 @@ cluster:
   # 是否可靠网络
   reliable: true
 
-# 初始启动的 Shard Group 列表
-# Gid1 是初始组，拥有所有 shard
+# 初始启动的 Shard Group 列表，指定组号及副本节点数
+# - gid:     组 ID，正整数（1, 2, 3 ...）
+# - servers: 该组节点数（可选，省略则使用 cluster.nsrv）
+
+# 示例：创建一个初始有 3 个组（1, 2, 5），每组分别有5, 7, 3 个节点的分片集群
+#groups:
+#  - gid: 1
+#    servers: 5
+#  - gid: 2
+#    servers: 7
+#  - gid: 5
+
+# 当前配置：1 组，3 节点
 groups:
   - gid: 1
     servers: 3

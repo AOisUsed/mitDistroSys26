@@ -11,15 +11,25 @@ import (
 	"syscall"
 
 	"shardkv-demo/cluster"
+	"shardkv-demo/config"
 	"shardkv-demo/web"
 )
 
 func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
+	configPath := flag.String("config", "config.yaml", "配置文件路径（YAML）")
 	flag.Parse()
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	log.Printf("shardkv-demo 正在启动...")
+
+	// 加载配置
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("加载配置失败: %v", err)
+	}
+	log.Printf("配置加载完成: nsrv=%d, reliable=%v, groups=%v",
+		cfg.Cluster.Nsrv, cfg.Cluster.Reliable, cfg.Groups)
 
 	// 保存 shardkv-demo 目录路径（用于定位静态文件）
 	demoDir, err := os.Getwd()
@@ -38,8 +48,8 @@ func main() {
 	}
 	log.Printf("工作目录切换到: %s", srcDir)
 
-	// 创建集群管理器
-	cm := cluster.NewClusterManager()
+	// 创建集群管理器（传入配置）
+	cm := cluster.NewClusterManager(cfg)
 
 	// 初始化集群
 	if err := cm.Init(); err != nil {

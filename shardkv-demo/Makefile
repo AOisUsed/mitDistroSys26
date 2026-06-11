@@ -3,6 +3,7 @@
 
 BINARY   := shardkv-demo
 PORT     ?= 8080
+CONFIG   ?= config.yaml
 PIDFILE  := .$(BINARY).pid
 
 .DEFAULT_GOAL := run
@@ -19,18 +20,18 @@ build:
 
 # 编译并启动（默认目标）
 run: build
-	@echo "==> 启动 shardkv-demo (端口: $(PORT)) ..."
-	./$(BINARY) -port $(PORT)
+	@echo "==> 启动 shardkv-demo (端口: $(PORT), 配置: $(CONFIG)) ..."
+	./$(BINARY) -port $(PORT) -config $(CONFIG)
 
 # 仅启动（不重新编译）
 start:
-	@echo "==> 启动 shardkv-demo (端口: $(PORT)) ..."
-	./$(BINARY) -port $(PORT)
+	@echo "==> 启动 shardkv-demo (端口: $(PORT), 配置: $(CONFIG)) ..."
+	./$(BINARY) -port $(PORT) -config $(CONFIG)
 
 # 后台启动
 start-bg: build
-	@echo "==> 后台启动 shardkv-demo (端口: $(PORT)) ..."
-	./$(BINARY) -port $(PORT) &
+	@echo "==> 后台启动 shardkv-demo (端口: $(PORT), 配置: $(CONFIG)) ..."
+	./$(BINARY) -port $(PORT) -config $(CONFIG) &
 	@echo $$! > $(PIDFILE)
 	@echo "==> PID: $$(cat $(PIDFILE))  日志: tail -f nohup.out"
 
