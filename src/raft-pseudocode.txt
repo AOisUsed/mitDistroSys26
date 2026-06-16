@@ -100,10 +100,12 @@ readPersist(raftStateData, snapshotData) { // 从持久器读取并恢复Raft状
 
 # 算法 选举触发 (ticker)
 
-循环执行 {
-    electionTimeout = 300~600 ms
-    if 当前为follower/candidate 且 lastHeardTime-当前时间 > electionTimeout { startElection() }
-    休眠 electionTimeout
+ticker(){
+    循环执行 {
+        electionTimeout = 300~600 ms
+        if 当前为follower/candidate 且 lastHeardTime-当前时间 > electionTimeout { startElection() }
+        休眠 electionTimeout
+    }
 }
 
 
