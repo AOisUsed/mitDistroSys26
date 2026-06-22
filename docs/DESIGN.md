@@ -2,7 +2,7 @@
 
 ## Raft 共识算法实现
 
-参考实现：[raft.go](src/raft/raft.go), [raftapi.go](src/raftapi/raftapi.go)
+参考实现：[raft.go](../src/raft/raft.go), [raftapi.go](../src/raftapi/raftapi.go)
 
 ### 核心数据结构
 
@@ -289,7 +289,7 @@ sendHeartbeat() {
 
 ## 复制状态机中间层（RSM）
 
-参考实现：[rsm.go](src/kvraft/rsm/rsm.go)
+参考实现：[rsm.go](../src/kvraft/rsm/rsm.go)
 
 ### 职责与位置
 
@@ -335,7 +335,7 @@ Submit() 进入等待后，采用三路等待循环覆盖可能发生的不同�
 
 ## 服务层
 
-参考实现：[server.go](src/shardkv/shardgrp/server.go)（含键值服务与分片迁移）
+参考实现：[server.go](../src/shardkv/shardgrp/server.go)（含键值服务与分片迁移）
 
 服务层实现 [StateMachine 接口](API.md#实现-statemachine-接口-rsm-使用)（DoOp / Snapshot / Restore），作为 RSM 的底层存储引擎。
 
@@ -428,7 +428,7 @@ Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多�
 
 ## 分片配置与分片控制器
 
-参考实现：[shardcfg/config.go](src/shardkv/shardcfg/config.go), [shardctrler/](src/shardkv/shardctrler/)
+参考实现：[shardcfg/config.go](../src/shardkv/shardcfg/config.go), [shardctrler/](../src/shardkv/shardctrler/)
 
 ### 分片配置结构
 
@@ -463,7 +463,7 @@ Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多�
 
 ## 两级客户端架构
 
-参考实现：[shardgrp/client.go](src/shardkv/shardgrp/client.go)（组内调度员）
+参考实现：[shardgrp/client.go](../src/shardkv/shardgrp/client.go)（组内调度员）
 
 ### 组内调度员（ShardGroup Clerk）
 
