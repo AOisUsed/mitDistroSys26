@@ -2,8 +2,6 @@ package tester
 
 import (
 	"flag"
-	"kvstore/debug"
-
 	//"log"
 	"os"
 	"runtime"
@@ -99,15 +97,6 @@ func InitDaemon(args []string, mks FstartServer) error {
 	ds.rpcc = sockrpc.NewRPCClnt(endNames[sid], testerEndName)
 	// set the global for user-level annotation (`rpcc` is defined in `annotator.go`)
 	rpcc = ds.rpcc
-
-	// 环境变量 OBSERVE_FORWARD=true 时启用观测日志转发（仅 shardkv-demo 使用，不影响测试）
-	if os.Getenv("OBSERVE_FORWARD") == "true" {
-		debug.SetObserveForward(func(tag, text string) {
-			args := &PostObserveLogArgs{Tag: tag, Text: text}
-			var reply PostObserveLogReply
-			ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
-		})
-	}
 
 	// for ctl RPCS to this daemon (e.g., Start)
 
