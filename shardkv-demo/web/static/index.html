@@ -394,15 +394,15 @@
                     <div style="display:flex;flex-wrap:wrap;gap:6px;">
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f0f5ff;border:1px solid #d6e4ff;">
                             <input type="checkbox" class="observe-toggle" data-scene="election" onchange="toggleObserve(this)">
-                            <span style="color:#667eea;">选举</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff7e6;border:1px solid #ffd591;">
-                            <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
-                            <span style="color:#d48806;">迁移</span>
+                            <span style="color:#667eea;">Raft选举</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f6ffed;border:1px solid #b7eb8f;">
                             <input type="checkbox" class="observe-toggle" data-scene="kvsubmit" onchange="toggleObserve(this)">
                             <span style="color:#52c41a;">KV请求</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff7e6;border:1px solid #ffd591;">
+                            <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
+                            <span style="color:#d48806;">分片迁移</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff2f0;border:1px solid #ffccc7;">
                             <input type="checkbox" class="observe-toggle" data-scene="fault" onchange="toggleObserve(this)">
@@ -1058,7 +1058,7 @@
             html += `
                 <div class="group-card" style="border-left: 3px solid ${color};">
                     <div class="group-header">
-                        <span class="gid" style="color:${color};">${group.gid === 0 ? 'ConfigStore' : `组 ${group.gid}`} <span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span></span>
+                        <span class="gid" style="color:${color};">${group.gid === 0 ? '配置仓库' : `组 ${group.gid}`} ${group.gid === 0 ? '' : `<span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span>`}</span>
                         <span class="ops">
                             <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
                                     onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
@@ -1275,7 +1275,7 @@
     };
     const OBSERVE_LOG_NAMES = {
         'Election': '选举',
-        'Migration': '迁移',
+        'Migration': '分片迁移',
         'KVSubmit': 'KV请求',
         'Fault': '故障恢复',
     };

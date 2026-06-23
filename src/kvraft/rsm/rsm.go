@@ -85,6 +85,7 @@ func MakeRSM(servers []*rpc.ClientEnd, me int, persister *tester.Persister, maxr
 	snapshot := persister.ReadSnapshot()
 	if snapshot != nil && len(snapshot) > 0 {
 		debug.D4CPrintf("rsm%v restores Snapshot from persister\n", rsm.me)
+		debug.ObserveFaultPrintf("rsm-%v: 从 persister 恢复 snapshot (大小=%d 字节)", rsm.me, len(snapshot))
 		rsm.sm.Restore(snapshot)
 	}
 
@@ -115,8 +116,9 @@ func (rsm *RSM) readApply() {
 
 			// check whether raftstate exceeds the maxraftstate. if so, snapshot
 			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
-				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v, need to snapshot", rsm.me, rsm.rf.PersistBytes(), rsm.maxraftstate)
 				raftstateSizeBefore := rsm.rf.PersistBytes()
+				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v, need to snapshot", rsm.me, raftstateSizeBefore, rsm.maxraftstate)
+				debug.ObserveFaultPrintf("rsm-%v: 触发快照 (raftstate %v >= maxraftstate %v)", rsm.me, raftstateSizeBefore, rsm.maxraftstate)
 				snapshot := rsm.sm.Snapshot()
 				rsm.rf.Snapshot(commandId, snapshot)
 				debug.D5APrintf("rsm%v: exceeded maxraftstate %v, took snapshot raftstateSize %v -> %v, reqId: %v, commandId: %v, with snapshot size: %v \n", rsm.me, rsm.maxraftstate, raftstateSizeBefore, rsm.rf.PersistBytes(), opMsg.Id, commandId, len(snapshot))

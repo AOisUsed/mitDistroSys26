@@ -203,6 +203,9 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
+	if rf.state == leader {
+		debug.ObserveFaultPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
+	}
 	rf.state = follower
 	rf.CurrentTerm = term
 	rf.VotedFor = -1
