@@ -364,7 +364,7 @@ func (cm *ClusterManager) KillServer(gid tester.Tgid, srv int) {
 		return
 	}
 	sg.ShutdownServer(srv)
-	log.Printf("[Cluster] 已停掉节点 %s", sg.SrvName(srv))
+	log.Printf("[Cluster] 已停止节点 %s", sg.SrvName(srv))
 }
 
 // IsolateNode 通过 Partition 隔离指定节点（进程保持运行，仅隔离网络）

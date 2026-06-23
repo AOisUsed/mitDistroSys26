@@ -73,8 +73,7 @@ func main() {
 
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf(":%d", *port)
-	log.Printf("HTTP 服务已启动: http://localhost%s", addr)
-	log.Printf("打开浏览器访问 http://localhost%s 查看集群控制台", addr)
+	log.Printf("HTTP 服务已启动: 打开浏览器访问 http://localhost%s 查看集群控制台", addr)
 
 	// 优雅关闭
 	sigCh := make(chan os.Signal, 1)

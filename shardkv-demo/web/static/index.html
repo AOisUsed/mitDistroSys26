@@ -338,13 +338,13 @@
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 并发 Put <span style="font-weight:400;font-size:11px;color:#888;">（乐观锁保护演示）</span>
+                        CAS 并发 Put
                     </div>
                     <div style="display:flex;flex-direction:column;gap:4px;">
                         <div style="display:flex;align-items:center;gap:6px;">
                             <input type="text" id="raceKey" placeholder="竞赛 Key（与 KV 操作同步）" style="flex:1;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
                             <span style="font-size:11px;color:#888;white-space:nowrap;">客户端数:</span>
-                            <input type="number" id="raceNClient" value="5" min="1" max="20" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
+                            <input type="number" id="raceNClient" value="5" min="1" max="1000" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
                             <button class="btn btn-primary" onclick="doCasRace()" style="flex-shrink:0;">开始</button>
                         </div>
                         <div style="font-size:10px;color:#888;margin-top:2px;">
@@ -523,37 +523,6 @@
         document.getElementById('kvShard').textContent = activeKey ? `-> ${shardHint(activeKey)}` : '';
     }
 
-    // CAS 并发独立限制（防止 CAS 竞赛压爆浏览器连接池）
-    let casInFlight = 0;
-    const MAX_CAS_INFLIGHT = 3;
-    const casQueue = [];
-
-    function casAcquire() {
-        return new Promise(resolve => {
-            if (casInFlight < MAX_CAS_INFLIGHT) {
-                casInFlight++;
-                resolve();
-            } else {
-                casQueue.push(resolve);
-            }
-        });
-    }
-    function casRelease() {
-        if (casQueue.length > 0) {
-            const next = casQueue.shift();
-            next();
-        } else {
-            casInFlight--;
-        }
-    }
-    async function casLimit(fn) {
-        await casAcquire();
-        try {
-            return await fn();
-        } finally {
-            casRelease();
-        }
-    }
 
     // 状态刷新退避：失败后逐步延长刷新间隔，成功后立即恢复
     let refreshFailCount = 0;
@@ -1274,7 +1243,7 @@
         'Fault': '#ff4d4f',
     };
     const OBSERVE_LOG_NAMES = {
-        'Election': '选举',
+        'Election': 'Raft选举',
         'Migration': '分片迁移',
         'KVSubmit': 'KV请求',
         'Fault': '故障恢复',
@@ -1432,8 +1401,8 @@
             addLog('CAS 竞赛: Key 不能为空', 'err');
             return;
         }
-        if (nClient < 1 || nClient > 20) {
-            addLog('CAS 竞赛: 客户端数必须在 1~20 之间', 'err');
+        if (nClient < 1 || nClient > 1000) {
+            addLog('CAS 竞赛: 客户端数必须在 1~1000 之间', 'err');
             return;
         }
         document.getElementById('putKey').value = key;
@@ -1461,7 +1430,7 @@
             return;
         }
 
-        // 2. 并发发起 N 个独立请求（受 casLimit 保护，最多 3 个并发）
+        // 2. 并发发起 N 个独立请求
         let successCount = 0;
         let versionErrCount = 0;
         let completedCount = 0;
@@ -1481,9 +1450,9 @@
             // 每个客户端随机生成 value
             const val = randomChars(3);
 
-            // 用 casLimit 包装每个 fetch，限制并发数为 3
+            // 每个客户端独立 fetch
             // 独立超时保护每个请求，共享 raceAbort 在结束时取消未完成的请求
-            const p = casLimit(async () => {
+            const p = (async () => {
                 const controller = new AbortController();
                 // 当 raceAbort 被触发时，也终止这个请求
                 const onAbort = () => { if (!controller.signal.aborted) controller.abort(); };
@@ -1499,7 +1468,7 @@
                 } finally {
                     raceAbort.signal.removeEventListener('abort', onAbort);
                 }
-            })
+            })()
             .then(res => {
                 const shard = key2Shard(key);
                 if (res && res.success) {

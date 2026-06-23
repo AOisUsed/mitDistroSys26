@@ -295,7 +295,7 @@ func (h *Handler) HandleKillNode(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	log.Printf("[KillNode] Group %d Server %d (%s) — 该组存活: %d/%d", req.GID, req.Srv, srvName, aliveCount, totalNodes)
+	log.Printf("[KillNode] 组 %d Server-%d (%s) — 该组存活: %d/%d", req.GID, req.Srv, srvName, aliveCount, totalNodes)
 	writeJSON(w, map[string]any{
 		"success":    true,
 		"action":     "kill",
@@ -322,7 +322,7 @@ func (h *Handler) HandleStartNode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		resp["error"] = err.Error()
 	}
-	log.Printf("[StartNode] group=%d server=%d err=%v", req.GID, req.Srv, err)
+	log.Printf("[StartNode] 组 %d server-%d err=%v", req.GID, req.Srv, err)
 	writeJSON(w, resp)
 }
 
@@ -630,6 +630,11 @@ func (h *Handler) HandleInitController(w http.ResponseWriter, r *http.Request) {
 // --- API: CAS Put（单次 CAS 写入，前端并发调用，每条实时可见） ---
 // 前端先 Get 当前版本号，然后并发发起 N 个独立的 POST 到 /api/put-cas，
 // 每个请求独立经历网络延迟/丢包，前端收到响应后立即输出日志。
+//
+// 注意：每个 CAS 请求必须使用独立的 Clerk（不同 clientId），
+// 因为 server 端去重机制（shardgrp/server.go:128-138）按 (clientId, requestId)
+// 判定重复。若多个并发 CAS 请求共享同一个 Clerk，会因 requestId 线性增长
+// 但 Raft 提交顺序不确定，导致低 requestId 的请求被误判为重复而被静默丢弃。
 
 func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -652,11 +657,15 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 
 	shard := shardcfg.Key2Shard(req.Key)
 
-	// 超时保护的 Put：在 goroutine 中执行，12s 超时
+	// 创建独立 Clerk（不同 clientId），确保并发 CAS 请求不会因去重机制互相干扰。
+	// 对于 demo 场景，这些 Clerk 是瞬态的，不在 Clerk 池中缓存（避免泄漏），
+	// 也不需要显式注销——它们共享同一个底层 *tester.Clnt RPC 连接。
+	casCk := h.cm.NewClerk()
 
+	// 超时保护的 Put：在 goroutine 中执行，12s 超时
 	putCh := make(chan rpcapi.Err, 1)
 	go func() {
-		putCh <- h.cm.Put(req.Key, req.Value, req.Version)
+		putCh <- casCk.Put(req.Key, req.Value, req.Version)
 	}()
 
 	var putErr rpcapi.Err
