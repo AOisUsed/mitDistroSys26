@@ -53,14 +53,14 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk %v -> %v: Get %s\n", ck.servers[leader], ck.clientId, key)
+		debug.D5APrintf("shardgrpclerk %v -> %v: Get %s\n", ck.servers[leader], ck.clientId, key)
 		attempts++
 		var reply rpcapi.GetReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
 		if ok {
 			switch reply.Err {
 			case rpcapi.OK, rpcapi.ErrNoKey, rpcapi.ErrWrongGroup:
-				debug.D5APrintf("shardkvclerk %v <- %v: Get %s, reply: value:%v, Version: %v, Err: %v \n", ck.clientId, ck.servers[leader], key, reply.Value, reply.Version, reply.Err)
+				debug.D5APrintf("shardgrpclerk %v <- %v: Get %s, reply: value:%v, Version: %v, Err: %v \n", ck.clientId, ck.servers[leader], key, reply.Value, reply.Version, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -76,8 +76,8 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		}
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
-	debug.D5APrintf("shardkvclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
-	debug.ObserveFaultPrintf("shardgrpclerk%v: Get(%s) retry exhausted after %d attempts (fault: all servers unavailable or partitioned)", ck.clientId, key, attempts)
+	debug.D5APrintf("shardgrpclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
+	debug.ObserveFaultPrintf("shardgroup clerk: Get(%s) retry exhausted after %d attempts (fault: all servers unavailable or partitioned)", key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
@@ -102,16 +102,16 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
+		debug.D5APrintf("shardgrpclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 		attempts++
 		reply := rpcapi.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
 
 		if ok {
-			//debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply
+			//debug.D5APrintf("shardgrpclerk %v <- %v: reqId:%5v, Put %s: value: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply
 			switch reply.Err {
 			case rpcapi.OK, rpcapi.ErrNoKey, rpcapi.ErrWrongGroup, rpcapi.ErrVersion:
-				debug.D5APrintf("shardkvclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
+				debug.D5APrintf("shardgrpclerk %v <- %v: reqId:%5v, Put %s: %v, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -131,7 +131,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	// it could mean:
 	//	- the group is in partition/election,
 	// 	- the group has left
-	debug.ObserveFaultPrintf("shardgrpclerk%v: Put(key=%s) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, key, attempts)
+	debug.ObserveFaultPrintf("shardgroup clerk: Put(key=%s) retry exhausted after %d attempts (fault: group partitioned or left)", key, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -151,15 +151,15 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+		debug.D5APrintf("shardgrpclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.FreezeShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.FreezeShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+			//debug.D5APrintf("shardgrpclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 			switch reply.Err {
 			case rpcapi.OK, rpcapi.ErrWrongGroup:
-				debug.D5APrintf("shardkvclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
+				debug.D5APrintf("shardgrpclerk <- %v: FreezeShard (shard: %v, Num: %v), reply: StateSize:%v, Num: %v, Err: %v\n", ck.servers[leader], s, num, len(reply.State), reply.Num, reply.Err)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -174,7 +174,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("shardgrpclerk%v: FreezeShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
+	debug.ObserveFaultPrintf("shardgroup clerk: FreezeShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", s, attempts)
 	return nil, rpcapi.ErrRetryExhausted
 }
 
@@ -194,12 +194,12 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
+		debug.D5APrintf("shardgrpclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
 		attempts++
 		var reply shardrpc.InstallShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.InstallShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("shardkvclerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			//debug.D5APrintf("shardgrpclerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
 			case rpcapi.OK, rpcapi.ErrWrongGroup:
 				debug.D5APrintf("clerk <- %v: InstallShard(shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
@@ -217,7 +217,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("shardgrpclerk%v: InstallShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
+	debug.ObserveFaultPrintf("shardgroup clerk: InstallShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -236,15 +236,15 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 
 	attempts := 0
 	for attempts <= maxAttempt {
-		debug.D5APrintf("shardkvclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
+		debug.D5APrintf("shardgrpclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.DeleteShardReply
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.DeleteShard", &args, &reply)
 		if ok {
-			//debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+			//debug.D5APrintf("shardgrpclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 			switch reply.Err {
 			case rpcapi.OK, rpcapi.ErrWrongGroup:
-				debug.D5APrintf("shardkvclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
+				debug.D5APrintf("shardgrpclerk <- %v: DeleteShard (shard: %v, Num: %v), reply: %v \n", ck.servers[leader], s, num, reply)
 				ck.mu.Lock()
 				ck.leader = leader
 				ck.mu.Unlock()
@@ -259,6 +259,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("shardgrpclerk%v: DeleteShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
+	debug.ObserveFaultPrintf("shardgroup clerk: DeleteShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }

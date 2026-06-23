@@ -34,6 +34,18 @@ const (
 	Frozen                     // shard is frozen
 )
 
+func statusToString(digit ShardStatus) string {
+	switch digit {
+	case 0:
+		return "Absent"
+	case 1:
+		return "Serving"
+	case 2:
+		return "Frozen"
+	}
+	return "Unknown"
+}
+
 type ShardState struct {
 	Kv                map[string]*VersionedValue
 	LastPutByClientId map[uint64]*LastPut
@@ -165,7 +177,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == FreezeShard == //
 	case shardrpc.FreezeShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp Freeze(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		debug.ObserveMigrationPrintf("server%v(group%v): FreezeShard(shard=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, request.Num, kv.shardStatuses[request.Shard])
+		debug.ObserveMigrationPrintf("server-%v-%v: FreezeShard(%v), Num: %v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 		reqCfgNum := request.Num
@@ -213,7 +225,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
-		debug.ObserveMigrationPrintf("server%v(group%v): InstallShard(shard=%v, size=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, len(request.State), request.Num, kv.shardStatuses[request.Shard])
+		debug.ObserveMigrationPrintf("server-%v-%v: InstallShard(%v), Num: %v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		// check config Num
 		localCfgNum := kv.cfgNumByShid[request.Shard]
 		if request.Num > localCfgNum {
@@ -251,7 +263,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == DeleteShard == //
 	case shardrpc.DeleteShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp DeleteShard(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		debug.ObserveMigrationPrintf("server%v(group%v): DeleteShard(shard=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, request.Num, kv.shardStatuses[request.Shard])
+		debug.ObserveMigrationPrintf("server-%v-%v: DeleteShard(%v), Num: %v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 

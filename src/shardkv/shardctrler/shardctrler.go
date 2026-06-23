@@ -172,7 +172,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 			for err == rpcapi.ErrRetryExhausted {
 				data, err = oldGrpClerk.FreezeShard(shid, newCfg.Num)
 				debug.D5APrintf("controller %v -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", sck.controllerId, shid, newCfg.Num, oldGid, err)
-				debug.ObserveMigrationPrintf("controller %v: FreezeShard(shard=%v, num=%v)->group%v err=%v", sck.controllerId, shid, newCfg.Num, oldGid, err)
+				debug.ObserveMigrationPrintf("controller: FreezeShard(shard = %v, num = %v)-> group %v, err=%v", shid, newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)
@@ -188,7 +188,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 			for err == rpcapi.ErrRetryExhausted {
 				err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
 				debug.D5APrintf("controller %v -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, len(data), newCfg.Num, newGid, err)
-				debug.ObserveMigrationPrintf("controller %v: InstallShard(shard=%v, size=%v, num=%v)->group%v err=%v", sck.controllerId, shid, len(data), newCfg.Num, newGid, err)
+				debug.ObserveMigrationPrintf("controller: InstallShard(shard = %v, num = %v)-> group %v, err=%v", shid, newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)
@@ -218,7 +218,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 
 				err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
 				debug.D5APrintf("controller %v -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, newCfg.Num, newGid, err)
-				debug.ObserveMigrationPrintf("controller %v: DeleteShard(shard=%v, num=%v)->group%v err=%v", sck.controllerId, shid, newCfg.Num, newGid, err)
+				debug.ObserveMigrationPrintf("controller: DeleteShard(shard = %v, num = %v)-> group %v, err=%v", shid, newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)

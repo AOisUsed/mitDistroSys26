@@ -195,7 +195,6 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 	}
 
 	debug.D4APrintf("rsm%v Start op %v: %v at %v.\n", rsm.me, op.Id, op.Req, commandId)
-	//debug.ObserveKVSubmitPrintf("rsm%v Submit opId=%v req=%+v at logIdx=%v", rsm.me, op.Id, op.Req, commandId)
 
 	// must lock before writing the channel into rsm. otherwise,
 	// rare case may happen that raft commits the log extremely fast and wants to let the corresponding Submit() know of it,
@@ -236,7 +235,6 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 				select {
 				case result := <-resultCh:
 					debug.D4APrintf("rsm%v Submited %v \n", rsm.me, op)
-					debug.ObserveKVSubmitPrintf("rsm%v opId=%v committed OK (timeout case)", rsm.me, op.Id)
 					rsm.mu.Lock()
 					delete(rsm.resultByCommandId, commandId)
 
@@ -253,7 +251,6 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 				}
 
 				debug.D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
-				debug.ObserveKVSubmitPrintf("rsm%v opId=%v lost leadership, abort Submit", rsm.me, op.Id)
 				rsm.mu.Lock()
 				delete(rsm.resultByCommandId, commandId)
 				rsm.mu.Unlock()
@@ -261,7 +258,6 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 			}
 		case result := <-resultCh:
 			debug.D4APrintf("rsm%v Submited %v \n", rsm.me, op)
-			debug.ObserveKVSubmitPrintf("rsm%v opId=%v committed OK", rsm.me, op.Id)
 			rsm.mu.Lock()
 			delete(rsm.resultByCommandId, commandId)
 
