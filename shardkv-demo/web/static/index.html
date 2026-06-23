@@ -475,6 +475,42 @@
         document.getElementById('kvShard').textContent = activeKey ? `-> ${shardHint(activeKey)}` : '';
     }
 
+    // CAS 并发独立限制（防止 CAS 竞赛压爆浏览器连接池）
+    let casInFlight = 0;
+    const MAX_CAS_INFLIGHT = 3;
+    const casQueue = [];
+
+    function casAcquire() {
+        return new Promise(resolve => {
+            if (casInFlight < MAX_CAS_INFLIGHT) {
+                casInFlight++;
+                resolve();
+            } else {
+                casQueue.push(resolve);
+            }
+        });
+    }
+    function casRelease() {
+        if (casQueue.length > 0) {
+            const next = casQueue.shift();
+            next();
+        } else {
+            casInFlight--;
+        }
+    }
+    async function casLimit(fn) {
+        await casAcquire();
+        try {
+            return await fn();
+        } finally {
+            casRelease();
+        }
+    }
+
+    // 状态刷新退避：失败后逐步延长刷新间隔，成功后立即恢复
+    let refreshFailCount = 0;
+    let refreshTimer = null;
+
     let logExpanded = true;
     function toggleLog() {
         const area = document.getElementById('logArea');
@@ -498,8 +534,8 @@
         }
     }
 
-    async function api(path, options, timeoutMs) {
-        timeoutMs = timeoutMs || 30000;
+    async function api(path, options, timeoutMs, silent) {
+        timeoutMs = timeoutMs || 15000;
 
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -517,14 +553,17 @@
             return await resp.json();
         } catch (err) {
             clearTimeout(timer);
-            if (err.name === 'AbortError') {
-                addLog(`API 超时: ${path} (超过 ${timeoutMs/1000}s 无响应)`, 'err');
-            } else {
-                addLog(`API 错误: ${err.message}`, 'err');
+            if (!silent) {
+                if (err.name === 'AbortError') {
+                    addLog(`请求等待超时: ${path} (超过 ${timeoutMs/1000}s 无响应，后端可能仍在处理)`, 'err');
+                } else {
+                    addLog(`API 错误: ${err.message}`, 'err');
+                }
             }
             throw err;
         }
     }
+
 
     function randomChars(n) {
         const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -724,9 +763,12 @@
         refreshStatus();
     }
 
+    let leaveInFlight = false;
     async function doLeaveGroup() {
+        if (leaveInFlight) { addLog('LeaveGroup: 上次操作未完成，请等待', 'err'); return; }
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
+        leaveInFlight = true;
         addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
         if (result.success) {
@@ -736,8 +778,10 @@
         } else {
             addLog(`LeaveGroup: ❌ 组 ${gid} 移除失败`, 'err');
         }
+        leaveInFlight = false;
         refreshStatus();
     }
+
 
     let netParams = { dropRate: 300, shortDelayMs: 300, longDelayMs: 3000 };
 
@@ -796,7 +840,7 @@
 
     async function fetchChaosStatus() {
         try {
-            const result = await api('/api/chaos/status', {method: 'GET'});
+            const result = await api('/api/chaos/status', {method: 'GET'}, 15000, true);
             if (result.success && result.states) {
                 const newChaos = {};
                 for (const s of result.states) newChaos[s.gid] = s.active;
@@ -804,6 +848,7 @@
             }
         } catch (err) {}
     }
+
 
     // ========== 渲染 ==========
     const COLORS = [
@@ -831,13 +876,14 @@
     function populateNodeGroupSelect(groups) {
         const sel = document.getElementById('nodeGid');
         const currentVal = sel.value;
-        sel.innerHTML = '<option value="">选择组</option>';
+        const frag = document.createDocumentFragment();
+        frag.appendChild(new Option('选择组', ''));
         for (const g of groups) {
-            const opt = document.createElement('option');
-            opt.value = g.gid;
-            opt.textContent = g.gid === 0 ? `ConfigStore (${g.servers.length} 节点)` : `组 ${g.gid} (${g.servers.length} 节点)`;
-            sel.appendChild(opt);
+            const label = g.gid === 0 ? `ConfigStore (${g.servers.length} 节点)` : `组 ${g.gid} (${g.servers.length} 节点)`;
+            frag.appendChild(new Option(label, String(g.gid)));
         }
+        sel.innerHTML = '';
+        sel.appendChild(frag);
         if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
             sel.value = currentVal;
         } else {
@@ -849,13 +895,14 @@
     function populateGroupSelect(groups) {
         const sel = document.getElementById('groupGid');
         const currentVal = sel.value;
-        sel.innerHTML = '<option value="">选择组</option>';
+        const frag = document.createDocumentFragment();
+        frag.appendChild(new Option('选择组', ''));
         for (const g of groups) {
-            const opt = document.createElement('option');
-            opt.value = g.gid;
-            opt.textContent = g.gid === 0 ? `ConfigStore (${g.nShards} 分片)` : `组 ${g.gid} (${g.nShards} 分片)`;
-            sel.appendChild(opt);
+            const label = g.gid === 0 ? `ConfigStore (${g.nShards} 分片)` : `组 ${g.gid} (${g.nShards} 分片)`;
+            frag.appendChild(new Option(label, String(g.gid)));
         }
+        sel.innerHTML = '';
+        sel.appendChild(frag);
         if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
             sel.value = currentVal;
         }
@@ -874,14 +921,14 @@
             idxSel.innerHTML = '<option value="">选择</option>';
             return;
         }
-        idxSel.innerHTML = '<option value="">选择</option>';
+        const frag = document.createDocumentFragment();
+        frag.appendChild(new Option('选择', ''));
         for (let i = 0; i < group.servers.length; i++) {
             const srv = group.servers[i];
-            const opt = document.createElement('option');
-            opt.value = i;
-            opt.textContent = `节点 ${i} (${srv.name})`;
-            idxSel.appendChild(opt);
+            frag.appendChild(new Option(`节点 ${i} (${srv.name})`, String(i)));
         }
+        idxSel.innerHTML = '';
+        idxSel.appendChild(frag);
         if (currentIdx && [...idxSel.options].some(o => o.value === currentIdx)) {
             idxSel.value = currentIdx;
         }
@@ -949,8 +996,9 @@
         topo.innerHTML = html;
     }
 
-    function renderShards(tree, config) {
+    function renderShards(tree) {
         const grid = document.getElementById('shardGrid');
+
         const info = document.getElementById('shardInfo');
         if (!tree.shards || tree.shards.length === 0) {
             grid.innerHTML = '<div style="color:#888;text-align:center;width:100%;padding:10px;">无分片数据</div>';
@@ -968,61 +1016,132 @@
         grid.innerHTML = html;
     }
 
-    // ========== 刷新 ==========
+    // ========== 刷新（并行超时保护） ==========
     let refreshing = false;
+    let usingCache = false; // 标记当前显示的拓扑是否来自缓存
     async function refreshStatus() {
         if (refreshing) return;
         refreshing = true;
         const refreshInfo = document.getElementById('refreshInfo');
-        refreshInfo.textContent = '刷新中...';
-        await fetchChaosStatus();
+        if (!usingCache) {
+            refreshInfo.textContent = '刷新中...';
+        }
+        // 如果正在使用缓存，不显示"刷新中"以免误导用户以为在连接
+
+        // 并行请求，各自独立降级：configStore 死掉不会阻塞拓扑显示
+        // 如果已在缓存/离线状态，静默处理网络错误，避免日志刷屏
+        const [treeResult, chaosResult] = await Promise.all([
+            api('/api/status/tree', {method: 'GET'}, 15000, usingCache).catch(err => {
+                if (!usingCache) {
+                    addLog('刷新拓扑失败: ' + err.message, 'err');
+                }
+                return null;
+            }),
+            fetchChaosStatus().catch(() => {})
+        ]);
+
+
+        const tree = treeResult;
+
+        // 渲染拓扑——即使 tree 为空也显示基础界面，不崩溃
         try {
-            const [tree, config] = await Promise.all([
-                api('/api/status/tree', {method: 'GET'}),
-                api('/api/config', {method: 'GET'})
-            ]);
-            cachedTree = tree;
-            document.getElementById('configNum').textContent = `Config #${tree.configNum}`;
-            renderTopology(tree);
-            renderShards(tree, config);
-            if (tree.groups && tree.groups.length > 0) {
-                const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
-                populateNodeGroupSelect(sortedGroups);
-                populateGroupSelect(sortedGroups);
+            if (tree) {
+                usingCache = !!tree.configCached;
+                if (tree.configCached) {
+                    // configStore 无响应，使用缓存数据
+                    cachedTree = tree;
+                    document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'} (缓存)`;
+                    renderTopology(cachedTree);
+                    renderShards(cachedTree);
+                    if (cachedTree.groups && cachedTree.groups.length > 0) {
+                        populateNodeGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
+                        populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
+                    }
+                    refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
+                    refreshFailCount++;
+                    return;
+                }
+
+                cachedTree = tree;
+                document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'}`;
+                renderTopology(tree);
+                renderShards(tree); // tree.shards 已有完整分片数据
+                if (tree.groups && tree.groups.length > 0) {
+                    const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
+                    populateNodeGroupSelect(sortedGroups);
+                    populateGroupSelect(sortedGroups);
+
+                } else {
+                    populateNodeGroupSelect([]);
+                    populateGroupSelect([]);
+                }
+                // Show/hide pending migration badge
+                const pendingBadge = document.getElementById('pendingMigrationBadge');
+                if (tree.hasPendingMigration) {
+                    pendingBadge.style.display = 'inline';
+                } else {
+                    pendingBadge.style.display = 'none';
+                }
+                refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+                refreshFailCount = 0; // 成功后重置退避计数
             } else {
-                populateNodeGroupSelect([]);
-                populateGroupSelect([]);
+                // tree 为 null：configStore 完全挂了，但仍然显示本地缓存的拓扑
+                if (cachedTree) {
+                    usingCache = true;
+                    document.getElementById('configNum').textContent = `Config #${cachedTree.configNum} (缓存)`;
+                    renderTopology(cachedTree);
+                    renderShards(cachedTree);
+
+                    if (cachedTree.groups && cachedTree.groups.length > 0) {
+                        populateNodeGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
+                        populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
+                    }
+                    refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
+                } else {
+                    usingCache = false;
+                    document.getElementById('configNum').textContent = 'ConfigStore 离线';
+                    document.getElementById('topology').innerHTML =
+                        '<div style="color:#ff4d4f;text-align:center;width:100%;padding:20px;">⚠ ConfigStore 离线，节点操作仍然可用</div>';
+                    document.getElementById('shardGrid').innerHTML =
+                        '<div style="color:#888;text-align:center;width:100%;padding:10px;">ConfigStore 离线，分片分布不可用</div>';
+                    refreshInfo.textContent = 'ConfigStore 离线';
+                }
+                refreshFailCount++; // 连接失败，增加退避计数
             }
-            // Show/hide pending migration badge
-            const pendingBadge = document.getElementById('pendingMigrationBadge');
-            if (tree.hasPendingMigration) {
-                pendingBadge.style.display = 'inline';
-                document.getElementById('configNum').textContent += ` (pending → #${tree.pendingConfigNum})`;
-            } else {
-                pendingBadge.style.display = 'none';
-            }
-            refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
         } catch (err) {
-            refreshInfo.textContent = '刷新失败';
+            addLog('渲染拓扑异常: ' + err.message, 'err');
+            refreshInfo.textContent = '渲染异常';
+            refreshFailCount++; // 失败后增加退避计数
         } finally {
             refreshing = false;
         }
     }
 
+
+
     function initShardSelect() {
         const sel = document.getElementById('targetShard');
-        sel.innerHTML = '';
+        const frag = document.createDocumentFragment();
         for (let i = 0; i < N_SHARDS; i++) {
-            const opt = document.createElement('option');
-            opt.value = i;
-            opt.textContent = `分片${i}`;
-            sel.appendChild(opt);
+            frag.appendChild(new Option(`分片${i}`, String(i)));
         }
+        sel.innerHTML = '';
+        sel.appendChild(frag);
     }
 
     initShardSelect();
     refreshStatus();
-    setInterval(refreshStatus, 3000);
+
+    // 自适应退避调度刷新：成功 3s，每次失败 +2s（上限 15s）
+    function scheduleRefresh() {
+        const baseInterval = 3000; // 基础 3s
+        const maxInterval = 15000; // 上限 15s
+        const backoff = Math.min(refreshFailCount * 2000, maxInterval - baseInterval);
+        const interval = baseInterval + backoff;
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => { refreshStatus().finally(scheduleRefresh); }, interval);
+    }
+    scheduleRefresh();
 
     window.addEventListener('load', async function() {
         try {
@@ -1082,40 +1201,60 @@
             return;
         }
 
-        // 2. 并发发起 N 个独立请求，每个完成即输出日志
+        // 2. 并发发起 N 个独立请求（受 casLimit 保护，最多 3 个并发）
         let successCount = 0;
         let versionErrCount = 0;
         let completedCount = 0;
         const promises = [];
 
+        // 共享一个 AbortController，竞赛结束时取消所有仍在进行的请求
+        const raceAbort = new AbortController();
+        const raceTimeout = setTimeout(() => raceAbort.abort(), 15000);
+
+
+        function raceCleanup() {
+            clearTimeout(raceTimeout);
+            if (!raceAbort.signal.aborted) raceAbort.abort();
+        }
+
         for (let i = 0; i < nClient; i++) {
             // 每个客户端随机生成 value
             const val = randomChars(3);
 
-            // 独立的 fetch，不做 await，立即并发（加30s超时，网络不可靠时请求可能卡住）
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 30000);
-            const p = fetch(API + '/api/put-cas', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                signal: controller.signal,
-                body: JSON.stringify({key, value: val, version})
+            // 用 casLimit 包装每个 fetch，限制并发数为 3
+            // 独立超时保护每个请求，共享 raceAbort 在结束时取消未完成的请求
+            const p = casLimit(async () => {
+                const controller = new AbortController();
+                // 当 raceAbort 被触发时，也终止这个请求
+                const onAbort = () => { if (!controller.signal.aborted) controller.abort(); };
+                raceAbort.signal.addEventListener('abort', onAbort);
+                try {
+                    const resp = await fetch(API + '/api/put-cas', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        signal: controller.signal,
+                        body: JSON.stringify({key, value: val, version})
+                    });
+                    return await resp.json();
+                } finally {
+                    raceAbort.signal.removeEventListener('abort', onAbort);
+                }
             })
-            .then(resp => { clearTimeout(timer); return resp; })
-            .then(resp => resp.json())
             .then(res => {
                 const shard = key2Shard(key);
-                if (res.success) {
+                if (res && res.success) {
                     successCount++;
                     addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} OK`, 'ok');
                 } else {
                     versionErrCount++;
-                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} ${res.err || 'ErrVersion'}`, 'err');
+                    const errMsg = (res && res.err) || 'ErrVersion';
+                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} ${errMsg}`, 'err');
                 }
                 completedCount++;
                 resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功${successCount}, 冲突${versionErrCount})</div>`;
             })
             .catch(err => {
+                if (err.name === 'AbortError') return; // 竞赛结束被中止，不输出日志
                 versionErrCount++;
                 completedCount++;
                 addLog(`CAS 竞赛请求异常: ${err.message}`, 'err');
@@ -1126,7 +1265,8 @@
         }
 
         // 3. 等待所有请求完成
-        await Promise.all(promises);
+        await Promise.allSettled(promises);
+        raceCleanup();
 
         // 4. 验证最终值
         let finalValue = '';

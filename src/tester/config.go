@@ -127,7 +127,10 @@ func (cfg *Config) MakeGroupStart(prog string, args []string, gid Tgid, nsrv int
 }
 
 func (cfg *Config) ExitGroup(gid Tgid) {
-	cfg.Group(gid).Shutdown()
+	sg := cfg.Group(gid)
+	if sg != nil {
+		sg.Shutdown()
+	}
 	cfg.Groups.delete(gid)
 }
 

@@ -11,6 +11,7 @@ type ClusterState struct {
 	Config              *shardcfg.ShardConfig `json:"config"`
 	HasPendingMigration bool                  `json:"hasPendingMigration"`
 	PendingConfigNum    shardcfg.Tnum         `json:"pendingConfigNum"`
+	ConfigCached        bool                  `json:"configCached"` // 当 configStore 无响应时，Config 来自缓存
 }
 
 // GroupState 单个组的状态

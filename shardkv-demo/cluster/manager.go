@@ -35,6 +35,9 @@ type ClusterManager struct {
 	// cachedConfig 缓存最后一次成功查询的 config，当 configStore（kvraft）无响应时使用
 	cachedConfig     *shardcfg.ShardConfig
 	cachedNextConfig *shardcfg.ShardConfig
+	lastConfigOk     time.Time // 最后一次成功查询 config 的时间戳，用于判断是否使用缓存
+	lastNextConfigOk time.Time // 最后一次成功查询 nextConfig 的时间戳
+
 }
 
 // NewClusterManager 创建一个新的集群管理器，使用给定配置
@@ -142,7 +145,12 @@ func (cm *ClusterManager) Init() error {
 		gidDescs = append(gidDescs, fmt.Sprintf("Gid%d=%v", g.Gid, servers[tester.Tgid(g.Gid)]))
 	}
 	log.Println("[Cluster] 初始化完成")
+
+	// 启动后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
+	cm.startConfigPoller()
+
 	return nil
+
 }
 
 // Config 返回底层 Config
@@ -180,71 +188,65 @@ func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 	return cm.cfg.Group(gid)
 }
 
-// tryQueryConfig 尝试查询 config，超时则使用缓存，确保不会阻塞 Status() 刷新节点状态。
-func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
-	type result struct {
-		cfg *shardcfg.ShardConfig
-	}
-	ch := make(chan result, 1)
+// ============================================================
+// 后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
+// 只有 3 个固定的后台 goroutine，即使 configStore 永久阻塞也不泄漏
+// ============================================================
+
+const staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
+
+func (cm *ClusterManager) startConfigPoller() {
+	// 轮询 Query() 写入 cachedConfig
 	go func() {
-		ch <- result{cfg: cm.ctl.Query()}
+		for {
+			cfg := cm.ctl.Query()
+			if cfg != nil {
+				cm.mu.Lock()
+				cm.cachedConfig = cfg
+				cm.lastConfigOk = time.Now()
+				cm.mu.Unlock()
+			}
+			time.Sleep(2 * time.Second)
+		}
 	}()
-	select {
-	case r := <-ch:
-		if r.cfg != nil {
-			cm.mu.Lock()
-			cm.cachedConfig = r.cfg
-			cm.mu.Unlock()
+	// 轮询 QueryNext() 写入 cachedNextConfig
+	go func() {
+		for {
+			cfg := cm.ctl.QueryNext()
+			if cfg != nil {
+				cm.mu.Lock()
+				cm.cachedNextConfig = cfg
+				cm.lastNextConfigOk = time.Now()
+				cm.mu.Unlock()
+			}
+			time.Sleep(2 * time.Second)
 		}
-		return r.cfg
-	case <-time.After(1 * time.Second):
-		cm.mu.Lock()
-		cached := cm.cachedConfig
-		cm.mu.Unlock()
-		if cached != nil {
-			log.Printf("[Status] configStore 超时，使用缓存的 config #%d", cached.Num)
-			return cached
-		}
-		log.Printf("[Status] configStore 超时且无缓存，返回 nil")
-		return nil
-	}
+	}()
+}
+
+// tryQueryConfig 直接返回缓存（不阻塞不泄漏）。
+// 当 configStore（kvraft）无响应时，后台 goroutine 阻塞在 Query() 调用上，
+// 但只有 3 个固定的 goroutine，不会随着每次 refreshStatus() 泄漏新 goroutine。
+func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.cachedConfig
 }
 
 func (cm *ClusterManager) tryHasPendingMigration() bool {
-	ch := make(chan bool, 1)
-	go func() {
-		ch <- cm.ctl.HasPendingMigration()
-	}()
-	select {
-	case r := <-ch:
-		return r
-	case <-time.After(1 * time.Second):
+	// 简化版：不再阻塞调用
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.cachedConfig == nil || cm.cachedNextConfig == nil {
 		return false
 	}
+	return cm.cachedConfig.Num != cm.cachedNextConfig.Num
 }
 
 func (cm *ClusterManager) tryQueryNextConfig() *shardcfg.ShardConfig {
-	type result struct {
-		cfg *shardcfg.ShardConfig
-	}
-	ch := make(chan result, 1)
-	go func() {
-		ch <- result{cfg: cm.ctl.QueryNext()}
-	}()
-	select {
-	case r := <-ch:
-		if r.cfg != nil {
-			cm.mu.Lock()
-			cm.cachedNextConfig = r.cfg
-			cm.mu.Unlock()
-		}
-		return r.cfg
-	case <-time.After(1 * time.Second):
-		cm.mu.Lock()
-		cached := cm.cachedNextConfig
-		cm.mu.Unlock()
-		return cached
-	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.cachedNextConfig
 }
 
 // Status 返回完整集群状态。
@@ -259,15 +261,20 @@ func (cm *ClusterManager) Status() *ClusterState {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
+	// 判断 config 是否来自缓存：无 cfg 或 lastConfigOk 超过阈值
+	configCached := false
 	if cfg == nil {
 		// configStore 完全无响应且无缓存，退化为仅显示节点状态
 		cfg = shardcfg.MakeShardConfig()
+	} else if time.Since(cm.lastConfigOk) > staleConfigTimeout {
+		configCached = true
 	}
 
 	state := &ClusterState{
 		Config:              cfg,
 		HasPendingMigration: hasPending,
 		PendingConfigNum:    nextCfg.Num,
+		ConfigCached:        configCached,
 	}
 	// 展示 cm.groups 中追踪的所有组（包括 configStore GRP0）
 	for gid := range cm.groups {
@@ -644,8 +651,9 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	cm.ctl.ChangeConfigTo(newcfg)
 	cm.mu.Unlock()
 
-	// ---- 阶段 2：解锁，轮询等待迁移完成（不设超时，一直重试直到成功）----
-	for {
+	// ---- 阶段 2：解锁，轮询等待迁移完成（最多重试 20 次，约 10s）----
+	const maxRetries = 20
+	for retry := 0; retry < maxRetries; retry++ {
 		cur := cm.ctl.Query()
 		if cur.Num >= newcfg.Num {
 			if _, ok := cur.Groups[gid]; ok {
@@ -655,7 +663,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		}
 
 		// pending 迁移可能存在但未完成（集群节点不稳定），重试调用 ChangeConfigTo
-		log.Printf("[Cluster] JoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试...", gid, cur.Num, newcfg.Num)
+		log.Printf("[Cluster] JoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试 (attempt %d/%d)...", gid, cur.Num, newcfg.Num, retry+1, maxRetries)
 
 		// 在重试前检查是否有组完全死掉（无 quorum），给用户提示但继续重试
 		cm.mu.Lock()
@@ -684,6 +692,11 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		cm.ctl.ChangeConfigTo(newcfg)
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	msg := fmt.Sprintf("组 %d 加入超时：configStore 在 %ds 内未完成迁移，请检查集群状态后重试", gid, maxRetries/2)
+	log.Printf("[Cluster] JoinGroup: %s", msg)
+	return false, msg
+
 }
 
 // LeaveGroup 移除组，返回 (是否成功, 错误信息)
@@ -778,7 +791,8 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	cm.mu.Unlock()
 
 	// ---- 阶段 2：解锁，轮询等待 shard 迁移完成 ----
-	const maxRetries = 30 // 最多等 30 秒（每次 1s）
+	const maxRetries = 10 // 最多等 10 秒（每次 1s）
+
 	changed := false
 	for retry := 0; retry < maxRetries; retry++ {
 		cm.ctl.ChangeConfigTo(newcfg)

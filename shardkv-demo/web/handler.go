@@ -49,27 +49,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	type statusResult struct {
-		state *cluster.ClusterState
-		err   rpcapi.Err
-	}
-	ch := make(chan statusResult, 1)
-	go func() {
-		ch <- statusResult{state: h.cm.Status()}
-	}()
-
-	var state *cluster.ClusterState
-	select {
-	case r := <-ch:
-		state = r.state
-	case <-time.After(5 * time.Second):
-		log.Printf("[Status] 超时: configStore 无响应（可能网络不可靠）")
-		writeJSON(w, map[string]any{
-			"err": "ErrTimeout", "message": "查询集群状态超时（网络不可靠或 configStore 无响应）",
-		})
-		return
-	}
+	state := h.cm.Status()
 	writeJSON(w, state)
 }
 
@@ -78,27 +58,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	type treeResult struct {
-		state *cluster.ClusterState
-		err   rpcapi.Err
-	}
-	ch := make(chan treeResult, 1)
-	go func() {
-		ch <- treeResult{state: h.cm.Status()}
-	}()
-
-	var state *cluster.ClusterState
-	select {
-	case r := <-ch:
-		state = r.state
-	case <-time.After(5 * time.Second):
-		log.Printf("[StatusTree] 超时: configStore 无响应")
-		writeJSON(w, map[string]any{
-			"err": "ErrTimeout", "message": "查询集群拓扑超时",
-		})
-		return
-	}
+	state := h.cm.Status()
 
 	// Build tree structure
 	type ShardNode struct {
@@ -114,13 +74,16 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		ConfigNum           shardcfg.Tnum `json:"configNum"`
 		HasPendingMigration bool          `json:"hasPendingMigration"`
 		PendingConfigNum    shardcfg.Tnum `json:"pendingConfigNum"`
+		ConfigCached        bool          `json:"configCached"`
 		Groups              []GroupNode   `json:"groups"`
 		Shards              []ShardNode   `json:"shards"`
 	}{
 		ConfigNum:           state.Config.Num,
 		HasPendingMigration: state.HasPendingMigration,
 		PendingConfigNum:    state.PendingConfigNum,
+		ConfigCached:        state.ConfigCached,
 	}
+
 	for _, gs := range state.Groups {
 		tree.Groups = append(tree.Groups, GroupNode{
 			GID:     gs.GID,
@@ -159,7 +122,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	shard := shardcfg.Key2Shard(req.Key)
 
-	// 超时保护的 Get：在 goroutine 中执行，20s 超时
+	// 超时保护的 Get：在 goroutine 中执行，12s 超时
 	type getResult struct {
 		val     string
 		version rpcapi.Tversion
@@ -183,8 +146,9 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		version = gres.version
-	case <-time.After(20 * time.Second):
+	case <-time.After(12 * time.Second):
 		log.Printf("[Put] key=%q S%d Get 超时: 集群无响应 (Raft 可能无 leader)", req.Key, shard)
+
 		writeJSON(w, map[string]any{
 			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
 			"err": "ErrTimeout", "message": "集群无响应（可能是 Raft 组无 leader）",
@@ -201,7 +165,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 	var putErr rpcapi.Err
 	select {
 	case putErr = <-putCh:
-	case <-time.After(20 * time.Second):
+	case <-time.After(12 * time.Second):
 		log.Printf("[Put] key=%q S%d 超时: PUT 无响应", req.Key, shard)
 		writeJSON(w, map[string]any{
 			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
@@ -262,8 +226,9 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	select {
 	case gres := <-getCh:
 		value, version, getErr = gres.val, gres.version, gres.err
-	case <-time.After(20 * time.Second):
+	case <-time.After(12 * time.Second):
 		log.Printf("[Get] key=%q 超时: 集群无响应 (Raft 可能无 leader)", key)
+
 		writeJSON(w, map[string]any{
 			"success": false, "key": key,
 			"err": "ErrTimeout", "message": "集群无响应（可能是 Raft 组无 leader）",
@@ -520,26 +485,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	type cfgResult struct {
-		cfg *shardcfg.ShardConfig
-	}
-	ch := make(chan cfgResult, 1)
-	go func() {
-		ch <- cfgResult{cfg: h.cm.QueryConfig()}
-	}()
-
-	var cfg *shardcfg.ShardConfig
-	select {
-	case r := <-ch:
-		cfg = r.cfg
-	case <-time.After(5 * time.Second):
-		log.Printf("[Config] 超时: configStore 无响应")
-		writeJSON(w, map[string]any{
-			"err": "ErrTimeout", "message": "查询配置超时（网络不可靠或 configStore 无响应）",
-		})
-		return
-	}
+	cfg := h.cm.QueryConfig()
 	writeJSON(w, cfg)
 }
 
@@ -704,7 +650,8 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 
 	shard := shardcfg.Key2Shard(req.Key)
 
-	// 超时保护的 Put：在 goroutine 中执行，20s 超时
+	// 超时保护的 Put：在 goroutine 中执行，12s 超时
+
 	putCh := make(chan rpcapi.Err, 1)
 	go func() {
 		putCh <- h.cm.Put(req.Key, req.Value, req.Version)
@@ -713,8 +660,9 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 	var putErr rpcapi.Err
 	select {
 	case putErr = <-putCh:
-	case <-time.After(20 * time.Second):
+	case <-time.After(12 * time.Second):
 		log.Printf("[Put] key=%q S%d CAS 超时: PUT 无响应 (Raft 可能无 leader)", req.Key, shard)
+
 		writeJSON(w, map[string]any{
 			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version),
 			"err": "ErrTimeout", "message": "PUT 超时（可能是 Raft 组无 leader）",
