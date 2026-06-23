@@ -6,6 +6,7 @@ import (
 	"kvstore/debug"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -741,18 +742,30 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleObserveLogs 获取最近 N 条观测日志
+// HandleObserveLogs 获取观测日志，支持 ?since=xxx 游标增量获取
+// 返回 {lines, nextId}，nextId 是当前最新的 observeIdx，
+// 前端下次轮询时传入 since=nextId 即可只取新日志
 func (h *Handler) HandleObserveLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	lines := debug.GetObserveLines(200)
+
+	// 解析 since 参数（默认 0）
+	sinceStr := r.URL.Query().Get("since")
+	var since int64
+	if sinceStr != "" {
+		if parsed, err := strconv.ParseInt(sinceStr, 10, 64); err == nil {
+			since = parsed
+		}
+	}
+
+	lines, nextId := debug.GetObserveLinesSince(since)
 	if lines == nil {
-		writeJSON(w, map[string]any{"lines": []debug.ObserveLine{}})
+		writeJSON(w, map[string]any{"lines": []debug.ObserveLine{}, "nextId": nextId})
 		return
 	}
-	writeJSON(w, map[string]any{"lines": lines})
+	writeJSON(w, map[string]any{"lines": lines, "nextId": nextId})
 }
 
 // --- Helpers ---

@@ -47,6 +47,9 @@
         .right-panel {
             width: 380px; min-width: 360px;
             display: flex; flex-direction: column; gap: 0;
+            background: #1a1a2e;
+            border-radius: 10px;
+            overflow: hidden;
         }
 
         .card {
@@ -129,13 +132,43 @@
 
         .log-panel {
             background: #1a1a2e; color: #e0e0e0;
-            border-radius: 10px;
+            border-radius: 0;
             font-family: 'SF Mono', Monaco, monospace; font-size: 11px;
             overflow: hidden;
             display: flex;
             flex-direction: column;
             flex: 1;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .right-panel > .log-panel:first-child {
+            border-radius: 10px 10px 0 0;
+        }
+        .right-panel > .log-panel:last-child {
+            border-radius: 0 0 10px 10px;
+        }
+        .right-panel > .log-panel:only-child {
+            border-radius: 10px;
+        }
+        .log-drag-handle {
+            height: 6px;
+            background: #2a2a4a;
+            cursor: row-resize;
+            flex-shrink: 0;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s;
+            position: relative;
+        }
+        .log-drag-handle:hover {
+            background: #3a3a5a;
+        }
+        .log-drag-handle::after {
+            content: '···';
+            color: #66779a;
+            font-size: 10px;
+            letter-spacing: 3px;
+            line-height: 1;
         }
         .log-panel-header {
             display: flex; align-items: center; justify-content: space-between;
@@ -155,6 +188,7 @@
         .log-panel-area .log-time { color: #888; }
         .log-panel-area .log-ok { color: #52c41a; }
         .log-panel-area .log-err { color: #ff4d4f; }
+        .log-panel-area .log-warn { color: #d48806; }
         .log-panel-area .log-info { color: #1890ff; }
         .log-panel-area .log-shard { color: #f6d365; }
 
@@ -368,7 +402,7 @@
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f6ffed;border:1px solid #b7eb8f;">
                             <input type="checkbox" class="observe-toggle" data-scene="kvsubmit" onchange="toggleObserve(this)">
-                            <span style="color:#52c41a;">KV提交</span>
+                            <span style="color:#52c41a;">KV请求</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff2f0;border:1px solid #ffccc7;">
                             <input type="checkbox" class="observe-toggle" data-scene="fault" onchange="toggleObserve(this)">
@@ -402,7 +436,7 @@
 
     <!-- 右侧面板：日志 -->
     <div class="right-panel">
-        <div class="log-panel">
+        <div class="log-panel" id="opLogPanel">
             <div class="log-panel-header" onclick="toggleLog()">
                 <span class="title">操作日志</span>
                 <span class="toggle" id="logToggle">收起</span>
@@ -411,13 +445,14 @@
                 <div class="log-info">系统就绪，等待操作...</div>
             </div>
         </div>
+        <div class="log-drag-handle" id="logDragHandle"></div>
         <!-- 观测日志面板 -->
-        <div class="log-panel" style="flex:0 0 auto;max-height:200px;margin-top:8px;">
+        <div class="log-panel" id="obsLogPanel">
             <div class="log-panel-header" onclick="toggleObserveLog()">
                 <span class="title" style="color:#f6d365;">观测日志</span>
-                <span class="toggle" id="observeLogToggle">展开</span>
+                <span class="toggle" id="observeLogToggle">收起</span>
             </div>
-            <div id="observeLogArea" class="log-panel-area" style="display:none;min-height:40px;max-height:160px;">
+            <div id="observeLogArea" class="log-panel-area">
                 <div class="log-info" style="color:#888;">开启观测开关后，日志将在此显示...</div>
             </div>
         </div>
@@ -523,18 +558,124 @@
     let refreshTimer = null;
 
     let logExpanded = true;
+    let observeLogExpanded = true;
+    const INITIAL_LOG_RATIO = 0.6;
+    let logRatio = INITIAL_LOG_RATIO;
     function toggleLog() {
         const area = document.getElementById('logArea');
         const toggle = document.getElementById('logToggle');
         logExpanded = !logExpanded;
         area.style.display = logExpanded ? 'block' : 'none';
         toggle.textContent = logExpanded ? '收起' : '展开';
+        recalculateLogLayout();
+    }
+
+    /**
+     * recalculateLogLayout 根据两个日志面板的展开/收起状态，
+     * 动态调整它们在 .right-panel 中的 flex 比例：
+     * - 两个都展开：操作日志 flex:1，观测日志固定 200px
+     * - 只有操作日志展开：操作日志 flex:1，观测日志 flex:0 0 auto
+     * - 只有观测日志展开：操作日志 flex:0 0 auto，观测日志 flex:1
+     * - 全部收起：都 flex:0 0 auto，背景统一深色
+     */
+    logRatio = INITIAL_LOG_RATIO;
+    function recalculateLogLayout() {
+        const opPanel = document.getElementById('opLogPanel');
+        const obsPanel = document.getElementById('obsLogPanel');
+        const handle = document.getElementById('logDragHandle');
+        if (!opPanel || !obsPanel) return;
+
+        const bothExpanded = logExpanded && observeLogExpanded;
+
+        if (handle) {
+            handle.style.display = bothExpanded ? 'flex' : 'none';
+        }
+
+        if (bothExpanded) {
+            // 两个都展开，按 logRatio 比例分配
+            const obsRatio = 1 - logRatio;
+            opPanel.style.flex = String(logRatio);
+            opPanel.style.maxHeight = 'none';
+            obsPanel.style.flex = String(obsRatio);
+            obsPanel.style.maxHeight = 'none';
+        } else if (logExpanded && !observeLogExpanded) {
+            // 仅操作日志展开
+            opPanel.style.flex = '1';
+            opPanel.style.maxHeight = 'none';
+            obsPanel.style.flex = '0 0 auto';
+            obsPanel.style.maxHeight = 'none';
+        } else if (!logExpanded && observeLogExpanded) {
+            // 仅观测日志展开
+            opPanel.style.flex = '0 0 auto';
+            opPanel.style.maxHeight = 'none';
+            obsPanel.style.flex = '1';
+            obsPanel.style.maxHeight = 'none';
+        } else {
+            // 全部收起
+            opPanel.style.flex = '0 0 auto';
+            opPanel.style.maxHeight = 'none';
+            obsPanel.style.flex = '0 0 auto';
+            obsPanel.style.maxHeight = 'none';
+        }
+    }
+
+    // ========== 拖拽分隔条 ==========
+    let isDragging = false;
+    let dragStartY = 0;
+    let dragStartRatio = 0.6;
+
+    function initDragHandle() {
+        const handle = document.getElementById('logDragHandle');
+        if (!handle) return;
+        handle.addEventListener('mousedown', onDragStart);
+    }
+
+    function onDragStart(e) {
+        isDragging = true;
+        dragStartY = e.clientY;
+        dragStartRatio = logRatio;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+        e.preventDefault();
+    }
+
+    function onDragMove(e) {
+        if (!isDragging) return;
+        const rightPanel = document.querySelector('.right-panel');
+        if (!rightPanel) return;
+        const rect = rightPanel.getBoundingClientRect();
+        const panelHeight = rect.height;
+        if (panelHeight <= 0) return;
+
+        const deltaY = e.clientY - dragStartY;
+        const deltaRatio = deltaY / panelHeight;
+        let newRatio = dragStartRatio + deltaRatio;
+        newRatio = Math.max(0.15, Math.min(0.85, newRatio));
+        logRatio = newRatio;
+        recalculateLogLayout();
+    }
+
+    function onDragEnd() {
+        isDragging = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onDragMove);
+        document.removeEventListener('mouseup', onDragEnd);
+    }
+
+    // 页面加载后初始化拖拽
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initDragHandle);
+    } else {
+        initDragHandle();
     }
 
     function addLog(message, type) {
         const logArea = document.getElementById('logArea');
         const time = new Date().toLocaleTimeString();
-        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'shard' ? 'log-shard' : 'log-info';
+        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'warn' ? 'log-warn' : type === 'shard' ? 'log-shard' : 'log-info';
         const entry = document.createElement('div');
         entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
         logArea.appendChild(entry);
@@ -655,7 +796,7 @@
             body: JSON.stringify({gid, srv})
         });
         if (result.success) {
-            addLog(`IsolateNode: 组${gid} 节点${srv} 已隔离网络 (进程保持运行)`, 'ok');
+            addLog(`IsolateNode: 组${gid} 节点${srv} 已隔离网络 (进程保持运行)`, 'warn');
         } else {
             addLog(`IsolateNode: 组${gid} 节点${srv} 隔离失败 - ${result.error}`, 'err');
         }
@@ -696,7 +837,7 @@
 
     async function doKillNodeById(gid, srv) {
         await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv})});
-        addLog(`KillNode: server-${gid}-${srv}`, 'ok');
+        addLog(`KillNode: server-${gid}-${srv}`, 'err');
         refreshStatus();
     }
 
@@ -715,7 +856,7 @@
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('KillGroup: 请选择有效的组', 'err'); return; }
         await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid})});
-        addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'ok');
+        addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'err');
         refreshStatus();
     }
 
@@ -1064,6 +1205,7 @@
 
     initShardSelect();
     refreshStatus();
+    recalculateLogLayout();
 
     // 自适应退避调度刷新：成功 3s，每次失败 +2s（上限 15s）
     function scheduleRefresh() {
@@ -1077,21 +1219,25 @@
     scheduleRefresh();
 
     // ========== 观测日志 ==========
-    let observeLogExpanded = false;
-    let observeLogLastCount = 0;
+    observeLogExpanded = true;
+    let observeLogLastId = 0; // 用游标 Id 而非数组长度，避免环形缓冲区满后增量失效
 
-    function toggleObserveLog() {
+    async function toggleObserveLog() {
         const area = document.getElementById('observeLogArea');
         const toggle = document.getElementById('observeLogToggle');
         observeLogExpanded = !observeLogExpanded;
         area.style.display = observeLogExpanded ? 'block' : 'none';
         toggle.textContent = observeLogExpanded ? '收起' : '展开';
         if (observeLogExpanded) {
-            fetchObserveLogs();
+            // 展开时重置游标为0，先 await 首次拉取完成后再启动轮询
+            observeLogLastId = 0;
+            area.innerHTML = '';
+            await fetchObserveLogs();
             startObserveLogPoll();
         } else {
             stopObserveLogPoll();
         }
+        recalculateLogLayout();
     }
 
     // 观测日志标签颜色映射
@@ -1104,17 +1250,31 @@
     const OBSERVE_LOG_NAMES = {
         'Election': '选举',
         'Migration': '迁移',
-        'KVSubmit': 'KV提交',
+        'KVSubmit': 'KV请求',
         'Fault': '故障',
     };
 
-    function addObserveLog(tag, text) {
+    // 迁移子类型颜色：freeze=冰蓝色, delete=琥珀色, install=绿色
+    function getMigrationColor(text) {
+        if (text.includes('FreezeShard') || text.includes('Freeze')) return '#00b4d8'; // 冰蓝色
+        if (text.includes('DeleteShard') || text.includes('Delete')) return '#e68a00'; // 琥珀色
+        if (text.includes('InstallShard') || text.includes('Install')) return '#52c41a'; // 绿色
+        return null;
+    }
+
+    function addObserveLog(tag, text, unixMilli) {
         const area = document.getElementById('observeLogArea');
-        const time = new Date().toLocaleTimeString();
-        const color = OBSERVE_LOG_COLORS[tag] || '#1890ff';
+        const time = unixMilli ? new Date(unixMilli).toLocaleTimeString() : new Date().toLocaleTimeString();
+        const tagColor = OBSERVE_LOG_COLORS[tag] || '#1890ff';
         const tagName = OBSERVE_LOG_NAMES[tag] || tag;
+        // 迁移日志主体按子类型（Freeze/Delete/Install）着色，标签保持原有颜色
+        let textColor = '';
+        if (tag === 'Migration') {
+            textColor = getMigrationColor(text) || '';
+        }
         const entry = document.createElement('div');
-        entry.innerHTML = `<span class="log-time">[${time}]</span> <span style="color:${color};font-weight:600;">[${tagName}]</span> ${escapeHtml(text)}`;
+        const textStyle = textColor ? `style="color:${textColor};"` : '';
+        entry.innerHTML = `<span class="log-time">[${time}]</span> <span style="color:${tagColor};font-weight:600;">[${tagName}]</span> <span ${textStyle}>${escapeHtml(text)}</span>`;
         area.appendChild(entry);
         area.scrollTop = area.scrollHeight;
         while (area.children.length > 200) {
@@ -1129,34 +1289,45 @@
     }
 
     let observeLogPollTimer = null;
-    const OBSERVE_LOG_POLL_INTERVAL = 800; // 800ms 轮询间隔
+    const OBSERVE_LOG_POLL_INTERVAL = 500; // 500ms 轮询间隔
 
     function startObserveLogPoll() {
         if (observeLogPollTimer) return;
-        observeLogPollTimer = setInterval(fetchObserveLogs, OBSERVE_LOG_POLL_INTERVAL);
+        // 用 setTimeout 链式调用替代 setInterval，确保前一次完成后再发起下一次
+        async function pollLoop() {
+            if (!observeLogPollTimer) return;
+            await fetchObserveLogs();
+            observeLogPollTimer = setTimeout(pollLoop, OBSERVE_LOG_POLL_INTERVAL);
+        }
+        observeLogPollTimer = setTimeout(pollLoop, OBSERVE_LOG_POLL_INTERVAL);
     }
 
     function stopObserveLogPoll() {
         if (observeLogPollTimer) {
-            clearInterval(observeLogPollTimer);
+            clearTimeout(observeLogPollTimer);
             observeLogPollTimer = null;
         }
     }
 
     async function fetchObserveLogs() {
         try {
-            const resp = await fetch(API + '/api/observe/logs', {method: 'GET'});
+            const resp = await fetch(API + '/api/observe/logs?since=' + observeLogLastId, {method: 'GET'});
             if (!resp.ok) return;
             const data = await resp.json();
-            if (!data.lines || data.lines.length === 0) return;
+            if (!data.lines || data.lines.length === 0) {
+                // 即使没新行也更新 nextId，避免游标落后太多
+                if (data.nextId > observeLogLastId) {
+                    observeLogLastId = data.nextId;
+                }
+                return;
+            }
 
-            // 只追加新行
-            const newLines = data.lines.slice(observeLogLastCount);
-            if (newLines.length === 0) return;
-
-            observeLogLastCount = data.lines.length;
-            for (const line of newLines) {
-                addObserveLog(line.tag, line.text);
+            // 用后端返回的 nextId 更新游标，精确增量获取
+            if (data.nextId > observeLogLastId) {
+                observeLogLastId = data.nextId;
+            }
+            for (const line of data.lines) {
+                addObserveLog(line.tag, line.text, line.unixMilli);
             }
         } catch (err) {
             // 静默失败
@@ -1216,7 +1387,11 @@
             }
         } catch(e) {}
         // 初始化观测日志状态
-        initObserveState();
+        await initObserveState();
+        // 默认展开观测日志，自动启动轮询
+        observeLogLastId = 0;
+        await fetchObserveLogs();
+        startObserveLogPoll();
     });
 
     // ========== CAS 并发竞赛（前端异步并发，每条日志实时显示） ==========
@@ -1241,7 +1416,7 @@
         const resultDiv = document.getElementById('raceResult');
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<div style="color:#764ba2;">CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
-        addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}" (40%丢包, 随机延迟0-7s)`, 'shard');
+        addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}"`, 'shard');
 
         // 1. 先获取当前版本号
         let version;

@@ -2,9 +2,9 @@ package debug
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ============================================================
@@ -63,8 +63,10 @@ const (
 // --- 环形缓冲区 ---
 
 type ObserveLine struct {
-	Tag  string `json:"tag"`
-	Text string `json:"text"`
+	Tag       string `json:"tag"`
+	Text      string `json:"text"`
+	Id        int64  `json:"id"`        // 单调递增的日志ID，用于前端游标增量获取
+	UnixMilli int64  `json:"unixMilli"` // 日志产生时的服务器时间戳（毫秒）
 }
 
 const observeBufSize = 500
@@ -77,16 +79,14 @@ var (
 
 // observeWrite 直接写入环形缓冲区（无终端输出，供 RPC handler 使用避免重复）
 func observeWrite(tag, text string) {
-	line := ObserveLine{Tag: tag, Text: text}
 	idx := observeIdx.Add(1) - 1
-	observeBuf[idx%observeBufSize] = line
+	observeBuf[idx%observeBufSize] = ObserveLine{Tag: tag, Text: text, Id: idx, UnixMilli: time.Now().UnixMilli()}
 }
 
-// observePush 格式化后写入环形缓冲区并输出到终端
+// observePush 格式化后写入环形缓冲区
 func observePush(tag, format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	observeWrite(tag, text)
-	log.Printf("[%s] %s", tag, text)
 }
 
 // ObservePushTagged 检查 tag 对应 toggle，开启时写入环形缓冲区（无终端输出）
@@ -142,6 +142,36 @@ func GetObserveLines(n int) []ObserveLine {
 	return lines
 }
 
+// GetObserveLinesSince 获取所有 Id >= sinceId 的观测日志（最多 bufSize 条）
+// 返回结果按时间正序排列。sinceId=0 时返回最近 observeBufSize 条。
+// 返回当前最新的 observeIdx 作为 nextId，供前端做游标增量获取。
+func GetObserveLinesSince(sinceId int64) (lines []ObserveLine, nextId int64) {
+	observeMu.Lock()
+	defer observeMu.Unlock()
+
+	current := observeIdx.Load()
+	if current == 0 {
+		return nil, 0
+	}
+
+	// 计算扫描范围：最多 observeBufSize 条
+	start := current - int64(observeBufSize)
+	if start < 0 {
+		start = 0
+	}
+
+	// 从最大的 Id 往回扫描，收集 Id >= sinceId 的条目
+	count := int(current - start)
+	all := make([]ObserveLine, 0, count)
+	for i := start; i < current; i++ {
+		line := observeBuf[i%observeBufSize]
+		if line.Id >= sinceId {
+			all = append(all, line)
+		}
+	}
+	return all, current
+}
+
 // --- 转发回调（子进程模式） ---
 
 // ObserveForwardFn 是子进程向主进程转发观测日志的回调函数类型
@@ -168,7 +198,6 @@ func getObserveForward() ObserveForwardFn {
 
 func ObserveElectionPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
-	log.Printf("[%s] %s", TagElection, text) // 始终输出到终端
 	if fn := getObserveForward(); fn != nil {
 		fn(TagElection, text) // 子进程模式：转发到主进程
 		return
@@ -181,7 +210,6 @@ func ObserveElectionPrintf(format string, a ...interface{}) {
 
 func ObserveMigrationPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
-	log.Printf("[%s] %s", TagMigration, text)
 	if fn := getObserveForward(); fn != nil {
 		fn(TagMigration, text)
 		return
@@ -191,9 +219,8 @@ func ObserveMigrationPrintf(format string, a ...interface{}) {
 	}
 }
 
-func ObserveKVSubmitPrintf(format string, a ...interface{}) {
+func ObserveKVRequestPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
-	log.Printf("[%s] %s", TagKVSubmit, text)
 	if fn := getObserveForward(); fn != nil {
 		fn(TagKVSubmit, text)
 		return
@@ -205,7 +232,6 @@ func ObserveKVSubmitPrintf(format string, a ...interface{}) {
 
 func ObserveFaultPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
-	log.Printf("[%s] %s", TagFault, text)
 	if fn := getObserveForward(); fn != nil {
 		fn(TagFault, text)
 		return

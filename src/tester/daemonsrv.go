@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"kvstore/debug"
 	"kvstore/rpc"
 	"kvstore/tester/sockrpc"
 )
@@ -97,6 +98,15 @@ func InitDaemon(args []string, mks FstartServer) error {
 	ds.rpcc = sockrpc.NewRPCClnt(endNames[sid], testerEndName)
 	// set the global for user-level annotation (`rpcc` is defined in `annotator.go`)
 	rpcc = ds.rpcc
+
+	// 设置观测日志转发回调：子进程的 ObserveXxxPrintf 通过此回调将日志
+	// 转发到主进程 TesterRPC.PostObserveLog handler，由主进程根据 toggle 决定
+	// 是否写入环形缓冲区。避免子进程直接访问共享内存中的 toggle 状态。
+	debug.SetObserveForward(func(tag, text string) {
+		args := &PostObserveLogArgs{Tag: tag, Text: text}
+		var reply PostObserveLogReply
+		ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
+	})
 
 	// for ctl RPCS to this daemon (e.g., Start)
 

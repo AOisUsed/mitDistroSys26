@@ -8,7 +8,7 @@ PIDFILE  := .$(BINARY).pid
 
 .DEFAULT_GOAL := run
 
-.PHONY: all build run start stop restart clean
+.PHONY: all build run start start-bg stop restart clean
 
 all: build
 
@@ -56,4 +56,5 @@ restart: stop build start-bg
 clean:
 	@echo "==> 清理 ..."
 	rm -f $(BINARY) $(PIDFILE)
+	rm -f ../src/main/kvsrv ../src/main/kvraft ../src/main/shardgrp
 	@echo "==> 清理完成"
