@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"shardkv-demo/config"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kvstore/kvraft"
@@ -32,6 +33,10 @@ type ClusterManager struct {
 	isolated     map[tester.Tgid]map[int]bool // 被网络隔离的节点
 	chaosMonkeys []*ChaosMonkey               // 活跃的混沌猴子
 
+	// migrationPending 表示当前正在进行 Join/Leave 显式迁移操作，
+	// 用于在缓存轮询还未感知到 nextConfig 变化时，让 Status() 正确显示 pending 状态
+	migrationPending atomic.Bool
+
 	// cachedConfig 缓存最后一次成功查询的 config，当 configStore（kvraft）无响应时使用
 	cachedConfig     *shardcfg.ShardConfig
 	cachedNextConfig *shardcfg.ShardConfig
@@ -48,7 +53,7 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		groups:       make(map[tester.Tgid]bool),
 		left:         make(map[tester.Tgid]bool),
 		isolated:     make(map[tester.Tgid]map[int]bool),
-		maxRaftState: -1,
+		maxRaftState: 5000, // raftstate 超过5 KB 就快照
 	}
 	return cm
 }
@@ -234,7 +239,11 @@ func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
 }
 
 func (cm *ClusterManager) tryHasPendingMigration() bool {
-	// 简化版：不再阻塞调用
+	// 如果当前正在进行显式迁移操作（Join/Leave），立即返回 true
+	if cm.migrationPending.Load() {
+		return true
+	}
+	// 仅依赖缓存（非阻塞）
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.cachedConfig == nil || cm.cachedNextConfig == nil {
@@ -616,40 +625,13 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		return false, fmt.Sprintf("组 %d 已存在", gid)
 	}
 
-	// 检查已有组是否有足够存活节点完成 shard 迁移
-	for existingGid := range cm.groups {
-		if existingGid == gid {
-			continue
-		}
-		sg := cm.cfg.Group(existingGid)
-		if sg == nil {
-			continue
-		}
-		connected := sg.GetConnected()
-		nAlive := 0
-		for i := 0; i < sg.N(); i++ {
-			if i < len(connected) && connected[i] {
-				nAlive++
-			}
-		}
-		quorum := sg.N()/2 + 1
-		if nAlive < quorum {
-			sg = cm.cfg.Group(gid)
-			if sg != nil {
-				sg.Shutdown()
-			}
-			delete(cm.groups, gid)
-			cm.cfg.ExitGroup(gid)
-			cm.mu.Unlock()
-			msg := fmt.Sprintf("组 %d 无法加入：组 %d 仅有 %d/%d 节点存活（需要 quorum=%d），shard 迁移无法完成。请先恢复故障组", gid, existingGid, nAlive, sg.N(), quorum)
-			log.Printf("[Cluster] JoinGroup: %s", msg)
-			return false, msg
-		}
-	}
-
 	cm.groups[gid] = true
-	cm.ctl.ChangeConfigTo(newcfg)
+	cm.migrationPending.Store(true)
 	cm.mu.Unlock()
+	defer cm.migrationPending.Store(false)
+
+	// ChangeConfigTo 必须在锁外执行（阻塞 RPC，不阻塞状态轮询）
+	cm.ctl.ChangeConfigTo(newcfg)
 
 	// ---- 阶段 2：解锁，轮询等待迁移完成（最多重试 20 次，约 10s）----
 	const maxRetries = 20
@@ -791,6 +773,8 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	cm.mu.Unlock()
 
 	// ---- 阶段 2：解锁，轮询等待 shard 迁移完成 ----
+	cm.migrationPending.Store(true)
+	defer cm.migrationPending.Store(false)
 	const maxRetries = 10 // 最多等 10 秒（每次 1s）
 
 	changed := false

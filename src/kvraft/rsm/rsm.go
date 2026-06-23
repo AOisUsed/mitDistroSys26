@@ -139,6 +139,7 @@ func (rsm *RSM) readApply() {
 
 		} else if applyMsg.SnapshotValid { // if it's a snapshot
 			debug.D4BPrintf("rsm%v reads snapshot from applyCh, index:%v, term:%v", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
+			debug.ObserveFaultPrintf("rsm-%v: 收到 InstallSnapshot(index=%v, term=%v), 正在恢复状态机", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
 			rsm.sm.Restore(applyMsg.Snapshot)
 
 			// when snapshot is introduced, it's no longer reliable to know that a Submit() expires based only on the log overwrite

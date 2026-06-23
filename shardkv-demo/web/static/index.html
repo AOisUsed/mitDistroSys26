@@ -465,6 +465,8 @@
     const N_SHARDS = 12;
     let cachedTree = null;
     let chaosStates = {};
+    // 前端乐观 pending 标记：点击 Join/Leave 后立即显示 pending，不等后端响应
+    let optimisticPendingMigration = false;
 
     // 前端 KV 并发限制（浏览器同域名连接池有限，一般 6 个）
     // 最多允许 2 个并发 KV 操作，避免其他请求（status refresh）被阻塞
@@ -874,7 +876,16 @@
 
     async function doJoinGroup() {
         addLog(`JoinGroup: ── 发起新组加入操作 ──`, 'shard');
-        const result = await api('/api/group/join', {method: 'POST'});
+        // 乐观更新：立即显示 pending 标记，不等 POST 返回
+        optimisticPendingMigration = true;
+        refreshStatus();
+
+        let result;
+        try {
+            result = await api('/api/group/join', {method: 'POST'});
+        } finally {
+            optimisticPendingMigration = false; // 异常也清除标记
+        }
         if (result.success) {
             if (result.message) {
                 addLog(`JoinGroup: ${result.message}`, 'shard');
@@ -895,7 +906,14 @@
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
         leaveInFlight = true;
         addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
-        const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        optimisticPendingMigration = true;
+        refreshStatus();
+        let result;
+        try {
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        } finally {
+            optimisticPendingMigration = false; // 异常也清除标记
+        }
         if (result.success) {
             addLog(`LeaveGroup: ✅ 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
         } else if (result.message) {
@@ -928,7 +946,15 @@
 
     // ========== 快捷 Leave（从拓扑标题调用） ==========
     async function doLeaveGroupById(gid) {
-        const result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        optimisticPendingMigration = true;
+        refreshStatus();
+        let result;
+        try {
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+        } finally {
+            optimisticPendingMigration = false; // 异常也清除标记
+        }
         if (result.success) {
             addLog(`LeaveGroup: 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
         } else if (result.message) {
@@ -1152,7 +1178,7 @@
                 }
                 // Show/hide pending migration badge
                 const pendingBadge = document.getElementById('pendingMigrationBadge');
-                if (tree.hasPendingMigration) {
+                if (tree.hasPendingMigration || optimisticPendingMigration) {
                     pendingBadge.style.display = 'inline';
                 } else {
                     pendingBadge.style.display = 'none';
@@ -1251,14 +1277,14 @@
         'Election': '选举',
         'Migration': '迁移',
         'KVSubmit': 'KV请求',
-        'Fault': '故障',
+        'Fault': '故障恢复',
     };
 
-    // 迁移子类型颜色：freeze=冰蓝色, delete=琥珀色, install=绿色
+    // 迁移子类型颜色：freeze/冻结=冰蓝色, delete/删除=琥珀色, install/安装=绿色
     function getMigrationColor(text) {
-        if (text.includes('FreezeShard') || text.includes('Freeze')) return '#00b4d8'; // 冰蓝色
-        if (text.includes('DeleteShard') || text.includes('Delete')) return '#e68a00'; // 琥珀色
-        if (text.includes('InstallShard') || text.includes('Install')) return '#52c41a'; // 绿色
+        if (text.includes('冻结')) return '#00b4d8'; // 冰蓝色
+        if (text.includes('删除')) return '#e68a00'; // 琥珀色
+        if (text.includes('安装')) return '#52c41a'; // 绿色
         return null;
     }
 

@@ -141,10 +141,10 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpcapi.ErrWrongGroup || rpcErr == rpcapi.ErrRetryExhausted {
-			debug.ObserveFaultPrintf("shardkv clerk: Get(%s) -> %v, retrying", key, rpcErr)
+			debug.ObserveFaultPrintf("分片客户端: Get(%s) -> %v, 重试中", key, rpcErr)
 			ck.refreshConfig()
 		} else {
-			debug.ObserveKVRequestPrintf("shardkv clerk: Get(%s) -> OK (val=%s, ver=%d)", key, val, version)
+			debug.ObserveKVRequestPrintf("分片客户端: Get(%s) -> OK (值=%s, 版本=%d)", key, val, version)
 			return val, version, rpcErr
 		}
 	}
@@ -181,10 +181,10 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
 		case rpcapi.ErrWrongGroup, rpcapi.ErrRetryExhausted:
-			debug.ObserveFaultPrintf("shardkv clerk: Put(%s:%s) -> %v, retrying", key, value, rpcErr)
+			debug.ObserveFaultPrintf("分片客户端: Put(%s : %s) -> %v, 重试中", key, value, rpcErr)
 			ck.refreshConfig()
 		case rpcapi.OK, rpcapi.ErrVersion, rpcapi.ErrNoKey:
-			debug.ObserveKVRequestPrintf("shardkv clerk: Put(%s:%s) -> %s", key, value, rpcErr)
+			debug.ObserveKVRequestPrintf("分片客户端: Put(%s : %s) -> %s", key, value, rpcErr)
 			return rpcErr
 		default:
 			log.Fatalf("undefined rpc Err: %v", rpcErr)

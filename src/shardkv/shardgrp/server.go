@@ -177,7 +177,6 @@ func (kv *KVServer) DoOp(req any) any {
 	// == FreezeShard == //
 	case shardrpc.FreezeShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp Freeze(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		debug.ObserveMigrationPrintf("server-%v-%v: FreezeShard(%v), Config #%v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 		reqCfgNum := request.Num
@@ -185,6 +184,7 @@ func (kv *KVServer) DoOp(req any) any {
 		if reqCfgNum > localCfgNum {
 			switch kv.shardStatuses[shid] {
 			case Serving:
+				debug.ObserveMigrationPrintf("server-%v-%v: 冻结分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.shardStatuses[shid] = Frozen
 				kv.cfgNumByShid[shid] = reqCfgNum
 				reply = shardrpc.FreezeShardReply{
@@ -225,12 +225,12 @@ func (kv *KVServer) DoOp(req any) any {
 	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
-		debug.ObserveMigrationPrintf("server-%v-%v: InstallShard(%v), Config #%v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		// check config Num
 		localCfgNum := kv.cfgNumByShid[request.Shard]
 		if request.Num > localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Absent:
+				debug.ObserveMigrationPrintf("server-%v-%v: 安装分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.installShardState(request.Shard, request.State)
 				kv.shardStatuses[request.Shard] = Serving
 				kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
@@ -263,13 +263,13 @@ func (kv *KVServer) DoOp(req any) any {
 	// == DeleteShard == //
 	case shardrpc.DeleteShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp DeleteShard(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
-		debug.ObserveMigrationPrintf("server-%v-%v: DeleteShard(%v), Config #%v, from status: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 
 		if request.Num == localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Frozen:
+				debug.ObserveMigrationPrintf("server-%v-%v: 删除分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.kvm[shid] = nil          // delete kv for the shard
 				kv.shardClients[shid] = nil // delete information of clients that operated on this shard,
 				// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
@@ -426,6 +426,7 @@ func (kv *KVServer) Snapshot() []byte {
 	for shid, kv := range kvm {
 		keyNum[shid] = len(kv)
 	}
+	debug.ObserveFaultPrintf("server-%v-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver :%v Snapshoted \n keyNum: %v\n", kv.me, keyNum)
 
 	// encode copied snapshot
@@ -459,6 +460,7 @@ func (kv *KVServer) Restore(data []byte) {
 	for shid, kv := range snapshot.Kvm {
 		keyNum[shid] = len(kv)
 	}
+	debug.ObserveFaultPrintf("server-%v-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver %v: Restored from snapshot\n keyNum: %v\n", kv.me, keyNum)
 
 	kv.rwMu.Lock()
