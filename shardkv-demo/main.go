@@ -48,6 +48,9 @@ func main() {
 	}
 	log.Printf("工作目录切换到: %s", srcDir)
 
+	// 设置 OBSERVE_FORWARD=true，使子进程（shardgrp daemon）将观测日志转发到主进程
+	os.Setenv("OBSERVE_FORWARD", "true")
+
 	// 创建集群管理器（传入配置）
 	cm := cluster.NewClusterManager(cfg)
 

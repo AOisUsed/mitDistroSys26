@@ -1087,8 +1087,10 @@
         area.style.display = observeLogExpanded ? 'block' : 'none';
         toggle.textContent = observeLogExpanded ? '收起' : '展开';
         if (observeLogExpanded) {
-            // 展开时立即拉取一次
             fetchObserveLogs();
+            startObserveLogPoll();
+        } else {
+            stopObserveLogPoll();
         }
     }
 
@@ -1127,6 +1129,20 @@
     }
 
     let observeLogPollTimer = null;
+    const OBSERVE_LOG_POLL_INTERVAL = 800; // 800ms 轮询间隔
+
+    function startObserveLogPoll() {
+        if (observeLogPollTimer) return;
+        observeLogPollTimer = setInterval(fetchObserveLogs, OBSERVE_LOG_POLL_INTERVAL);
+    }
+
+    function stopObserveLogPoll() {
+        if (observeLogPollTimer) {
+            clearInterval(observeLogPollTimer);
+            observeLogPollTimer = null;
+        }
+    }
+
     async function fetchObserveLogs() {
         try {
             const resp = await fetch(API + '/api/observe/logs', {method: 'GET'});

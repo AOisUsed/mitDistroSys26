@@ -3,6 +3,7 @@ package tester
 import (
 	//"log"
 
+	"kvstore/debug"
 	"kvstore/tester/sockrpc"
 )
 
@@ -44,4 +45,18 @@ func (trpc *TesterRPC) Forward(args *ForwardArgs, reply *ForwardReply) {
 	//log.Printf("%v: Forward args %v to end %q %d", trpc.Name(), args.Method, args.End, args.Id)
 	end := trpc.cfg.net.LookupEnd(args.End)
 	reply.Rep, reply.Ok = end.Forward(args.Method, args.Args)
+}
+
+// ----- 观测日志转发（子进程 → 主进程）-----
+
+type PostObserveLogArgs struct {
+	Tag  string
+	Text string
+}
+
+type PostObserveLogReply struct{}
+
+// PostObserveLog 接收子进程转发过来的观测日志，由主进程根据 toggle 决定是否写入环形缓冲区
+func (trpc *TesterRPC) PostObserveLog(args *PostObserveLogArgs, reply *PostObserveLogReply) {
+	debug.ObservePushTagged(args.Tag, args.Text)
 }

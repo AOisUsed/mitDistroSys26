@@ -195,7 +195,7 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 	}
 
 	debug.D4APrintf("rsm%v Start op %v: %v at %v.\n", rsm.me, op.Id, op.Req, commandId)
-	debug.ObserveKVSubmitPrintf("rsm%v Submit opId=%v req=%+v at logIdx=%v", rsm.me, op.Id, op.Req, commandId)
+	//debug.ObserveKVSubmitPrintf("rsm%v Submit opId=%v req=%+v at logIdx=%v", rsm.me, op.Id, op.Req, commandId)
 
 	// must lock before writing the channel into rsm. otherwise,
 	// rare case may happen that raft commits the log extremely fast and wants to let the corresponding Submit() know of it,
