@@ -165,6 +165,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == FreezeShard == //
 	case shardrpc.FreezeShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp Freeze(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
+		debug.ObserveMigrationPrintf("server%v(group%v): FreezeShard(shard=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, request.Num, kv.shardStatuses[request.Shard])
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 		reqCfgNum := request.Num
@@ -212,6 +213,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == InstallShard == //
 	case shardrpc.InstallShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp InstallShard(shard: %v, stateSize: %v, Num: %v)", kv.me, request.Shard, len(request.State), request.Num)
+		debug.ObserveMigrationPrintf("server%v(group%v): InstallShard(shard=%v, size=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, len(request.State), request.Num, kv.shardStatuses[request.Shard])
 		// check config Num
 		localCfgNum := kv.cfgNumByShid[request.Shard]
 		if request.Num > localCfgNum {
@@ -249,6 +251,7 @@ func (kv *KVServer) DoOp(req any) any {
 	// == DeleteShard == //
 	case shardrpc.DeleteShardArgs:
 		debug.D5APrintf("shardkvserver %v: DoOp DeleteShard(shard: %v, Num: %v)", kv.me, request.Shard, request.Num)
+		debug.ObserveMigrationPrintf("server%v(group%v): DeleteShard(shard=%v, num=%v) status=%v", kv.me, kv.gid, request.Shard, request.Num, kv.shardStatuses[request.Shard])
 		shid := request.Shard
 		localCfgNum := kv.cfgNumByShid[shid]
 

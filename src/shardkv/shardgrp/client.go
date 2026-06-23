@@ -77,6 +77,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
 	debug.D5APrintf("shardkvclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
+	debug.ObserveFaultPrintf("shardgrpclerk%v: Get(%s) retry exhausted after %d attempts (fault: all servers unavailable or partitioned)", ck.clientId, key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
@@ -130,6 +131,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	// it could mean:
 	//	- the group is in partition/election,
 	// 	- the group has left
+	debug.ObserveFaultPrintf("shardgrpclerk%v: Put(key=%s) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, key, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -172,6 +174,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 			time.Sleep(backoffTime)
 		}
 	}
+	debug.ObserveFaultPrintf("shardgrpclerk%v: FreezeShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
 	return nil, rpcapi.ErrRetryExhausted
 }
 
@@ -214,6 +217,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			time.Sleep(backoffTime)
 		}
 	}
+	debug.ObserveFaultPrintf("shardgrpclerk%v: InstallShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -255,5 +259,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 			time.Sleep(backoffTime)
 		}
 	}
+	debug.ObserveFaultPrintf("shardgrpclerk%v: DeleteShard(shard=%v) retry exhausted after %d attempts (fault: group partitioned or left)", ck.clientId, s, attempts)
 	return rpcapi.ErrRetryExhausted
 }

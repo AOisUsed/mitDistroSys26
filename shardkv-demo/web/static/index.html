@@ -300,33 +300,30 @@
                         </div>
                     </div>
                     <div id="kvResult" class="get-result">等待操作...</div>
-                </div>
 
-                <!-- 右列：节点操作 + 组操作 + 网络可靠性 -->
-                <div class="control-col">
-                    <!-- 节点操作 -->
-                    <div>
-                        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#ff4d4f;">节点操作</div>
-                        <div style="display:flex;flex-direction:column;gap:4px;">
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <span class="form-label" style="min-width:30px;">组:</span>
-                                <select id="nodeGid" class="dropdown" style="flex:1;" onchange="onNodeGidChange()">
-                                    <option value="">选择组</option>
-                                </select>
-                            </div>
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <span class="form-label" style="min-width:30px;">节点:</span>
-                                <select id="nodeIdx" class="dropdown" style="flex:1;">
-                                    <option value="">选择</option>
-                                </select>
-                                <button class="btn btn-danger btn-sm" onclick="doKillNode()">Kill</button>
-                                <button class="btn btn-success btn-sm" onclick="doStartNode()">Start</button>
-                            </div>
+                    <!-- CAS 并发竞赛 -->
+                    <div class="sep-line"></div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
+                        CAS 并发 Put <span style="font-weight:400;font-size:11px;color:#888;">（乐观锁保护演示）</span>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <input type="text" id="raceKey" placeholder="竞赛 Key（与 KV 操作同步）" style="flex:1;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
+                            <span style="font-size:11px;color:#888;white-space:nowrap;">客户端数:</span>
+                            <input type="number" id="raceNClient" value="5" min="1" max="20" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
+                            <button class="btn btn-primary" onclick="doCasRace()" style="flex-shrink:0;">开始</button>
+                        </div>
+                        <div style="font-size:10px;color:#888;margin-top:2px;">
+                            每个客户端用随机不同 value 同时 CAS Put，结果看下方日志
                         </div>
                     </div>
+                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
+                </div>
 
+                <!-- 右列：组操作 + 网络可靠性 + 观测日志 -->
+                <div class="control-col">
                     <!-- 组操作 -->
-                    <div style="margin-top:4px;">
+                    <div>
                         <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#faad14;">组操作</div>
                         <div style="display:flex;flex-direction:column;gap:4px;">
                             <div style="display:flex;align-items:center;gap:6px;">
@@ -357,23 +354,27 @@
                         </div>
                     </div>
 
-                    <!-- CAS 并发竞赛 -->
+                    <!-- 观测日志开关 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 并发 Put <span style="font-weight:400;font-size:11px;color:#888;">（乐观锁保护演示）</span>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#667eea;">观测日志</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f0f5ff;border:1px solid #d6e4ff;">
+                            <input type="checkbox" class="observe-toggle" data-scene="election" onchange="toggleObserve(this)">
+                            <span style="color:#667eea;">选举</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff7e6;border:1px solid #ffd591;">
+                            <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
+                            <span style="color:#d48806;">迁移</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f6ffed;border:1px solid #b7eb8f;">
+                            <input type="checkbox" class="observe-toggle" data-scene="kvsubmit" onchange="toggleObserve(this)">
+                            <span style="color:#52c41a;">KV提交</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff2f0;border:1px solid #ffccc7;">
+                            <input type="checkbox" class="observe-toggle" data-scene="fault" onchange="toggleObserve(this)">
+                            <span style="color:#ff4d4f;">故障恢复</span>
+                        </label>
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:4px;">
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <input type="text" id="raceKey" placeholder="竞赛 Key（与生成Key同步）" style="flex:1;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
-                            <span style="font-size:11px;color:#888;white-space:nowrap;">客户端数:</span>
-                            <input type="number" id="raceNClient" value="5" min="1" max="20" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
-                            <button class="btn btn-primary" onclick="doCasRace()" style="flex-shrink:0;">开始</button>
-                        </div>
-                        <div style="font-size:10px;color:#888;margin-top:2px;">
-                            每个客户端用随机不同 value 同时 CAS Put，结果看下方日志
-                        </div>
-                    </div>
-                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
                 </div>
             </div>
         </div>
@@ -408,6 +409,16 @@
             </div>
             <div id="logArea" class="log-panel-area">
                 <div class="log-info">系统就绪，等待操作...</div>
+            </div>
+        </div>
+        <!-- 观测日志面板 -->
+        <div class="log-panel" style="flex:0 0 auto;max-height:200px;margin-top:8px;">
+            <div class="log-panel-header" onclick="toggleObserveLog()">
+                <span class="title" style="color:#f6d365;">观测日志</span>
+                <span class="toggle" id="observeLogToggle">展开</span>
+            </div>
+            <div id="observeLogArea" class="log-panel-area" style="display:none;min-height:40px;max-height:160px;">
+                <div class="log-info" style="color:#888;">开启观测开关后，日志将在此显示...</div>
             </div>
         </div>
     </div>
@@ -635,34 +646,7 @@
     }
 
     // ========== 节点操作 ==========
-    async function doKillNode() {
-        const gid = parseInt(document.getElementById('nodeGid').value);
-        const srv = parseInt(document.getElementById('nodeIdx').value);
-        if (isNaN(gid) || isNaN(srv)) { addLog('KillNode: 请选择有效的组和节点索引', 'err'); return; }
-        const result = await api('/api/node/kill', {
-            method: 'POST',
-            body: JSON.stringify({gid, srv})
-        });
-        const detail = result.aliveGroup !== undefined ? ` | 组内存活 ${result.aliveGroup}/${result.totalGroup}` : '';
-        addLog(`KillNode: ${result.srvName || `组${gid}节点${srv}`}${detail}`, 'ok');
-        refreshStatus();
-    }
-
-    async function doStartNode() {
-        const gid = parseInt(document.getElementById('nodeGid').value);
-        const srv = parseInt(document.getElementById('nodeIdx').value);
-        if (isNaN(gid) || isNaN(srv)) { addLog('StartNode: 请选择有效的组和节点索引', 'err'); return; }
-        const result = await api('/api/node/start', {
-            method: 'POST',
-            body: JSON.stringify({gid, srv})
-        });
-        if (result.success) {
-            addLog(`StartNode: server-${gid}-${srv} 已启动并连入网络`, 'ok');
-        } else {
-            addLog(`StartNode: server-${gid}-${srv} 启动失败 - ${result.error || '未知错误'}`, 'err');
-        }
-        refreshStatus();
-    }
+    // 节点操作在集群拓扑中通过按钮直接调用 doKillNodeById / doStartNodeById
 
     // ========== 网络操作 ==========
     async function doIsolateNode(gid, srv) {
@@ -873,25 +857,6 @@
         return '在线';
     }
 
-    function populateNodeGroupSelect(groups) {
-        const sel = document.getElementById('nodeGid');
-        const currentVal = sel.value;
-        const frag = document.createDocumentFragment();
-        frag.appendChild(new Option('选择组', ''));
-        for (const g of groups) {
-            const label = g.gid === 0 ? `ConfigStore (${g.servers.length} 节点)` : `组 ${g.gid} (${g.servers.length} 节点)`;
-            frag.appendChild(new Option(label, String(g.gid)));
-        }
-        sel.innerHTML = '';
-        sel.appendChild(frag);
-        if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
-            sel.value = currentVal;
-        } else {
-            document.getElementById('nodeIdx').innerHTML = '<option value="">选择</option>';
-        }
-        syncNodeIdx();
-    }
-
     function populateGroupSelect(groups) {
         const sel = document.getElementById('groupGid');
         const currentVal = sel.value;
@@ -907,34 +872,6 @@
             sel.value = currentVal;
         }
     }
-
-    function syncNodeIdx() {
-        const gid = parseInt(document.getElementById('nodeGid').value);
-        const idxSel = document.getElementById('nodeIdx');
-        const currentIdx = idxSel.value;
-        if (isNaN(gid) || !cachedTree) {
-            idxSel.innerHTML = '<option value="">选择</option>';
-            return;
-        }
-        const group = cachedTree.groups.find(g => g.gid === gid);
-        if (!group) {
-            idxSel.innerHTML = '<option value="">选择</option>';
-            return;
-        }
-        const frag = document.createDocumentFragment();
-        frag.appendChild(new Option('选择', ''));
-        for (let i = 0; i < group.servers.length; i++) {
-            const srv = group.servers[i];
-            frag.appendChild(new Option(`节点 ${i} (${srv.name})`, String(i)));
-        }
-        idxSel.innerHTML = '';
-        idxSel.appendChild(frag);
-        if (currentIdx && [...idxSel.options].some(o => o.value === currentIdx)) {
-            idxSel.value = currentIdx;
-        }
-    }
-
-    function onNodeGidChange() { syncNodeIdx(); }
 
     // ========== 增强版 renderTopology（集成网络操作） ==========
     function renderTopology(tree) {
@@ -1054,7 +991,6 @@
                     renderTopology(cachedTree);
                     renderShards(cachedTree);
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
-                        populateNodeGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                         populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                     }
                     refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
@@ -1068,11 +1004,9 @@
                 renderShards(tree); // tree.shards 已有完整分片数据
                 if (tree.groups && tree.groups.length > 0) {
                     const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
-                    populateNodeGroupSelect(sortedGroups);
                     populateGroupSelect(sortedGroups);
 
                 } else {
-                    populateNodeGroupSelect([]);
                     populateGroupSelect([]);
                 }
                 // Show/hide pending migration badge
@@ -1093,7 +1027,6 @@
                     renderShards(cachedTree);
 
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
-                        populateNodeGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                         populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                     }
                     refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
@@ -1143,6 +1076,114 @@
     }
     scheduleRefresh();
 
+    // ========== 观测日志 ==========
+    let observeLogExpanded = false;
+    let observeLogLastCount = 0;
+
+    function toggleObserveLog() {
+        const area = document.getElementById('observeLogArea');
+        const toggle = document.getElementById('observeLogToggle');
+        observeLogExpanded = !observeLogExpanded;
+        area.style.display = observeLogExpanded ? 'block' : 'none';
+        toggle.textContent = observeLogExpanded ? '收起' : '展开';
+        if (observeLogExpanded) {
+            // 展开时立即拉取一次
+            fetchObserveLogs();
+        }
+    }
+
+    // 观测日志标签颜色映射
+    const OBSERVE_LOG_COLORS = {
+        'Election': '#667eea',
+        'Migration': '#f6d365',
+        'KVSubmit': '#52c41a',
+        'Fault': '#ff4d4f',
+    };
+    const OBSERVE_LOG_NAMES = {
+        'Election': '选举',
+        'Migration': '迁移',
+        'KVSubmit': 'KV提交',
+        'Fault': '故障',
+    };
+
+    function addObserveLog(tag, text) {
+        const area = document.getElementById('observeLogArea');
+        const time = new Date().toLocaleTimeString();
+        const color = OBSERVE_LOG_COLORS[tag] || '#1890ff';
+        const tagName = OBSERVE_LOG_NAMES[tag] || tag;
+        const entry = document.createElement('div');
+        entry.innerHTML = `<span class="log-time">[${time}]</span> <span style="color:${color};font-weight:600;">[${tagName}]</span> ${escapeHtml(text)}`;
+        area.appendChild(entry);
+        area.scrollTop = area.scrollHeight;
+        while (area.children.length > 200) {
+            area.removeChild(area.firstChild);
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    let observeLogPollTimer = null;
+    async function fetchObserveLogs() {
+        try {
+            const resp = await fetch(API + '/api/observe/logs', {method: 'GET'});
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!data.lines || data.lines.length === 0) return;
+
+            // 只追加新行
+            const newLines = data.lines.slice(observeLogLastCount);
+            if (newLines.length === 0) return;
+
+            observeLogLastCount = data.lines.length;
+            for (const line of newLines) {
+                addObserveLog(line.tag, line.text);
+            }
+        } catch (err) {
+            // 静默失败
+        }
+    }
+
+    async function toggleObserve(el) {
+        const scene = el.dataset.scene;
+        const on = el.checked;
+        try {
+            const resp = await fetch(API + '/api/observe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({scene, on})
+            });
+            if (!resp.ok) {
+                el.checked = !on; // 回滚
+            }
+            // 展开观测日志面板
+            const observeLogToggle = document.getElementById('observeLogToggle');
+            if (on && observeLogToggle.textContent === '展开') {
+                toggleObserveLog();
+            }
+        } catch (err) {
+            el.checked = !on; // 回滚
+        }
+    }
+
+    // 初始化观测日志状态（从后端拉取当前开关状态）
+    async function initObserveState() {
+        try {
+            const resp = await fetch(API + '/api/observe', {method: 'GET'});
+            if (!resp.ok) return;
+            const data = await resp.json();
+            document.querySelectorAll('.observe-toggle').forEach(el => {
+                const scene = el.dataset.scene;
+                if (data[scene] !== undefined) {
+                    el.checked = data[scene];
+                }
+            });
+        } catch (err) {}
+    }
+
     window.addEventListener('load', async function() {
         try {
             const [reliableRes, paramsRes] = await Promise.all([
@@ -1158,6 +1199,8 @@
                 document.getElementById('unreliableLabel').style.color = '#ff4d4f';
             }
         } catch(e) {}
+        // 初始化观测日志状态
+        initObserveState();
     });
 
     // ========== CAS 并发竞赛（前端异步并发，每条日志实时显示） ==========

@@ -141,6 +141,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpcapi.ErrWrongGroup || rpcErr == rpcapi.ErrRetryExhausted {
+			debug.ObserveFaultPrintf("shardkvclerk%v: Get(%s) failed Err=%v, refreshing config (potential config stale)", ck.clerkId, key, rpcErr)
 			ck.refreshConfig()
 		} else {
 			return val, version, rpcErr
@@ -179,6 +180,7 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
 		case rpcapi.ErrWrongGroup, rpcapi.ErrRetryExhausted:
+			debug.ObserveFaultPrintf("shardkvclerk%v: Put(%s=%s) failed Err=%v, refreshing config (potential config stale)", ck.clerkId, key, value, rpcErr)
 			ck.refreshConfig()
 		case rpcapi.OK, rpcapi.ErrVersion, rpcapi.ErrNoKey:
 			return rpcErr

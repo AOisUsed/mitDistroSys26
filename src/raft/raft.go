@@ -824,6 +824,7 @@ func (rf *Raft) startElection() {
 	rf.lastHeardTime = time.Now() // prevent the ticker from starting another election immediately
 	rf.persist()
 	debug.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
+	debug.ObserveElectionPrintf("%v at T%v: startElection", rf.me, rf.CurrentTerm)
 
 	args := &RequestVoteArgs{
 		Term:         rf.CurrentTerm,
@@ -867,7 +868,8 @@ func (rf *Raft) startElection() {
 				voteCount++
 				if voteCount > len(rf.peers)/2 && !won {
 					won = true
-					debug.D3APrintf("%v at %v wins ", rf.me, args.Term)
+					debug.D3APrintf("%v at %v wins ", rf.me, rf.CurrentTerm)
+					debug.ObserveElectionPrintf("%v at T%v wins election -> leader", rf.me, rf.CurrentTerm)
 					rf.state = leader
 					//reinitialise volatile state on leaders
 					for j := range rf.nextIndex {
@@ -953,6 +955,7 @@ func Make(peers []*rpc.ClientEnd, me int,
 	rf.snapshotPending = false
 
 	debug.D3APrintf("%v starts as a follower", rf.me)
+	debug.ObserveElectionPrintf("%v starts as a follower at T%v", rf.me, rf.CurrentTerm)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())

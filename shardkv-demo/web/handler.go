@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"kvstore/debug"
 	"log"
 	"net/http"
 	"strings"
@@ -698,9 +699,66 @@ func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- API: 观测日志开关 ---
+
+func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		// GET: 查询所有观测开关状态
+		writeJSON(w, map[string]any{
+			"election":  debug.GetObserveElection(),
+			"migration": debug.GetObserveMigration(),
+			"kvsubmit":  debug.GetObserveKVSubmit(),
+			"fault":     debug.GetObserveFaultRecovery(),
+		})
+	case http.MethodPost:
+		// POST: 设置某个观测开关
+		var req struct {
+			Scene string `json:"scene"` // election / migration / kvsubmit / fault
+			On    bool   `json:"on"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		switch req.Scene {
+		case "election":
+			debug.SetObserveElection(req.On)
+		case "migration":
+			debug.SetObserveMigration(req.On)
+		case "kvsubmit":
+			debug.SetObserveKVSubmit(req.On)
+		case "fault":
+			debug.SetObserveFaultRecovery(req.On)
+		default:
+			http.Error(w, "unknown scene: "+req.Scene, http.StatusBadRequest)
+			return
+		}
+		log.Printf("[Observe] scene=%q on=%v", req.Scene, req.On)
+		writeJSON(w, map[string]any{"success": true, "scene": req.Scene, "on": req.On})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// HandleObserveLogs 获取最近 N 条观测日志
+func (h *Handler) HandleObserveLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	lines := debug.GetObserveLines(200)
+	if lines == nil {
+		writeJSON(w, map[string]any{"lines": []debug.ObserveLine{}})
+		return
+	}
+	writeJSON(w, map[string]any{"lines": lines})
+}
+
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, v any) {
+
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -748,6 +806,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// InitController (手动恢复 pending 迁移)
 	mux.HandleFunc("/api/init-controller", h.HandleInitController)
+
+	// 观测日志
+	mux.HandleFunc("/api/observe", h.HandleObserve)
+	mux.HandleFunc("/api/observe/logs", h.HandleObserveLogs)
 }
 
 // HandleKV dispatches KV requests by HTTP method
