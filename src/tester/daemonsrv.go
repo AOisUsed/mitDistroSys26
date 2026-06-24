@@ -45,11 +45,14 @@ func InitDaemon(args []string, mks FstartServer) error {
 	//log.Printf("InitDaemon %v", args)
 
 	// for safety, force quit after 10 minutes.
-	go func() {
-		time.Sleep(10 * 60 * time.Second)
-		mep, _ := os.FindProcess(os.Getpid())
-		mep.Kill()
-	}()
+
+	// -- is commented out because shardkv-demo need to make sure that daemon doesn't kill itself after 10 mins --
+
+	//go func() {
+	//	time.Sleep(10 * 60 * time.Second)
+	//	mep, _ := os.FindProcess(os.Getpid())
+	//	mep.Kill()
+	//}()
 
 	flag.Parse()
 
