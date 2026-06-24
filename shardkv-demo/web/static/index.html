@@ -913,6 +913,8 @@
 
 
     let netParams = { dropRate: 100, shortDelayMs: 27, longDelayMs: 7000 };
+    // 记录关闭不可靠网络时回复乱序的开启状态，用于再次开启时自动恢复
+    let savedLongReorderingState = null;
 
     // oninput: 仅更新标签显示，不触发网络请求
     function updateNetParamLabel(param, value) {
@@ -956,15 +958,70 @@
     async function toggleUnreliable() {
         const toggle = document.getElementById('unreliableToggle');
         const label = document.getElementById('unreliableLabel');
+        // 记录 checkbox 变化前的原始状态，用于失败时回滚
+        const origChecked = !toggle.checked;
         const enabled = toggle.checked;
-        await api('/api/network/reliable', {
-            method: 'POST',
-            body: JSON.stringify({reliable: !enabled})
-        });
+        const origLabelText = origChecked ? '开启 (丢包+延迟)' : '关闭';
+        const origLabelColor = origChecked ? '#ff4d4f' : '#999';
+        try {
+            const result = await api('/api/network/reliable', {
+                method: 'POST',
+                body: JSON.stringify({reliable: !enabled})
+            });
+            if (!result || !result.success) {
+                throw new Error(result ? (result.error || '后端返回失败') : '后端无响应');
+            }
+        } catch (err) {
+            // API 失败：回滚 checkbox 和标签到原始状态
+            toggle.checked = origChecked;
+            label.textContent = origLabelText;
+            label.style.color = origLabelColor;
+            addLog(`不可靠网络切换失败: ${err.message}`, 'err');
+            return;
+        }
+        // 成功后才更新标签
         label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
         const dropPct = (netParams.dropRate / 10).toFixed(0);
         addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, 最大在线抖动=${netParams.shortDelayMs}ms, 最大断线超时=${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+
+        // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
+        if (!enabled) {
+            const reorderToggle = document.getElementById('longReorderingToggle');
+            const reorderLabel = document.getElementById('longReorderingLabel');
+            savedLongReorderingState = reorderToggle.checked;
+            if (savedLongReorderingState) {
+                try {
+                    const result = await api('/api/network/long-reordering', {
+                        method: 'POST',
+                        body: JSON.stringify({on: false})
+                    });
+                    if (result && result.success) {
+                        reorderToggle.checked = false;
+                        reorderLabel.textContent = '关闭';
+                        addLog(`回复乱序: 已随不可靠网络一并关闭`, 'info');
+                    }
+                } catch (err) {}
+            }
+        }
+
+        // 开启不可靠网络时：如果之前保存的回复乱序状态是开启，则自动恢复
+        if (enabled && savedLongReorderingState) {
+            const reorderToggle = document.getElementById('longReorderingToggle');
+            const reorderLabel = document.getElementById('longReorderingLabel');
+            try {
+                const result = await api('/api/network/long-reordering', {
+                    method: 'POST',
+                    body: JSON.stringify({on: true})
+                });
+                if (result && result.success) {
+                    reorderToggle.checked = true;
+                    reorderLabel.textContent = '开启';
+                    addLog(`回复乱序: 已随不可靠网络自动恢复`, 'info');
+                }
+            } catch (err) {}
+        }
+
         refreshStatus();
 
         // 开启时立即同步三个参数到后端
