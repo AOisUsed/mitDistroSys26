@@ -97,6 +97,47 @@ func (cfg *Config) SetLongDelays(longdel bool) {
 	cfg.net.LongDelays(longdel)
 }
 
+func (cfg *Config) IsLongDelays() bool {
+	return cfg.net.IsLongDelays()
+}
+
+func (cfg *Config) IsLongReordering() bool {
+	return cfg.net.IsLongReordering()
+}
+
+// SetDropRate sets the drop rate per 1000 (0-1000) for the network.
+// 0 resets to the default compile-time value.
+func (cfg *Config) SetDropRate(rate int) {
+	cfg.net.SetDropRate(rate)
+}
+
+// GetDropRate returns the current drop rate per 1000.
+func (cfg *Config) GetDropRate() int {
+	return cfg.net.GetDropRate()
+}
+
+// SetShortDelayMs sets the short delay in ms for unreliable network.
+// 0 resets to the default compile-time value.
+func (cfg *Config) SetShortDelayMs(ms int) {
+	cfg.net.SetShortDelayMs(ms)
+}
+
+// GetShortDelayMs returns the current short delay in ms.
+func (cfg *Config) GetShortDelayMs() int {
+	return cfg.net.GetShortDelayMs()
+}
+
+// SetLongDelayMs sets the long delay in ms for disabled network.
+// 0 resets to the default compile-time value.
+func (cfg *Config) SetLongDelayMs(ms int) {
+	cfg.net.SetLongDelayMs(ms)
+}
+
+// GetLongDelayMs returns the current long delay in ms.
+func (cfg *Config) GetLongDelayMs() int {
+	return cfg.net.GetLongDelayMs()
+}
+
 func (cfg *Config) Group(gid Tgid) *ServerGrp {
 	return cfg.lookupGroup(gid)
 }

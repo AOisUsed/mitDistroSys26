@@ -14,7 +14,7 @@
         }
 
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #5cbdf5 0%, #852cef 100%);
             color: white;
             padding: 12px 24px;
             display: flex;
@@ -37,15 +37,17 @@
         .container {
             display: flex; gap: 12px; padding: 12px; max-width: 1600px; margin: 0 auto;
             height: calc(100vh - 52px);
+            overflow: hidden;
+            min-width: 0;
         }
         .main-panel {
             flex: 1;
             display: flex; flex-direction: column; gap: 12px;
-            overflow-y: auto;
+            overflow: hidden auto;
             min-width: 0;
         }
         .right-panel {
-            width: 380px; min-width: 360px;
+            width: 460px; min-width: 380px;
             display: flex; flex-direction: column; gap: 0;
             background: #1a1a2e;
             border-radius: 10px;
@@ -182,8 +184,22 @@
             padding: 6px 14px;
             flex: 1;
             overflow-y: auto;
+            scrollbar-gutter: stable;
             line-height: 1.6;
             min-height: 60px;
+        }
+        .log-panel-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        .log-panel-area::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .log-panel-area::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.15);
+            border-radius: 4px;
+        }
+        .log-panel-area::-webkit-scrollbar-thumb:hover {
+            background: rgba(255,255,255,0.25);
         }
         .log-panel-area .log-time { color: #888; }
         .log-panel-area .log-ok { color: #52c41a; }
@@ -255,10 +271,10 @@
         .btn-recover:hover { background: #d9f7be; }
 
         .control-row {
-            display: flex; gap: 12px;
+            display: flex; gap: 12px; flex-wrap: wrap;
         }
         .control-col {
-            flex: 1; min-width: 0;
+            flex: 1; min-width: 280px;
             display: flex; flex-direction: column; gap: 6px;
         }
 
@@ -359,33 +375,62 @@
                     <!-- 组操作 -->
                     <div>
                         <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#faad14;">组操作</div>
-                        <div style="display:flex;flex-direction:column;gap:4px;">
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <span class="form-label" style="min-width:30px;">组:</span>
-                                <select id="groupGid" class="dropdown" style="flex:1;">
-                                    <option value="">选择组</option>
-                                </select>
-                                <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
-                                <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
-                                <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
+                            <div style="display:flex;flex-direction:column;gap:4px;">
+                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                    <span class="form-label" style="min-width:30px;">组:</span>
+                                    <select id="groupGid" class="dropdown" style="flex:1;min-width:80px;">
+                                        <option value="">选择组</option>
+                                    </select>
+                                    <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
+                                    <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
+                                    <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
+                                </div>
+                                <button class="btn btn-primary" onclick="doJoinGroup()" style="flex:1;">
+                                    添加新组
+                                </button>
                             </div>
-                            <button class="btn btn-primary" onclick="doJoinGroup()" style="flex:1;">
-                                添加新组
-                            </button>
-                        </div>
                     </div>
 
-                    <!-- 网络可靠性 -->
+                    <!-- 网络可靠性（展开版：toggle + 3 个滑块） -->
                     <div class="sep-line"></div>
-                    <div class="net-toggle-row">
-                        <div class="left">
-                            <span style="font-size:12px;font-weight:500;">不可靠网络</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="unreliableToggle" onchange="toggleUnreliable()">
+                    <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#ff4d4f;">
+                        不可靠网络
+                        <label class="toggle-switch" style="vertical-align:middle;margin-left:8px;">
+                            <input type="checkbox" id="unreliableToggle" onchange="toggleUnreliable()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span id="unreliableLabel" style="font-size:11px;color:#999;vertical-align:middle;"> 关闭 </span>
+                    </div>
+                    <div id="netParamsSection" style="display:grid;grid-template-columns:120px 1fr 45px;gap:6px 8px;padding:6px 8px;background:#fafafa;border-radius:6px;border:1px solid #f0f0f0;align-items:center;">
+                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">丢包率</span>
+                        <input type="range" id="dropRateSlider" min="0" max="1000" value="100"
+                            oninput="updateNetParamLabel('dropRate', this.value)"
+                            onchange="commitNetParam('dropRate', this.value)"
+                            style="width:100%;height:4px;cursor:pointer;">
+                        <span id="dropRateLabel" style="font-size:11px;color:#333;">10%</span>
+
+                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">最大在线抖动延迟</span>
+                        <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
+                            oninput="updateNetParamLabel('shortDelayMs', this.value)"
+                            onchange="commitNetParam('shortDelayMs', this.value)"
+                            style="width:100%;height:4px;cursor:pointer;">
+                        <span id="shortDelayLabel" style="font-size:11px;color:#333;">27ms</span>
+
+                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">最大断线超时延迟</span>
+                        <input type="range" id="longDelaySlider" min="0" max="10000" value="7000"
+                            oninput="updateNetParamLabel('longDelayMs', this.value)"
+                            onchange="commitNetParam('longDelayMs', this.value)"
+                            style="width:100%;height:4px;cursor:pointer;">
+                        <span id="longDelayLabel" style="font-size:11px;color:#333;">7000ms</span>
+
+                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">回复乱序</span>
+                        <div style="display:flex;align-items:center;">
+                            <label class="toggle-switch" style="vertical-align:middle;">
+                                <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
                                 <span class="toggle-slider"></span>
                             </label>
-                            <span id="unreliableLabel" style="font-size:11px;color:#999;">关闭</span>
                         </div>
+                        <span id="longReorderingLabel" style="font-size:11px;color:#333;">关闭</span>
                     </div>
 
                     <!-- 观测日志开关 -->
@@ -450,9 +495,10 @@
         <div class="log-panel" id="obsLogPanel">
             <div class="log-panel-header" onclick="toggleObserveLog()">
                 <span class="title" style="color:#f6d365;">观测日志</span>
-                <span class="toggle" id="observeLogToggle">收起</span>
+                <span class="toggle" id="observeLogToggle">展开</span>
             </div>
-            <div id="observeLogArea" class="log-panel-area">
+            <div id="observeLogArea" class="log-panel-area" style="display:none;">
+                <!-- 初始收起，对应的 toggle 文本要和 observeLogExpanded=false 一致 -->
                 <div class="log-info" style="color:#888;">开启观测开关后，日志将在此显示...</div>
             </div>
         </div>
@@ -529,7 +575,7 @@
     let refreshTimer = null;
 
     let logExpanded = true;
-    let observeLogExpanded = true;
+    let observeLogExpanded = false;
     const INITIAL_LOG_RATIO = 0.6;
     let logRatio = INITIAL_LOG_RATIO;
     function toggleLog() {
@@ -895,7 +941,46 @@
     }
 
 
-    let netParams = { dropRate: 300, shortDelayMs: 300, longDelayMs: 3000 };
+    let netParams = { dropRate: 100, shortDelayMs: 27, longDelayMs: 7000 };
+
+    // oninput: 仅更新标签显示，不触发网络请求
+    function updateNetParamLabel(param, value) {
+        const intVal = parseInt(value);
+        netParams[param] = intVal;
+
+        const labels = {
+            dropRate: { el: 'dropRateLabel', fmt: v => (v/10).toFixed(0) + '%' },
+            shortDelayMs: { el: 'shortDelayLabel', fmt: v => v + 'ms' },
+            longDelayMs: { el: 'longDelayLabel', fmt: v => v + 'ms' },
+        };
+        const info = labels[param];
+        if (info) {
+            document.getElementById(info.el).textContent = info.fmt(intVal);
+        }
+    }
+
+    // onchange: 用户松手后提交参数到后端并输出日志
+    async function commitNetParam(param, value) {
+        const intVal = parseInt(value);
+        netParams[param] = intVal;
+
+        // 只在不可靠网络开启时提交
+        const toggle = document.getElementById('unreliableToggle');
+        if (!toggle.checked) return;
+
+        try {
+            const result = await api('/api/network/params', {
+                method: 'POST',
+                body: JSON.stringify({[param]: intVal})
+            });
+            if (result && result.success) {
+                const displayVal = param === 'dropRate'
+                    ? (intVal / 10).toFixed(1) + '%'
+                    : String(intVal) + 'ms';
+                addLog(`网络参数已设置: ${param} = ${displayVal}`, 'info');
+            }
+        } catch (err) {}
+    }
 
     async function toggleUnreliable() {
         const toggle = document.getElementById('unreliableToggle');
@@ -908,10 +993,53 @@
         label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (${dropPct}%丢包 + 随机延迟 ${netParams.shortDelayMs}~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, 最大在线抖动=${netParams.shortDelayMs}ms, 最大断线超时=${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
         refreshStatus();
+
+        // 开启时立即同步三个参数到后端
+        if (enabled) {
+            try {
+                const result = await api('/api/network/params', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        dropRate: netParams.dropRate,
+                        shortDelayMs: netParams.shortDelayMs,
+                        longDelayMs: netParams.longDelayMs
+                    })
+                });
+                if (result && result.success) {
+                    addLog(`网络参数已同步: 丢包率 = ${result.dropRate/10}% | 最大在线抖动延迟 = ${result.shortDelayMs}ms | 最大断线超时延迟 = ${result.longDelayMs}ms`, 'info');
+                }
+            } catch (err) {}
+        }
     }
 
+    async function toggleLongReordering() {
+        const toggle = document.getElementById('longReorderingToggle');
+        const label = document.getElementById('longReorderingLabel');
+        const on = toggle.checked;
+        try {
+            const result = await api('/api/network/long-reordering', {
+                method: 'POST',
+                body: JSON.stringify({on})
+            });
+            if (result.success) {
+                label.textContent = on ? '开启' : '关闭';
+                addLog(`回复乱序: ${on ? '开启 (2/3 回复延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
+                // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
+                if (on) {
+                    document.getElementById('unreliableToggle').checked = true;
+                    document.getElementById('unreliableLabel').textContent = '开启 (丢包+延迟)';
+                    document.getElementById('unreliableLabel').style.color = '#ff4d4f';
+                }
+            } else {
+                toggle.checked = !on;
+                addLog(`回复乱序设置失败`, 'err');
+            }
+        } catch (err) {
+            toggle.checked = !on;
+        }
+    }
 
     // ========== 快捷 Leave（从拓扑标题调用） ==========
     async function doLeaveGroupById(gid) {
@@ -1214,7 +1342,7 @@
     scheduleRefresh();
 
     // ========== 观测日志 ==========
-    observeLogExpanded = true;
+    observeLogExpanded = false;
     let observeLogLastId = 0; // 用游标 Id 而非数组长度，避免环形缓冲区满后增量失效
 
     async function toggleObserveLog() {
@@ -1374,19 +1502,26 @@
             ]);
             if (paramsRes) {
                 netParams = paramsRes;
+                // 同步滑块 UI 到后端返回的值
+                document.getElementById('dropRateSlider').value = paramsRes.dropRate;
+                document.getElementById('dropRateLabel').textContent = (paramsRes.dropRate / 10).toFixed(0) + '%';
+                document.getElementById('shortDelaySlider').value = paramsRes.shortDelayMs;
+                document.getElementById('shortDelayLabel').textContent = paramsRes.shortDelayMs + 'ms';
+                document.getElementById('longDelaySlider').value = paramsRes.longDelayMs;
+                document.getElementById('longDelayLabel').textContent = paramsRes.longDelayMs + 'ms';
             }
             if (reliableRes && reliableRes.reliable === false) {
                 document.getElementById('unreliableToggle').checked = true;
                 document.getElementById('unreliableLabel').textContent = '开启 (丢包+延迟)';
                 document.getElementById('unreliableLabel').style.color = '#ff4d4f';
             }
+            if (reliableRes && reliableRes.longReordering) {
+                document.getElementById('longReorderingToggle').checked = true;
+                document.getElementById('longReorderingLabel').textContent = '开启';
+            }
         } catch(e) {}
-        // 初始化观测日志状态
+        // 初始化观测日志状态（默认收起，不拉取日志，等用户开启开关再展开）
         await initObserveState();
-        // 默认展开观测日志，自动启动轮询
-        observeLogLastId = 0;
-        await fetchObserveLogs();
-        startObserveLogPoll();
     });
 
     // ========== CAS 并发竞赛（前端异步并发，每条日志实时显示） ==========

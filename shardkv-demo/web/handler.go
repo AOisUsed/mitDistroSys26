@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"kvstore/kvsrv/rpcapi"
-	"kvstore/rpc"
 	"kvstore/shardkv/shardcfg"
 	"kvstore/tester"
 	"shardkv-demo/cluster"
@@ -502,7 +501,8 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 		// GET: 查询当前网络状态
 		writeJSON(w, map[string]any{
 			"reliable":       h.cm.IsReliable(),
-			"longReordering": false, // labrpc 没暴露 IsLongReordering
+			"longReordering": h.cm.IsLongReordering(),
+			"longDelays":     h.cm.IsLongDelays(),
 		})
 		return
 	}
@@ -517,22 +517,84 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 	if req.Reliable != nil {
 		h.cm.SetReliable(*req.Reliable)
 		if !*req.Reliable {
-			h.cm.SetLongReordering(false) // 关掉长延迟重排序
+			// 开启不可靠网络：同时启用长延迟模式（使断线超时滑块生效）
+			h.cm.SetLongDelays(true)
+		} else {
+			// 关闭不可靠网络：恢复短超时模式
+			h.cm.SetLongDelays(false)
+			h.cm.SetLongReordering(false)
 		}
 	}
 	writeJSON(w, map[string]any{"success": true, "action": "reliable", "reliable": h.cm.IsReliable()})
 }
 
 func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method == http.MethodGet {
+		// GET: 查询当前网络参数（从 Network 获取运行时可调值）
+		writeJSON(w, map[string]any{
+			"dropRate":     h.cm.GetDropRate(),
+			"shortDelayMs": h.cm.GetShortDelayMs(),
+			"longDelayMs":  h.cm.GetLongDelayMs(),
+		})
+		return
+	}
+	if r.Method == http.MethodPost {
+		// POST: 设置网络参数
+		var req struct {
+			DropRate     *int `json:"dropRate"`
+			ShortDelayMs *int `json:"shortDelayMs"`
+			LongDelayMs  *int `json:"longDelayMs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if req.DropRate != nil {
+			h.cm.SetDropRate(*req.DropRate)
+		}
+		if req.ShortDelayMs != nil {
+			h.cm.SetShortDelayMs(*req.ShortDelayMs)
+		}
+		if req.LongDelayMs != nil {
+			h.cm.SetLongDelayMs(*req.LongDelayMs)
+		}
+		writeJSON(w, map[string]any{
+			"success":      true,
+			"dropRate":     h.cm.GetDropRate(),
+			"shortDelayMs": h.cm.GetShortDelayMs(),
+			"longDelayMs":  h.cm.GetLongDelayMs(),
+		})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, map[string]any{
-		"dropRate":     rpc.GetDropRate(),
-		"shortDelayMs": rpc.GetShortDelay(),
-		"longDelayMs":  rpc.GetLongDelay(),
-	})
+	if r.Method == http.MethodGet {
+		writeJSON(w, map[string]any{"longReordering": h.cm.IsLongReordering()})
+		return
+	}
+	var req struct {
+		On *bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.On != nil {
+		h.cm.SetLongReordering(*req.On)
+		if *req.On {
+			// 开启回复乱序时自动开启不可靠网络
+			h.cm.SetReliable(false)
+			h.cm.SetLongDelays(true)
+		}
+	}
+	log.Printf("[LongReordering] on=%v", h.cm.IsLongReordering())
+	writeJSON(w, map[string]any{"success": true, "longReordering": h.cm.IsLongReordering()})
 }
 
 func (h *Handler) HandleConnectAll(w http.ResponseWriter, r *http.Request) {
@@ -816,6 +878,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/network/partition", h.HandlePartition)
 	mux.HandleFunc("/api/network/params", h.HandleNetParams)
 	mux.HandleFunc("/api/network/reliable", h.HandleReliable)
+	mux.HandleFunc("/api/network/long-reordering", h.HandleLongReordering)
 
 	// CAS Put（独立单次，前端并发调用实时显示）
 	mux.HandleFunc("/api/put-cas", h.HandlePutCas)

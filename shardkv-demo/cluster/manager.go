@@ -845,7 +845,7 @@ func (cm *ClusterManager) InitController() {
 	cm.ctl.InitController()
 }
 
-// SetReliable 设置网络是否可靠（false 时随机延迟 + 10% 丢请求/回复）
+// SetReliable 设置网络是否可靠（false 时随机延迟 + 可配置丢包率）
 func (cm *ClusterManager) SetReliable(yes bool) {
 	cm.cfg.SetReliable(yes)
 	log.Printf("[Cluster] 网络可靠性: %v", yes)
@@ -856,10 +856,59 @@ func (cm *ClusterManager) IsReliable() bool {
 	return cm.cfg.IsReliable()
 }
 
+// SetDropRate 设置丢包率 (0-1000, 0=使用默认常量)
+func (cm *ClusterManager) SetDropRate(rate int) {
+	cm.cfg.SetDropRate(rate)
+	log.Printf("[Cluster] 丢包率: %d/1000 (%d%%)", rate, rate/10)
+}
+
+// GetDropRate 返回当前丢包率
+func (cm *ClusterManager) GetDropRate() int {
+	return cm.cfg.GetDropRate()
+}
+
+// SetShortDelayMs 设置不可靠网络下的最小延迟 (ms)
+func (cm *ClusterManager) SetShortDelayMs(ms int) {
+	cm.cfg.SetShortDelayMs(ms)
+	log.Printf("[Cluster] 最小延迟: %dms", ms)
+}
+
+// GetShortDelayMs 返回当前最小延迟
+func (cm *ClusterManager) GetShortDelayMs() int {
+	return cm.cfg.GetShortDelayMs()
+}
+
+// SetLongDelayMs 设置 disconnected 状态下的最大延迟 (ms)
+func (cm *ClusterManager) SetLongDelayMs(ms int) {
+	cm.cfg.SetLongDelayMs(ms)
+	log.Printf("[Cluster] 最大延迟: %dms", ms)
+}
+
+// GetLongDelayMs 返回当前最大延迟
+func (cm *ClusterManager) GetLongDelayMs() int {
+	return cm.cfg.GetLongDelayMs()
+}
+
+// SetLongDelays 设置断线时是否等待长超时（true 时使用 longDelayMs，false 时 0~100ms）
+func (cm *ClusterManager) SetLongDelays(yes bool) {
+	cm.cfg.SetLongDelays(yes)
+	log.Printf("[Cluster] 长延迟模式: %v", yes)
+}
+
+// IsLongDelays 返回当前是否使用长超时模式
+func (cm *ClusterManager) IsLongDelays() bool {
+	return cm.cfg.IsLongDelays()
+}
+
 // SetLongReordering 设置是否长延迟重排序（67% 回复延迟 200ms~2.2s）
 func (cm *ClusterManager) SetLongReordering(yes bool) {
 	cm.cfg.SetLongReordering(yes)
 	log.Printf("[Cluster] 长延迟重排序: %v", yes)
+}
+
+// IsLongReordering 返回当前是否开启回复乱序
+func (cm *ClusterManager) IsLongReordering() bool {
+	return cm.cfg.IsLongReordering()
 }
 
 // ConnectAll 恢复全部网络连接

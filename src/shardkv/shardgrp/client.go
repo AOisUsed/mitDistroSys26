@@ -77,7 +77,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
 	debug.D5APrintf("shardgrpclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
-	debug.ObserveFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (所有 server 不可达或网络分区)", key, attempts)
+	debug.ObserveFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
