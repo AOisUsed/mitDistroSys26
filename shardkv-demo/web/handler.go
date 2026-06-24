@@ -190,10 +190,10 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 	}
 	if putErr == rpcapi.OK {
 		resp.Success = true
-		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, version)
+		log.Printf("[Put] key=%q value=%q S%d version=%d OK", req.Key, req.Value, shard, version)
 	} else {
 		resp.Err = string(putErr)
-		log.Printf("[Put] key=%q value=%q S%d reqVer=%d %s", req.Key, req.Value, shard, version, putErr)
+		log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (err=%s)", req.Key, req.Value, shard, version, putErr)
 	}
 	writeJSON(w, resp)
 }
@@ -253,10 +253,10 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Get] key=%q value=%q version=%d OK", key, value, version)
 	} else if getErr == rpcapi.ErrNoKey {
 		resp.Err = "ErrNoKey"
-		log.Printf("[Get] key=%q ErrNoKey", key)
+		log.Printf("[Get] key=%q 失败 (err=ErrNoKey)", key)
 	} else {
 		resp.Err = string(getErr)
-		log.Printf("[Get] key=%q err=%s", key, getErr)
+		log.Printf("[Get] key=%q 失败 (err=%s)", key, getErr)
 	}
 	writeJSON(w, resp)
 }
@@ -337,7 +337,7 @@ func (h *Handler) HandleIsolateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.IsolateNode(tester.Tgid(req.GID), req.Srv)
-	log.Printf("[IsolateNode] group=%d server=%d (network partition isolated)", req.GID, req.Srv)
+	log.Printf("[IsolateNode] 组 %d 节点 %d 已隔离", req.GID, req.Srv)
 	writeJSON(w, map[string]any{"success": true, "action": "isolate", "gid": req.GID, "srv": req.Srv})
 }
 
@@ -356,7 +356,7 @@ func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.RecoverNode(tester.Tgid(req.GID), req.Srv)
-	log.Printf("[RecoverNode] group=%d server=%d 网络已恢复", req.GID, req.Srv)
+	log.Printf("[RecoverNode] 组 %d 节点 %d 网络已恢复", req.GID, req.Srv)
 	writeJSON(w, map[string]any{"success": true, "action": "recover-node", "gid": req.GID, "srv": req.Srv})
 }
 
@@ -374,7 +374,7 @@ func (h *Handler) HandleRecoverGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.RecoverGroup(tester.Tgid(req.GID))
-	log.Printf("[RecoverGroup] group=%d 网络已恢复（仅操作存活节点）", req.GID)
+	log.Printf("[RecoverGroup] 组 %d 网络已恢复（仅操作存活节点）", req.GID)
 	writeJSON(w, map[string]any{"success": true, "action": "recover-group", "gid": req.GID})
 }
 
@@ -406,7 +406,7 @@ func (h *Handler) HandleKillGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.KillGroup(tester.Tgid(req.GID))
-	log.Printf("[KillGroup] group=%d", req.GID)
+	log.Printf("[KillGroup] 组 %d 已停止", req.GID)
 	writeJSON(w, map[string]any{"success": true, "action": "kill-group", "gid": req.GID})
 }
 
@@ -425,7 +425,7 @@ func (h *Handler) HandleStartGroup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		resp["error"] = err.Error()
 	}
-	log.Printf("[StartGroup] group=%d err=%v", req.GID, err)
+	log.Printf("[StartGroup] 组 %d err=%v", req.GID, err)
 	writeJSON(w, resp)
 }
 
@@ -443,7 +443,7 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 		if msg != "" {
 			resp["message"] = msg
 		}
-		log.Printf("[JoinGroup] new group %d joined%s", gid, func() string {
+		log.Printf("[JoinGroup] 新组 %d 已加入 %s", gid, func() string {
 			if msg != "" {
 				return fmt.Sprintf(" (%s)", msg)
 			}
@@ -452,7 +452,7 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp["error"] = msg
 		resp["message"] = msg
-		log.Printf("[JoinGroup] failed to join new group: %s", msg)
+		log.Printf("[JoinGroup] 加入新组失败: %s", msg)
 	}
 	writeJSON(w, resp)
 }
@@ -470,11 +470,11 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 	ok, errMsg := h.cm.LeaveGroup(tester.Tgid(req.GID))
 	resp := map[string]any{"success": ok, "action": "leave", "gid": req.GID}
 	if ok {
-		log.Printf("[LeaveGroup] group %d left", req.GID)
+		log.Printf("[LeaveGroup] 组 %d 已离开", req.GID)
 	} else {
 		resp["error"] = errMsg
 		resp["message"] = errMsg // 便于前端直接展示
-		log.Printf("[LeaveGroup] failed to leave group %d: %s", req.GID, errMsg)
+		log.Printf("[LeaveGroup] 组 %d 离开失败: %s", req.GID, errMsg)
 	}
 	writeJSON(w, resp)
 }
@@ -593,7 +593,7 @@ func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
 			h.cm.SetLongDelays(true)
 		}
 	}
-	log.Printf("[LongReordering] on=%v", h.cm.IsLongReordering())
+	log.Printf("[LongReordering] 开启=%v", h.cm.IsLongReordering())
 	writeJSON(w, map[string]any{"success": true, "longReordering": h.cm.IsLongReordering()})
 }
 
@@ -604,7 +604,7 @@ func (h *Handler) HandleConnectAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.ConnectAll()
-	log.Printf("[ConnectAll] all connections restored")
+	log.Printf("[ConnectAll] 所有连接已恢复")
 	writeJSON(w, map[string]any{"success": true, "action": "connect-all"})
 }
 
@@ -625,7 +625,7 @@ func (h *Handler) HandlePartition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cm.Partition(tester.Tgid(req.GID), req.P1, req.P2)
-	log.Printf("[Partition] group=%d p1=%v p2=%v", req.GID, req.P1, req.P2)
+	log.Printf("[Partition] 组 %d 分区 p1=%v p2=%v", req.GID, req.P1, req.P2)
 	writeJSON(w, map[string]any{"success": true, "action": "partition", "gid": req.GID, "p1": req.P1, "p2": req.P2})
 }
 
@@ -744,10 +744,10 @@ func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if putErr == rpcapi.OK {
-		log.Printf("[Put] key=%q value=%q S%d reqVer=%d OK", req.Key, req.Value, shard, req.Version)
+		log.Printf("[Put] key=%q value=%q S%d version=%d OK", req.Key, req.Value, shard, req.Version)
 		writeJSON(w, map[string]any{"success": true, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version)})
 	} else {
-		log.Printf("[Put] key=%q value=%q S%d reqVer=%d %s", req.Key, req.Value, shard, req.Version, putErr)
+		log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (err=%s)", req.Key, req.Value, shard, req.Version, putErr)
 		writeJSON(w, map[string]any{"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version), "err": string(putErr)})
 	}
 }

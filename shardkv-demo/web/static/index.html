@@ -352,21 +352,19 @@
                 <div class="control-col">
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#667eea;">KV 操作 <span id="kvShard" style="font-size:11px;font-weight:400;color:#888;"></span></div>
                     <div class="kv-panel">
-                        <div class="kv-row">
-                            <div class="kv-inputs">
-                                <input type="text" id="putKey" placeholder="键 (Key)" oninput="kvShardHint()">
-                                <input type="text" id="putVal" placeholder="值 (Value)">
+                        <div class="kv-row" style="gap:8px;">
+                            <!-- Put 组 -->
+                            <div style="display:flex;gap:4px;flex:2;min-width:0;align-items:stretch;">
+                                <input type="text" id="putKey" placeholder="键 Key" oninput="kvShardHint()" style="flex:1;min-width:0;padding:7px 12px;">
+                                <input type="text" id="putVal" placeholder="值 Value" style="flex:0.7;min-width:0;padding:7px 12px;">
+                                <button class="btn btn-primary" onclick="doPut()" style="flex:0 0 auto;">Put</button>
                             </div>
-                            <div class="kv-actions">
-                                <button class="btn btn-primary" onclick="doPut()">Put</button>
-                            </div>
-                        </div>
-                        <div class="kv-row">
-                            <div class="kv-inputs">
-                                <input type="text" id="getKey" placeholder="键 (Key)" oninput="kvShardHint()">
-                            </div>
-                            <div class="kv-actions">
-                                <button class="btn btn-success" onclick="doGet()">Get</button>
+                            <!-- 分隔 -->
+                            <div style="width:1px;background:#d9d9d9;flex-shrink:0;"></div>
+                            <!-- Get 组 -->
+                            <div style="display:flex;gap:4px;flex:1;min-width:0;align-items:stretch;">
+                                <input type="text" id="getKey" placeholder="键 Key" oninput="kvShardHint()" style="flex:1;min-width:0;padding:7px 12px;">
+                                <button class="btn btn-success" onclick="doGet()" style="flex:0 0 auto;">Get</button>
                             </div>
                         </div>
                         <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;">
@@ -374,8 +372,7 @@
                                 <select id="targetShard" class="kv-input-sm"></select>
                             </div>
                             <div class="kv-actions">
-                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">生成Key</button>
-                                <button class="btn btn-sm btn-info" onclick="refreshKeyPool()" style="background:#13c2c2;color:white;">刷新池</button>
+                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">随机生成 键值对</button>
                             </div>
                         </div>
                     </div>
@@ -384,7 +381,7 @@
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 并发写
+                        CAS 并发写入
                     </div>
                     <div class="kv-panel">
                         <div class="kv-row">
@@ -397,7 +394,6 @@
                                 <button class="btn btn-primary" onclick="doCasRace()">开始</button>
                             </div>
                         </div>
-                        <div style="font-size:10px;color:#888;">每个客户端用随机不同 value 同时 Put，结果看下方日志</div>
                     </div>
                     <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
 
@@ -412,12 +408,12 @@
                                 <input type="number" id="batchCount" value="100" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key</span>
                                 <select id="batchShard" class="kv-input-sm">
-                                    <option value="-1">任意分片</option>
+                                    <option value="-1">任意</option>
                                 </select>
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">分片</span>
                             </div>
                             <div class="kv-actions">
-                                <button class="btn btn-sm" style="background:#52c41a;color:white;" onclick="doBatchPut()">开始写入</button>
+                                <button class="btn btn-success" style="flex:0 0 auto;" onclick="doBatchPut()">开始</button>
                             </div>
                         </div>
                     </div>
@@ -812,30 +808,16 @@
         }
 
         keyPoolReady = true;
-        const sizes = Object.values(keyPool).map(a => a.length);
-        addLog(`Key 池已就绪: 共 ${total} 个 key，每分片 [${sizes.join(',')}]`, 'info');
-    }
-
-    function refreshKeyPool() {
-        if (!keyPoolReady) {
-            addLog('Key 池正在生成中，请稍后...', 'warn');
-            return;
-        }
-        generateKeyPool();
-        addLog('Key 池已刷新', 'info');
     }
 
     function generateKeyForShard() {
         if (!keyPoolReady) {
-            addLog('Key 池尚未就绪，请稍后...', 'warn');
+            addLog('准备中，请稍后重试...', 'warn');
             return;
         }
         const target = parseInt(document.getElementById('targetShard').value);
         const pool = keyPool[target];
-        if (!pool || pool.length === 0) {
-            addLog(`分片${target} 的 key 池为空`, 'err');
-            return;
-        }
+        if (!pool || pool.length === 0) return;
         const idx = Math.floor(Math.random() * pool.length);
         const key = pool[idx];
         const val = randomChars(3);
@@ -843,7 +825,7 @@
         document.getElementById('getKey').value = key;
         document.getElementById('putVal').value = val;
         kvShardHint();
-        addLog(`从池中取 key="${key}" value="${val}" -> 分片${target}`, 'info');
+        addLog(`已填入随机键值对 "${key}":"${val}" -> 分片 ${target}`, 'info');
     }
 
     // ========== KV 操作 ==========
@@ -861,9 +843,9 @@
                 ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
                 : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
         if (result.success) {
-            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
+            addLog(`Put key="${key}" value="${value}" (分片${shard}, version=${result.reqVer})`, 'ok');
         } else {
-            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
+            addLog(`Put key="${key}" value="${value}" 失败 ${result.err} (分片${shard}, version=${result.reqVer})`, 'err');
         }
 
         document.getElementById('putVal').value = randomChars(3);
@@ -1178,7 +1160,7 @@
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
-                addLog(`回复乱序: ${on ? '开启 (66% 的回复延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
+                addLog(`回复乱序: ${on ? '开启 (RPC 回复有2/3概率延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
                 // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
                 if (on) {
                     document.getElementById('unreliableToggle').checked = true;
@@ -1482,7 +1464,7 @@
     function initBatchShardSelect() {
         const sel = document.getElementById('batchShard');
         const frag = document.createDocumentFragment();
-        frag.appendChild(new Option('任意分片', '-1'));
+        frag.appendChild(new Option('任意', '-1'));
         for (let i = 0; i < N_SHARDS; i++) {
             frag.appendChild(new Option(`分片 ${i}`, String(i)));
         }

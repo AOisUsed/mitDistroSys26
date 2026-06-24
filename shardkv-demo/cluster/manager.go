@@ -149,7 +149,7 @@ func (cm *ClusterManager) Init() error {
 	for _, g := range initGroups {
 		gidDescs = append(gidDescs, fmt.Sprintf("Gid%d=%v", g.Gid, servers[tester.Tgid(g.Gid)]))
 	}
-	log.Println("[Cluster] 初始化完成")
+	log.Printf("[Cluster] 初始化完成")
 
 	// 启动后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
 	cm.startConfigPoller()
