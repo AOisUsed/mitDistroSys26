@@ -771,6 +771,120 @@ func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- API: 批量随机写入 ---
+
+var randomSeed = uint64(time.Now().UnixNano())
+
+// batchChars 是与前端 randomChars 一致的字符集
+const batchChars = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+func batchRandomKey() string {
+	b := make([]byte, 8)
+	for i := range b {
+		randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
+		b[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+	}
+	return string(b)
+}
+
+func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Count int  `json:"count"` // key 数量
+		Shard *int `json:"shard"` // nil 表示任意分片，0-11 指定分片
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Count <= 0 || req.Count > 10000 {
+		http.Error(w, "count must be 1~10000", http.StatusBadRequest)
+		return
+	}
+
+	shardInfo := "任意分片"
+	if req.Shard != nil {
+		shardInfo = fmt.Sprintf("分片 %d", *req.Shard)
+	}
+	log.Printf("[BatchPut] 开始批量写入: count=%d shard=%s", req.Count, shardInfo)
+	start := time.Now()
+
+	// 生成 key-value pair
+	type kvPair struct {
+		key   string
+		value string
+	}
+	pairs := make([]kvPair, 0, req.Count)
+
+	// 预分配用于生成随机 value 的 buffer
+	valBuf := make([]byte, 3)
+
+	// 生成 key：若指定分片则持续生成直到映射到目标分片
+	for len(pairs) < req.Count {
+		key := batchRandomKey()
+		shard := shardcfg.Key2Shard(key)
+
+		// 如果指定了目标分片，跳过不符合的 key
+		if req.Shard != nil && int(shard) != *req.Shard {
+			continue
+		}
+
+		// 生成随机 value
+		for i := range valBuf {
+			randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
+			valBuf[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+		}
+
+		pairs = append(pairs, kvPair{key: key, value: string(valBuf)})
+	}
+
+	log.Printf("[BatchPut] 已生成 %d 个 key-value pair, 准备写入", len(pairs))
+
+	// 并发写入：每个 goroutine 使用独立的 Clerk（不同 clientId），避免共享锁竞争
+	type opResult struct {
+		idx int
+		err rpcapi.Err
+	}
+	resultCh := make(chan opResult, len(pairs))
+
+	for i, pair := range pairs {
+		go func(idx int, k, v string) {
+			ck := h.cm.NewClerk() // 每个 goroutine 独立 Clerk → 独立的 clientId + 无锁竞争
+			_, ver, getErr := ck.Get(k)
+			if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
+				resultCh <- opResult{idx, getErr}
+				return
+			}
+			putErr := ck.Put(k, v, ver)
+			resultCh <- opResult{idx, putErr}
+		}(i, pair.key, pair.value)
+	}
+
+	// 收集结果
+	successCount := 0
+	failCount := 0
+	for i := 0; i < len(pairs); i++ {
+		res := <-resultCh
+		if res.err == rpcapi.OK {
+			successCount++
+		} else {
+			failCount++
+			log.Printf("[BatchPut] key=%q 写入失败: %s", pairs[res.idx].key, res.err)
+		}
+	}
+	elapsed := time.Since(start).Seconds()
+	log.Printf("[BatchPut] 完成: 成功=%d 失败=%d 用时=%.1fs", successCount, failCount, elapsed)
+	writeJSON(w, map[string]any{
+		"success":      true,
+		"successCount": successCount,
+		"failCount":    failCount,
+		"elapsed":      elapsed,
+	})
+}
+
 // --- API: 观测日志开关 ---
 
 func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
@@ -891,6 +1005,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// InitController (手动恢复 pending 迁移)
 	mux.HandleFunc("/api/init-controller", h.HandleInitController)
+
+	// 批量写入
+	mux.HandleFunc("/api/kv/batch-put", h.HandleBatchPut)
 
 	// 观测日志
 	mux.HandleFunc("/api/observe", h.HandleObserve)

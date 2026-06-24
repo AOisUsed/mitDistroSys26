@@ -372,10 +372,10 @@
                         <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;">
                             <div class="kv-inputs">
                                 <select id="targetShard" class="kv-input-sm"></select>
-                                <input type="text" id="keyPrefix" placeholder="前缀(可选)">
                             </div>
                             <div class="kv-actions">
                                 <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">生成Key</button>
+                                <button class="btn btn-sm btn-info" onclick="refreshKeyPool()" style="background:#13c2c2;color:white;">刷新池</button>
                             </div>
                         </div>
                     </div>
@@ -400,6 +400,28 @@
                         <div style="font-size:10px;color:#888;">每个客户端用随机不同 value 同时 Put，结果看下方日志</div>
                     </div>
                     <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
+
+                    <!-- 批量随机写入 -->
+                    <div class="sep-line"></div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#52c41a;">
+                        批量随机写入
+                    </div>
+                    <div class="kv-panel">
+                        <div class="kv-row">
+                            <div class="kv-inputs">
+                                <input type="number" id="batchCount" value="100" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
+                                <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key</span>
+                                <select id="batchShard" class="kv-input-sm">
+                                    <option value="-1">任意分片</option>
+                                </select>
+                                <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">分片</span>
+                            </div>
+                            <div class="kv-actions">
+                                <button class="btn btn-sm" style="background:#52c41a;color:white;" onclick="doBatchPut()">开始写入</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="batchResult" class="get-result" style="margin-top:4px;background:#f6ffed;border-color:#b7eb8f;display:none;"></div>
                 </div>
 
                 <!-- 右列：组操作 + 网络可靠性 + 观测日志 -->
@@ -761,22 +783,67 @@
         return result;
     }
 
-    function generateKeyForShard() {
-        const target = parseInt(document.getElementById('targetShard').value);
-        const prefix = document.getElementById('keyPrefix').value.trim() || 'k';
-        for (let i = 0; i < 1000; i++) {
-            const candidate = `${prefix}-${i}`;
-            if (key2Shard(candidate) === target) {
-                document.getElementById('putKey').value = candidate;
-                document.getElementById('getKey').value = candidate;
-                const val = randomChars(3);
-                document.getElementById('putVal').value = val;
-                kvShardHint();
-                addLog(`生成 key="${candidate}" value="${val}" -> 分片${target}`, 'info');
-                return;
+    // ========== Key 池（预生成随机 key，按分片索引） ==========
+    const POOL_MAX_TOTAL = 2000;     // 最多生成 2000 个 key
+    const POOL_MIN_PER_SHARD = 100;  // 每个分片至少 100 个
+    let keyPool = {};                // { 0: [...], 1: [...], ..., 11: [...] }
+    let keyPoolReady = false;        // 标记池子是否已就绪
+
+    function generateKeyPool() {
+        keyPoolReady = false;
+        for (let s = 0; s < N_SHARDS; s++) keyPool[s] = [];
+
+        let total = 0;
+        while (total < POOL_MAX_TOTAL) {
+            // 检查是否所有分片都 >= POOL_MIN_PER_SHARD
+            let allEnough = true;
+            for (let s = 0; s < N_SHARDS; s++) {
+                if (keyPool[s].length < POOL_MIN_PER_SHARD) {
+                    allEnough = false;
+                    break;
+                }
             }
+            if (allEnough) break;  // 每个池子至少 100 个，退出
+
+            const key = randomChars(8);
+            const shard = key2Shard(key);
+            keyPool[shard].push(key);
+            total++;
         }
-        addLog(`未找到能映射到分片${target} 的 key (尝试了 1000 个后缀)`, 'err');
+
+        keyPoolReady = true;
+        const sizes = Object.values(keyPool).map(a => a.length);
+        addLog(`Key 池已就绪: 共 ${total} 个 key，每分片 [${sizes.join(',')}]`, 'info');
+    }
+
+    function refreshKeyPool() {
+        if (!keyPoolReady) {
+            addLog('Key 池正在生成中，请稍后...', 'warn');
+            return;
+        }
+        generateKeyPool();
+        addLog('Key 池已刷新', 'info');
+    }
+
+    function generateKeyForShard() {
+        if (!keyPoolReady) {
+            addLog('Key 池尚未就绪，请稍后...', 'warn');
+            return;
+        }
+        const target = parseInt(document.getElementById('targetShard').value);
+        const pool = keyPool[target];
+        if (!pool || pool.length === 0) {
+            addLog(`分片${target} 的 key 池为空`, 'err');
+            return;
+        }
+        const idx = Math.floor(Math.random() * pool.length);
+        const key = pool[idx];
+        const val = randomChars(3);
+        document.getElementById('putKey').value = key;
+        document.getElementById('getKey').value = key;
+        document.getElementById('putVal').value = val;
+        kvShardHint();
+        addLog(`从池中取 key="${key}" value="${val}" -> 分片${target}`, 'info');
     }
 
     // ========== KV 操作 ==========
@@ -1412,7 +1479,64 @@
         sel.appendChild(frag);
     }
 
+    function initBatchShardSelect() {
+        const sel = document.getElementById('batchShard');
+        const frag = document.createDocumentFragment();
+        frag.appendChild(new Option('任意分片', '-1'));
+        for (let i = 0; i < N_SHARDS; i++) {
+            frag.appendChild(new Option(`分片 ${i}`, String(i)));
+        }
+        sel.innerHTML = '';
+        sel.appendChild(frag);
+    }
+
+    // ========== 批量随机写入 ==========
+    async function doBatchPut() {
+        const count = parseInt(document.getElementById('batchCount').value) || 100;
+        const targetShard = parseInt(document.getElementById('batchShard').value);
+        const resultDiv = document.getElementById('batchResult');
+
+        if (count < 1 || count > 10000) {
+            addLog('批量写入: 数量必须在 1~10000 之间', 'err');
+            return;
+        }
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `写入中 (${count} 个 key, 并发)...`;
+        addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片${targetShard}` : '任意分片'}, 并发`, 'shard');
+
+        const startTime = Date.now();
+
+        // 构建请求体
+        const body = {count};
+        if (targetShard >= 0) body.shard = targetShard;
+
+        try {
+            const result = await api('/api/kv/batch-put', {
+                method: 'POST',
+                body: JSON.stringify(body)
+            }, 600000); // 10 分钟超时，因为大批量写入可能很慢
+
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            if (result.success) {
+                resultDiv.innerHTML = `<div>成功 <strong>${result.successCount}</strong> / 失败 <strong>${result.failCount}</strong> | 用时 ${elapsed}s</div>`;
+                addLog(`批量写入完成: 成功=${result.successCount} 失败=${result.failCount} 用时=${elapsed}s`, 'ok');
+            } else {
+                resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入失败: ${result.err || '未知错误'}</div>`;
+                addLog(`批量写入失败: ${result.err || '未知错误'}`, 'err');
+            }
+        } catch (err) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入异常: ${err.message} (${elapsed}s)</div>`;
+            addLog(`批量写入异常: ${err.message}`, 'err');
+        }
+
+        refreshStatus();
+    }
+
     initShardSelect();
+    initBatchShardSelect();
+    generateKeyPool();   // 页面加载时预生成 key 池
     refreshStatus();
     recalculateLogLayout();
 
