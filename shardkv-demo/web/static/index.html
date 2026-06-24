@@ -252,6 +252,29 @@
         .kv-row .kv-actions { flex: 0 0 auto; display: flex; gap: 5px; }
         .kv-row .kv-actions .btn { height: 100%; display: flex; align-items: center; font-size: 12px; }
 
+        /* slider 容器统一样式，含 disabled 态 */
+        .slider-container {
+            border: 1px solid #e8e8e8;
+            border-radius: 6px;
+            padding: 6px 8px;
+            background: white;
+            transition: opacity 0.25s, border-color 0.25s, background-color 0.25s;
+        }
+        .slider-container.disabled {
+            opacity: 0.5;
+            border-color: #e0e0e0;
+            background: #fafafa;
+        }
+        .slider-container.disabled input[type="range"] {
+            accent-color: #ccc;
+        }
+        .slider-container.disabled .slider-title {
+            color: #bbb !important;
+        }
+        .slider-container.disabled .slider-value {
+            color: #bbb !important;
+        }
+
         .chaos-btn {
             font-size: 10px; padding: 2px 8px; border-radius: 10px;
             border: none; cursor: pointer; font-weight: 500;
@@ -413,53 +436,53 @@
 
 
                         <!-- 丢包率 -->
-                        <div style="border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
-                            <div style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">丢包率 <span style="font-weight:400;font-size:10px;color:#999;">(RPC 请求和回复共用)</span></div>
+                        <div class="slider-container">
+                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">丢包率 <span style="font-weight:400;font-size:10px;color:#999;">(RPC 请求和回复共用)</span></div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <input type="range" id="dropRateSlider" min="0" max="1000" value="100"
                                     oninput="updateNetParamLabel('dropRate', this.value)"
                                     onchange="commitNetParam('dropRate', this.value)"
                                     style="flex:1;height:4px;cursor:pointer;">
-                                <span id="dropRateLabel" style="width:40px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">10%</span>
+                                <span id="dropRateLabel" class="slider-value" style="width:30px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">10%</span>
                             </div>
                         </div>
 
                         <!-- RPC 请求延迟 和 RPC 回复乱序 并排 -->
                         <div style="display:flex;gap:8px;">
                             <!-- RPC 请求延迟 -->
-                            <div style="flex:1;min-width:0;border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
-                                <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:4px;">RPC 请求延迟</div>
+                            <div class="slider-container" style="flex:1;min-width:0;">
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:4px;">RPC 请求延迟</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
                                         oninput="updateNetParamLabel('shortDelayMs', this.value)"
                                         onchange="commitNetParam('shortDelayMs', this.value)"
                                         style="flex:1;height:4px;cursor:pointer;">
-                                    <span id="shortDelayLabel" style="width:65px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~27ms</span>
+                                    <span id="shortDelayLabel" class="slider-value" style="width:55px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~27ms</span>
                                 </div>
                             </div>
 
                             <!-- RPC 回复乱序 -->
-                            <div style="flex:0 1 auto;min-width:0;border:1px solid #e8e8e8;border-radius:6px;padding:9px 12px;background:white;">
-                                <div style="font-size:11px;font-weight:600;color:#764ba2;margin-bottom:4px;">RPC 回复乱序</div>
+                            <div class="slider-container" style="flex:0 1 auto;min-width:0;padding:9px 12px;">
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#764ba2;margin-bottom:4px;">RPC 回复乱序</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <label class="toggle-switch" style="vertical-align:middle;">
                                         <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
                                         <span class="toggle-slider"></span>
                                     </label>
-                                    <span id="longReorderingLabel" style="font-size:11px;color:#333;white-space:nowrap;">关闭</span>
+                                    <span id="longReorderingLabel" class="slider-value" style="font-size:11px;color:#333;white-space:nowrap;">关闭</span>
                                 </div>
                             </div>
                         </div>
 
                         <!-- 断线超时延迟 -->
-                        <div style="border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
-                            <div style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">断线超时延迟 <span style="font-weight:400;font-size:10px;color:#999;">(节点不可达时生效)</span></div>
+                        <div class="slider-container">
+                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">断线超时延迟 <span style="font-weight:400;font-size:10px;color:#999;">(节点不可达时生效)</span></div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <input type="range" id="longDelaySlider" min="0" max="10000" value="7000"
                                     oninput="updateNetParamLabel('longDelayMs', this.value)"
                                     onchange="commitNetParam('longDelayMs', this.value)"
                                     style="flex:1;height:4px;cursor:pointer;">
-                                <span id="longDelayLabel" style="width:75px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~7000ms</span>
+                                <span id="longDelayLabel" class="slider-value" style="width:65px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~7000ms</span>
                             </div>
                         </div>
 
@@ -938,6 +961,17 @@
     // 记录关闭不可靠网络时回复乱序的开启状态，用于再次开启时自动恢复
     let savedLongReorderingState = null;
 
+    // 根据不可靠网络 toggle 状态，切换三个 slider 容器的 disabled 样式
+    function updateSliderDisabledState(enabled) {
+        document.querySelectorAll('.slider-container').forEach(el => {
+            if (enabled) {
+                el.classList.remove('disabled');
+            } else {
+                el.classList.add('disabled');
+            }
+        });
+    }
+
     // oninput: 仅更新标签显示，不触发网络请求
     function updateNetParamLabel(param, value) {
         const intVal = parseInt(value);
@@ -1004,6 +1038,8 @@
         // 成功后才更新标签
         label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
+        // 同步更新三个 slider 的禁用样式
+        updateSliderDisabledState(enabled);
         const dropPct = (netParams.dropRate / 10).toFixed(0);
         addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, RPC请求延迟= 0~${netParams.shortDelayMs}ms, 断线超时= 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
 
@@ -1570,6 +1606,8 @@
                 document.getElementById('longReorderingLabel').textContent = '开启';
             }
         } catch(e) {}
+        // 初始化三个 slider 的禁用状态，与 toggle 保持一致
+        updateSliderDisabledState(document.getElementById('unreliableToggle').checked);
         // 初始化观测日志状态（默认收起，不拉取日志，等用户开启开关再展开）
         await initObserveState();
     });
