@@ -224,6 +224,8 @@
             transition: transform 0.3s;
         }
         .toggle-switch input:checked + .toggle-slider { background: #ff4d4f; }
+        .toggle-switch input:checked:disabled + .toggle-slider { background: #aaa; }
+        .toggle-switch input:checked:disabled + .toggle-slider::before { background: #e0e0e0; }
         .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
 
         .get-result {
@@ -246,7 +248,7 @@
         .kv-row .kv-inputs select:focus {
             border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15);
         }
-        .kv-row .kv-inputs .kv-input-sm { flex: 0 0 65px; min-width: 55px; }
+        .kv-row .kv-inputs .kv-input-sm { flex: 0 0 70px; min-width: 65px; }
         .kv-row .kv-actions { flex: 0 0 auto; display: flex; gap: 5px; }
         .kv-row .kv-actions .btn { height: 100%; display: flex; align-items: center; font-size: 12px; }
 
@@ -271,10 +273,10 @@
         .btn-recover:hover { background: #d9f7be; }
 
         .control-row {
-            display: flex; gap: 12px; flex-wrap: wrap;
+            display: flex; gap: 12px;
         }
         .control-col {
-            flex: 1; min-width: 280px;
+            flex: 1; min-width: 0;
             display: flex; flex-direction: column; gap: 6px;
         }
 
@@ -289,6 +291,11 @@
         }
         .net-toggle-row .left { display: flex; align-items: center; gap: 6px; flex: 1; }
         .net-toggle-row .right { display: flex; align-items: center; gap: 6px; }
+
+        @media (max-width: 1100px) {
+            .control-row { flex-direction: column; }
+            .control-col { min-width: 0; }
+        }
 
         @media (max-width: 1024px) {
             .container { flex-direction: column; height: auto; }
@@ -354,41 +361,42 @@
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 并发 Put
+                        CAS 并发写
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:4px;">
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <input type="text" id="raceKey" placeholder="竞赛 Key（与 KV 操作同步）" style="flex:1;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
-                            <span style="font-size:11px;color:#888;white-space:nowrap;">客户端数:</span>
-                            <input type="number" id="raceNClient" value="5" min="1" max="1000" style="width:65px;padding:7px 10px;border:1px solid #d9d9d9;border-radius:6px;font-size:12px;outline:none;">
-                            <button class="btn btn-primary" onclick="doCasRace()" style="flex-shrink:0;">开始</button>
+                    <div class="kv-panel">
+                        <div class="kv-row">
+                            <div class="kv-inputs">
+                                <input type="text" id="raceKey" placeholder="竞赛 Key">
+                                <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">客户端数:</span>
+                                <input type="number" id="raceNClient" value="5" min="1" max="1000" style="flex:0 0 70px;min-width:60px;">
+                            </div>
+                            <div class="kv-actions">
+                                <button class="btn btn-primary" onclick="doCasRace()">开始</button>
+                            </div>
                         </div>
-                        <div style="font-size:10px;color:#888;margin-top:2px;">
-                            每个客户端用随机不同 value 同时 CAS Put，结果看下方日志
-                        </div>
+                        <div style="font-size:10px;color:#888;">每个客户端用随机不同 value 同时 Put，结果看下方日志</div>
                     </div>
                     <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
                 </div>
 
                 <!-- 右列：组操作 + 网络可靠性 + 观测日志 -->
                 <div class="control-col">
-                    <!-- 组操作 -->
+                    <!-- 组操作（含 Start/Kill/Leave 以及添加新组） -->
                     <div>
                         <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#faad14;">组操作</div>
-                            <div style="display:flex;flex-direction:column;gap:4px;">
-                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                    <span class="form-label" style="min-width:30px;">组:</span>
-                                    <select id="groupGid" class="dropdown" style="flex:1;min-width:80px;">
-                                        <option value="">选择组</option>
-                                    </select>
-                                    <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
-                                    <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
-                                    <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
-                                </div>
-                                <button class="btn btn-primary" onclick="doJoinGroup()" style="flex:1;">
-                                    添加新组
-                                </button>
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <span class="form-label" style="min-width:30px;">组:</span>
+                                <select id="groupGid" class="dropdown" style="flex:1;min-width:80px;">
+                                    <option value="">选择组</option>
+                                </select>
+                                <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
+                                <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
+                                <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
+                                <span style="width:1px;height:18px;background:#d9d9d9;flex-shrink:0;margin:0 2px;"></span>
+                                <button class="btn btn-primary btn-sm" onclick="doJoinGroup()">+ 添加新组</button>
                             </div>
+                        </div>
                     </div>
 
                     <!-- 网络可靠性（展开版：toggle + 3 个滑块） -->
@@ -435,7 +443,7 @@
 
                     <!-- 观测日志开关 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#667eea;">观测日志</div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#13c2c2;">观测日志</div>
                     <div style="display:flex;flex-wrap:wrap;gap:6px;">
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f0f5ff;border:1px solid #d6e4ff;">
                             <input type="checkbox" class="observe-toggle" data-scene="election" onchange="toggleObserve(this)">
@@ -513,39 +521,6 @@
     let chaosStates = {};
     // 前端乐观 pending 标记：点击 Join/Leave 后立即显示 pending，不等后端响应
     let optimisticPendingMigration = false;
-
-    // 前端 KV 并发限制（浏览器同域名连接池有限，一般 6 个）
-    // 最多允许 2 个并发 KV 操作，避免其他请求（status refresh）被阻塞
-    let kvInFlight = 0;
-    const MAX_KV_INFLIGHT = 2;
-    const kvQueue = [];
-
-    function kvAcquire() {
-        return new Promise(resolve => {
-            if (kvInFlight < MAX_KV_INFLIGHT) {
-                kvInFlight++;
-                resolve();
-            } else {
-                kvQueue.push(resolve);
-            }
-        });
-    }
-    function kvRelease() {
-        if (kvQueue.length > 0) {
-            const next = kvQueue.shift();
-            next(); // next request proceeds without changing kvInFlight count
-        } else {
-            kvInFlight--;
-        }
-    }
-    async function kvLimit(fn) {
-        await kvAcquire();
-        try {
-            return await fn();
-        } finally {
-            kvRelease();
-        }
-    }
 
     function key2Shard(key) {
         let hash = 0x811c9dc5 >>> 0;
@@ -759,48 +734,44 @@
         addLog(`未找到能映射到分片${target} 的 key (尝试了 1000 个后缀)`, 'err');
     }
 
-    // ========== KV 操作（受 kvLimit 并发保护） ==========
+    // ========== KV 操作 ==========
     async function doPut() {
-        return kvLimit(async () => {
-            const key = document.getElementById('putKey').value.trim();
-            const value = document.getElementById('putVal').value.trim();
-            if (!key) { addLog('Put: 键不能为空', 'err'); return; }
-            const shard = key2Shard(key);
-            const result = await api('/api/kv/', {
-                method: 'PUT',
-                body: JSON.stringify({key, value})
-            });
-            document.getElementById('kvResult').textContent =
-                result.success
-                    ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
-                    : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
-            if (result.success) {
-                addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
-            } else {
-                addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
-            }
-
-            document.getElementById('putVal').value = randomChars(3);
-            refreshStatus();
+        const key = document.getElementById('putKey').value.trim();
+        const value = document.getElementById('putVal').value.trim();
+        if (!key) { addLog('Put: 键不能为空', 'err'); return; }
+        const shard = key2Shard(key);
+        const result = await api('/api/kv/', {
+            method: 'PUT',
+            body: JSON.stringify({key, value})
         });
+        document.getElementById('kvResult').textContent =
+            result.success
+                ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
+                : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
+        if (result.success) {
+            addLog(`Put key="${key}" -> value="${value}" (分片${shard}, reqVer=${result.reqVer})`, 'ok');
+        } else {
+            addLog(`Put key="${key}" value="${value}" -> 失败 ${result.err} (分片${shard}, reqVer=${result.reqVer})`, 'err');
+        }
+
+        document.getElementById('putVal').value = randomChars(3);
+        refreshStatus();
     }
 
     async function doGet() {
-        return kvLimit(async () => {
-            const key = document.getElementById('getKey').value.trim();
-            if (!key) { addLog('Get: 键不能为空', 'err'); return; }
-            const shard = key2Shard(key);
-            const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
-            document.getElementById('kvResult').textContent =
-                result.success
-                    ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
-                    : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
-            if (result.success) {
-                addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
-            } else {
-                addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
-            }
-        });
+        const key = document.getElementById('getKey').value.trim();
+        if (!key) { addLog('Get: 键不能为空', 'err'); return; }
+        const shard = key2Shard(key);
+        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
+        document.getElementById('kvResult').textContent =
+            result.success
+                ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
+                : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
+        if (result.success) {
+            addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
+        } else {
+            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
+        }
     }
 
     // ========== 节点操作 ==========
@@ -1075,7 +1046,7 @@
             if (result.success) {
                 chaosStates[gid] = !currentlyActive;
                 if (chaosStates[gid]) {
-                    addLog(`混沌: 组 ${gid} 已启动，每1-3s随机kill节点，但会保证大多数节点在线`, 'err');
+                    addLog(`混沌: 组 ${gid} 已启动，每 1-3s 随机kill节点，但会保证大多数节点在线`, 'err');
                 } else {
                     addLog(`混沌: 组 ${gid} 已停止`, 'ok');
                 }
@@ -1320,7 +1291,7 @@
         const sel = document.getElementById('targetShard');
         const frag = document.createDocumentFragment();
         for (let i = 0; i < N_SHARDS; i++) {
-            frag.appendChild(new Option(`分片${i}`, String(i)));
+            frag.appendChild(new Option(`分片 ${i}`, String(i)));
         }
         sel.innerHTML = '';
         sel.appendChild(frag);
