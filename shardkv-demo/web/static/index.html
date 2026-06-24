@@ -399,7 +399,7 @@
                         </div>
                     </div>
 
-                    <!-- 网络可靠性（展开版：toggle + 3 个滑块） -->
+                    <!-- 网络参数区域 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#ff4d4f;">
                         不可靠网络
@@ -409,37 +409,59 @@
                         </label>
                         <span id="unreliableLabel" style="font-size:11px;color:#999;vertical-align:middle;"> 关闭 </span>
                     </div>
-                    <div id="netParamsSection" style="display:grid;grid-template-columns:120px 1fr 45px;gap:6px 8px;padding:6px 8px;background:#fafafa;border-radius:6px;border:1px solid #f0f0f0;align-items:center;">
-                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">丢包率</span>
-                        <input type="range" id="dropRateSlider" min="0" max="1000" value="100"
-                            oninput="updateNetParamLabel('dropRate', this.value)"
-                            onchange="commitNetParam('dropRate', this.value)"
-                            style="width:100%;height:4px;cursor:pointer;">
-                        <span id="dropRateLabel" style="font-size:11px;color:#333;">10%</span>
 
-                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">最大在线抖动延迟</span>
-                        <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
-                            oninput="updateNetParamLabel('shortDelayMs', this.value)"
-                            onchange="commitNetParam('shortDelayMs', this.value)"
-                            style="width:100%;height:4px;cursor:pointer;">
-                        <span id="shortDelayLabel" style="font-size:11px;color:#333;">27ms</span>
 
-                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">最大断线超时延迟</span>
-                        <input type="range" id="longDelaySlider" min="0" max="10000" value="7000"
-                            oninput="updateNetParamLabel('longDelayMs', this.value)"
-                            onchange="commitNetParam('longDelayMs', this.value)"
-                            style="width:100%;height:4px;cursor:pointer;">
-                        <span id="longDelayLabel" style="font-size:11px;color:#333;">7000ms</span>
 
-                        <span style="font-size:11px;color:#555;text-align:right;padding-right:4px;">回复乱序</span>
-                        <div style="display:flex;align-items:center;">
-                            <label class="toggle-switch" style="vertical-align:middle;">
-                                <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
-                                <span class="toggle-slider"></span>
-                            </label>
+                        <!-- 丢包率 -->
+                        <div style="border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
+                            <div style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">丢包率 <span style="font-weight:400;font-size:10px;color:#999;">(RPC 请求和回复共用)</span></div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="range" id="dropRateSlider" min="0" max="1000" value="100"
+                                    oninput="updateNetParamLabel('dropRate', this.value)"
+                                    onchange="commitNetParam('dropRate', this.value)"
+                                    style="flex:1;height:4px;cursor:pointer;">
+                                <span id="dropRateLabel" style="width:40px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">10%</span>
+                            </div>
                         </div>
-                        <span id="longReorderingLabel" style="font-size:11px;color:#333;">关闭</span>
-                    </div>
+
+                        <!-- RPC 请求延迟 和 RPC 回复乱序 并排 -->
+                        <div style="display:flex;gap:8px;">
+                            <!-- RPC 请求延迟 -->
+                            <div style="flex:1;min-width:0;border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
+                                <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:4px;">RPC 请求延迟</div>
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
+                                        oninput="updateNetParamLabel('shortDelayMs', this.value)"
+                                        onchange="commitNetParam('shortDelayMs', this.value)"
+                                        style="flex:1;height:4px;cursor:pointer;">
+                                    <span id="shortDelayLabel" style="width:65px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~27ms</span>
+                                </div>
+                            </div>
+
+                            <!-- RPC 回复乱序 -->
+                            <div style="flex:0 1 auto;min-width:0;border:1px solid #e8e8e8;border-radius:6px;padding:9px 12px;background:white;">
+                                <div style="font-size:11px;font-weight:600;color:#764ba2;margin-bottom:4px;">RPC 回复乱序</div>
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <label class="toggle-switch" style="vertical-align:middle;">
+                                        <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <span id="longReorderingLabel" style="font-size:11px;color:#333;white-space:nowrap;">关闭</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 断线超时延迟 -->
+                        <div style="border:1px solid #e8e8e8;border-radius:6px;padding:6px 8px;background:white;">
+                            <div style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">断线超时延迟 <span style="font-weight:400;font-size:10px;color:#999;">(节点不可达时生效)</span></div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="range" id="longDelaySlider" min="0" max="10000" value="7000"
+                                    oninput="updateNetParamLabel('longDelayMs', this.value)"
+                                    onchange="commitNetParam('longDelayMs', this.value)"
+                                    style="flex:1;height:4px;cursor:pointer;">
+                                <span id="longDelayLabel" style="width:75px;text-align:right;flex-shrink:0;font-size:11px;color:#333;">0~7000ms</span>
+                            </div>
+                        </div>
 
                     <!-- 观测日志开关 -->
                     <div class="sep-line"></div>
@@ -502,7 +524,7 @@
         <!-- 观测日志面板 -->
         <div class="log-panel" id="obsLogPanel">
             <div class="log-panel-header" onclick="toggleObserveLog()">
-                <span class="title" style="color:#f6d365;">观测日志</span>
+                <span class="title" style="color:#13c2c2;">观测日志</span>
                 <span class="toggle" id="observeLogToggle">展开</span>
             </div>
             <div id="observeLogArea" class="log-panel-area" style="display:none;">
@@ -923,8 +945,8 @@
 
         const labels = {
             dropRate: { el: 'dropRateLabel', fmt: v => (v/10).toFixed(0) + '%' },
-            shortDelayMs: { el: 'shortDelayLabel', fmt: v => v + 'ms' },
-            longDelayMs: { el: 'longDelayLabel', fmt: v => v + 'ms' },
+            shortDelayMs: { el: 'shortDelayLabel', fmt: v => '0~' + v + 'ms' },
+            longDelayMs: { el: 'longDelayLabel', fmt: v => '0~' + v + 'ms' },
         };
         const info = labels[param];
         if (info) {
@@ -946,12 +968,12 @@
                 method: 'POST',
                 body: JSON.stringify({[param]: intVal})
             });
-            if (result && result.success) {
-                const displayVal = param === 'dropRate'
-                    ? (intVal / 10).toFixed(1) + '%'
-                    : String(intVal) + 'ms';
-                addLog(`网络参数已设置: ${param} = ${displayVal}`, 'info');
-            }
+            // if (result && result.success) {
+            //     const displayVal = param === 'dropRate'
+            //         ? (intVal / 10).toFixed(1) + '%'
+            //         : String(intVal) + 'ms';
+            //      addLog(`网络参数已设置: ${param} = ${displayVal}`, 'info');
+            // }
         } catch (err) {}
     }
 
@@ -983,7 +1005,7 @@
         label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, 最大在线抖动=${netParams.shortDelayMs}ms, 最大断线超时=${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, RPC请求延迟= 0~${netParams.shortDelayMs}ms, 断线超时= 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
 
         // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
         if (!enabled) {
@@ -1035,9 +1057,9 @@
                         longDelayMs: netParams.longDelayMs
                     })
                 });
-                if (result && result.success) {
-                    addLog(`网络参数已同步: 丢包率 = ${result.dropRate/10}% | 最大在线抖动延迟 = ${result.shortDelayMs}ms | 最大断线超时延迟 = ${result.longDelayMs}ms`, 'info');
-                }
+                // if (result && result.success) {
+                //     addLog(`网络参数已同步: 丢包率 = ${result.dropRate/10}% | RPC请求延迟 = 0~${result.shortDelayMs}ms | 断线超时延迟 = 0~${result.longDelayMs}ms`, 'info');
+                // }
             } catch (err) {}
         }
     }
@@ -1053,7 +1075,7 @@
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
-                addLog(`回复乱序: ${on ? '开启 (2/3 回复延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
+                addLog(`回复乱序: ${on ? '开启 (66% 的回复延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
                 // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
                 if (on) {
                     document.getElementById('unreliableToggle').checked = true;
@@ -1534,9 +1556,9 @@
                 document.getElementById('dropRateSlider').value = paramsRes.dropRate;
                 document.getElementById('dropRateLabel').textContent = (paramsRes.dropRate / 10).toFixed(0) + '%';
                 document.getElementById('shortDelaySlider').value = paramsRes.shortDelayMs;
-                document.getElementById('shortDelayLabel').textContent = paramsRes.shortDelayMs + 'ms';
+                document.getElementById('shortDelayLabel').textContent = '0~' + paramsRes.shortDelayMs + 'ms';
                 document.getElementById('longDelaySlider').value = paramsRes.longDelayMs;
-                document.getElementById('longDelayLabel').textContent = paramsRes.longDelayMs + 'ms';
+                document.getElementById('longDelayLabel').textContent = '0~' + paramsRes.longDelayMs + 'ms';
             }
             if (reliableRes && reliableRes.reliable === false) {
                 document.getElementById('unreliableToggle').checked = true;
