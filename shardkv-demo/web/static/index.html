@@ -404,7 +404,7 @@
                     <div class="kv-panel">
                         <div class="kv-row">
                             <div class="kv-inputs">
-                                <input type="number" id="batchCount" value="100" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
+                                <input type="number" id="batchCount" value="20" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key, 来自 </span>
                                 <select id="batchShard" class="kv-input-sm">
                                     <option value="-1">任意</option>
@@ -528,11 +528,18 @@
             </div>
         </div>
 
-        <!-- 集群拓扑（增强版，集成网络操作） -->
+        <!-- 集群拓扑 -->
         <div class="card">
-            <h3>集群拓扑 <span id="refreshInfo" style="font-weight:400;font-size:11px;color:#888;"></span>
-                <span id="pendingMigrationBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:11px;background:#fff3cd;color:#856404;border:1px solid #ffeeba;cursor:pointer;" onclick="doInitController()" title="点击尝试恢复分片迁移">
-                    ⚠ 分片迁移未完成
+            <h3>
+                <span style="display:flex;align-items:center;">
+                    集群拓扑
+                    <button class="btn btn-primary btn-sm" style="margin-left:20px;" onclick="doJoinGroup()">+ 添加新组</button>
+                </span>
+                <span id="refreshInfo" style="flex:1;text-align:center;font-weight:400;font-size:11px;color:#888;"></span>
+                <span class="actions" style="flex-shrink:0;width:150px;justify-content:flex-end;">
+                    <span id="pendingMigrationBadge" style="visibility:hidden;padding:2px 8px;border-radius:10px;font-size:11px;background:#fff3cd;color:#856404;border:1px solid #ffeeba;cursor:pointer;" onclick="doInitController()" title="点击尝试恢复分片迁移">
+                        ⚠ 分片迁移未完成
+                    </span>
                 </span>
             </h3>
             <div id="topology" class="node-grid">
@@ -839,12 +846,12 @@
         });
         document.getElementById('kvResult').textContent =
             result.success
-                ? `Put: ${key} = ${value} (分片${shard}, reqVer=${result.reqVer})`
-                : `Put 失败: ${result.err || 'unknown error'} (分片${shard}, reqVer=${result.reqVer})`;
+                ? `Put: ${key} = ${value} (分片 ${shard}, reqVer = ${result.reqVer})`
+                : `Put 失败: ${result.err || 'unknown error'} (分片 ${shard}, reqVer = ${result.reqVer})`;
         if (result.success) {
-            addLog(`Put key="${key}" value="${value}" (分片${shard}, version=${result.reqVer})`, 'ok');
+            addLog(`Put key="${key}" value="${value}" (分片 ${shard}, version = ${result.reqVer})`, 'ok');
         } else {
-            addLog(`Put key="${key}" value="${value}" 失败 ${result.err} (分片${shard}, version=${result.reqVer})`, 'err');
+            addLog(`Put key="${key}" value="${value}" 失败 ${result.err} (分片 ${shard}, version = ${result.reqVer})`, 'err');
         }
 
         document.getElementById('putVal').value = randomChars(3);
@@ -858,12 +865,12 @@
         const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
         document.getElementById('kvResult').textContent =
             result.success
-                ? `Get: ${key} = "${result.value}" (分片${shard}, v${result.version})`
-                : `Get 失败: ${result.err || 'unknown error'} (分片${shard})`;
+                ? `Get: ${key} = "${result.value}" (分片 ${shard}, v${result.version})`
+                : `Get 失败: ${result.err || 'unknown error'} (分片 ${shard})`;
         if (result.success) {
-            addLog(`Get key="${key}" -> "${result.value}" (分片${shard}, v${result.version})`, 'ok');
+            addLog(`Get key="${key}" -> "${result.value}" (分片 ${shard}, v${result.version})`, 'ok');
         } else {
-            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片${shard})`, 'err');
+            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片 ${shard})`, 'err');
         }
     }
 
@@ -877,9 +884,9 @@
             body: JSON.stringify({gid, srv})
         });
         if (result.success) {
-            addLog(`IsolateNode: 组${gid} 节点${srv} 已隔离网络 (进程保持运行)`, 'warn');
+            addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 已隔离网络 (进程保持运行)`, 'warn');
         } else {
-            addLog(`IsolateNode: 组${gid} 节点${srv} 隔离失败 - ${result.error}`, 'err');
+            addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 隔离失败 - ${result.error}`, 'err');
         }
         refreshStatus();
     }
@@ -890,9 +897,9 @@
             body: JSON.stringify({gid, srv})
         });
         if (result.success) {
-            addLog(`RecoverNode: 组${gid} 节点${srv} 网络已恢复`, 'ok');
+            addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 网络已恢复`, 'ok');
         } else {
-            addLog(`RecoverNode: 组${gid} 节点${srv} 恢复失败 - ${result.error || '未知错误'}`, 'err');
+            addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 恢复失败 - ${result.error || '未知错误'}`, 'err');
         }
         refreshStatus();
     }
@@ -903,9 +910,9 @@
             body: JSON.stringify({gid})
         });
         if (result.success) {
-            addLog(`RecoverGroup: 组${gid} 全部存活节点网络已恢复`, 'ok');
+            addLog(`RecoverGroup: 组 ${gid} 全部存活节点网络已恢复`, 'ok');
         } else {
-            addLog(`RecoverGroup: 组${gid} 恢复失败 - ${result.error || '未知错误'}`, 'err');
+            addLog(`RecoverGroup: 组 ${gid} 恢复失败 - ${result.error || '未知错误'}`, 'err');
         }
         refreshStatus();
     }
@@ -1094,7 +1101,7 @@
         // 同步更新三个 slider 的禁用样式
         updateSliderDisabledState(enabled);
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (丢包率=${dropPct}%, RPC请求延迟= 0~${netParams.shortDelayMs}ms, 断线超时= 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 = ${dropPct}%, RPC请求延迟 = 0~${netParams.shortDelayMs}ms, 断线超时 = 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
 
         // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
         if (!enabled) {
@@ -1402,7 +1409,7 @@
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
                         populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                     }
-                    refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
+                    refreshInfo.textContent = '缓存数据 - 配置仓库无响应';
                     refreshFailCount++;
                     return;
                 }
@@ -1421,9 +1428,9 @@
                 // Show/hide pending migration badge
                 const pendingBadge = document.getElementById('pendingMigrationBadge');
                 if (tree.hasPendingMigration || optimisticPendingMigration) {
-                    pendingBadge.style.display = 'inline';
+                    pendingBadge.style.visibility = 'visible';
                 } else {
-                    pendingBadge.style.display = 'none';
+                    pendingBadge.style.visibility = 'hidden';
                 }
                 refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
                 refreshFailCount = 0; // 成功后重置退避计数
@@ -1438,7 +1445,7 @@
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
                         populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
                     }
-                    refreshInfo.textContent = '缓存数据 - ConfigStore 无响应';
+                    refreshInfo.textContent = '缓存数据 - 配置仓库无响应';
                 } else {
                     usingCache = false;
                     document.getElementById('configNum').textContent = 'ConfigStore 离线';
@@ -1495,7 +1502,7 @@
 
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `写入中 (${count} 个 key, 并发)...`;
-        addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片${targetShard}` : '任意分片'}, 并发`, 'shard');
+        addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'}, 并发`, 'shard');
 
         const startTime = Date.now();
 
@@ -1512,7 +1519,7 @@
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             if (result.success) {
                 resultDiv.innerHTML = `<div>成功 <strong>${result.successCount}</strong> / 失败 <strong>${result.failCount}</strong> | 用时 ${elapsed}s</div>`;
-                addLog(`批量写入完成: 成功=${result.successCount} 失败=${result.failCount} 用时=${elapsed}s`, 'ok');
+                addLog(`批量写入完成: 成功 = ${result.successCount} 失败 = ${result.failCount} 用时 = ${elapsed}s`, 'ok');
             } else {
                 resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入失败: ${result.err || '未知错误'}</div>`;
                 addLog(`批量写入失败: ${result.err || '未知错误'}`, 'err');
@@ -1762,7 +1769,7 @@
                 return;
             }
             version = verResp.version;
-            addLog(`[Get] key="${key}" version=${version} (基线版本)`, 'info');
+            addLog(`[Get] key="${key}" version = ${version} (基线版本)`, 'info');
         } catch (err) {
             resultDiv.textContent = `获取版本号异常: ${err.message}`;
             addLog(`CAS 竞赛: 获取版本号异常: ${err.message}`, 'err');
@@ -1812,21 +1819,21 @@
                 const shard = key2Shard(key);
                 if (res && res.success) {
                     successCount++;
-                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} OK`, 'ok');
+                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer = ${version} OK`, 'ok');
                 } else {
                     versionErrCount++;
                     const errMsg = (res && res.err) || 'ErrVersion';
-                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer=${version} ${errMsg}`, 'err');
+                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer = ${version} ${errMsg}`, 'err');
                 }
                 completedCount++;
-                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功${successCount}, 冲突${versionErrCount})</div>`;
+                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
             })
             .catch(err => {
                 if (err.name === 'AbortError') return; // 竞赛结束被中止，不输出日志
                 versionErrCount++;
                 completedCount++;
                 addLog(`CAS 竞赛请求异常: ${err.message}`, 'err');
-                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功${successCount}, 冲突${versionErrCount})</div>`;
+                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
             });
 
             promises.push(p);
@@ -1846,7 +1853,7 @@
             }
         } catch (err) {}
         resultDiv.innerHTML = `<div style="color:#764ba2;">成功 <strong>${successCount}</strong> / 版本冲突 <strong>${versionErrCount}</strong> | 最终 "${finalValue}"</div>`;
-        addLog(`CAS 竞赛完成: 成功=${successCount} 版本冲突=${versionErrCount} → 最终 "${finalValue}"`, 'shard');
+        addLog(`CAS 竞赛完成: 成功 = ${successCount} 版本冲突 = ${versionErrCount} → 最终 "${finalValue}"`, 'shard');
     }
 
 </script>
