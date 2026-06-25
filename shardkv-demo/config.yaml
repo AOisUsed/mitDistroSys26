@@ -1,13 +1,19 @@
 # shardkv-demo 集群启动配置
-cluster:
-  # 每组多少个副本节点
-  nsrv: 3
-  # 是否可靠网络
-  reliable: true
 
-# 初始启动的 Shard Group 列表，指定组号及副本节点数
+# --- Raft State 大小阈值（字节），超过此值时触发快照---
+# 0 或负值表示禁用快照。默认 5000 Byte。
+maxRaftState: 5000
+
+# --- 每组默认节点数 ---
+nsrv: 3
+
+# 是否是可靠网络 (true / false)
+reliable: true
+
+# --- 初始启动的 Shard Group 列表，指定组号及副本节点数 ---
+# 说明：
 # - gid:     组 ID，正整数（1, 2, 3 ...）
-# - servers: 该组节点数（可选，省略则使用 cluster.nsrv）
+# - servers: 该组节点数（可选，省略则使用 nsrv）
 
 # 示例：创建一个初始有 3 个组（1, 2, 5），每组分别有5, 7, 3 个节点的分片集群
 #groups:
@@ -16,6 +22,7 @@ cluster:
 #  - gid: 2
 #    servers: 7
 #  - gid: 5
+#    servers: 3  (此行可省略，若 nsrv = 3)
 
 # 当前配置：1 组，3 节点
 groups:

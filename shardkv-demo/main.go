@@ -29,7 +29,7 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 	log.Printf("配置加载完成: nsrv=%d, reliable=%v, groups=%v",
-		cfg.Cluster.Nsrv, cfg.Cluster.Reliable, cfg.Groups)
+		cfg.Nsrv, cfg.Reliable, cfg.Groups)
 
 	// 保存 shardkv-demo 目录路径（用于定位静态文件）
 	demoDir, err := os.Getwd()

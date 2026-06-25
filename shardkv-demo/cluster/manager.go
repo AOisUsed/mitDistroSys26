@@ -53,7 +53,7 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		groups:       make(map[tester.Tgid]bool),
 		left:         make(map[tester.Tgid]bool),
 		isolated:     make(map[tester.Tgid]map[int]bool),
-		maxRaftState: 5000, // raftstate 超过5 KB 就快照
+		maxRaftState: dcfg.MaxRaftState,
 	}
 	return cm
 }
@@ -77,11 +77,11 @@ func (cm *ClusterManager) Init() error {
 	cm.mu.Lock()
 
 	// 从配置中读取参数
-	nsrv := cm.dcfg.Cluster.Nsrv
+	nsrv := cm.dcfg.Nsrv
 	if nsrv <= 0 {
 		nsrv = 3
 	}
-	reliable := cm.dcfg.Cluster.Reliable
+	reliable := cm.dcfg.Reliable
 
 	// 创建 tester Config，使用 kvraft（nsrv 节点 Raft 组）作为 config store
 	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, nsrv)
@@ -603,7 +603,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 
 	// ---- 阶段 1：加锁执行创建操作 ----
 	cm.mu.Lock()
-	nsrv := cm.dcfg.Cluster.Nsrv
+	nsrv := cm.dcfg.Nsrv
 	if nsrv <= 0 {
 		nsrv = 3
 	}
