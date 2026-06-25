@@ -33,6 +33,10 @@ type ClusterManager struct {
 	isolated     map[tester.Tgid]map[int]bool // 被网络隔离的节点
 	chaosMonkeys []*ChaosMonkey               // 活跃的混沌猴子
 
+	// leaders 缓存每个组中当前已知的 leader 节点索引。
+	// 由 leaderChangeCb 回调实时更新（事件驱动），不依赖轮询。
+	leaders map[tester.Tgid]map[int]bool
+
 	// migrationPending 表示当前正在进行 Join/Leave 显式迁移操作，
 	// 用于在缓存轮询还未感知到 nextConfig 变化时，让 Status() 正确显示 pending 状态
 	migrationPending atomic.Bool
@@ -53,6 +57,7 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		groups:       make(map[tester.Tgid]bool),
 		left:         make(map[tester.Tgid]bool),
 		isolated:     make(map[tester.Tgid]map[int]bool),
+		leaders:      make(map[tester.Tgid]map[int]bool),
 		maxRaftState: dcfg.MaxRaftState,
 	}
 	return cm
@@ -126,6 +131,23 @@ func (cm *ClusterManager) Init() error {
 
 	// GRP0 也加入管理
 	cm.groups[tester.GRP0] = true
+
+	// 注册 leader 身份变更监听器：子进程 Raft 身份变化时，通过 sockrpc 转发到主进程，
+	// 主进程 TesterRPC.LeaderChange handler 调用此回调实时更新 cm.leaders 集合。
+	cm.cfg.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
+		cm.mu.Lock()
+		defer cm.mu.Unlock()
+		leaders, ok := cm.leaders[tester.Tgid(gid)]
+		if !ok {
+			leaders = make(map[int]bool)
+			cm.leaders[tester.Tgid(gid)] = leaders
+		}
+		if isLeader {
+			leaders[sid] = true
+		} else {
+			delete(leaders, sid)
+		}
+	})
 
 	cm.mu.Unlock()
 
@@ -305,12 +327,16 @@ func (cm *ClusterManager) Status() *ClusterState {
 		gs.Servers = make([]ServerState, sg.N())
 		connected := sg.GetConnected()
 		isoMap := cm.isolated[gid]
+		// 获取该组最新的 leader 信息（事件驱动，由 leaderChangeCb 实时更新）
+		leaders := cm.leaders[gid]
 		for i := 0; i < sg.N(); i++ {
 			isAlive := i < len(connected) && connected[i]
 			isIsolated := isoMap != nil && isoMap[i]
+			isLeader := leaders != nil && leaders[i] // 事件驱动的 leader 缓存
 			gs.Servers[i] = ServerState{
 				Index:      i,
 				Name:       sg.SrvName(i),
+				IsLeader:   isLeader,
 				IsAlive:    isAlive,
 				IsIsolated: isIsolated,
 			}

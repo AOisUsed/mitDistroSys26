@@ -116,7 +116,8 @@
             width: 8px; height: 8px; border-radius: 50%; display: inline-block;
             flex-shrink: 0;
         }
-        .dot.alive { background: #52c41a; }
+        .dot.leader { background: #52c41a; box-shadow: 0 0 6px #52c41a; }
+        .dot.alive { background: #52c41a; opacity: 0.6; }
         .dot.dead { background: #ff4d4f; }
         .dot.isolated { background: #faad14; }
         .server-item .name { font-family: 'SF Mono', Monaco, monospace; font-size: 11px; flex: 1; min-width: 0; }
@@ -1266,12 +1267,14 @@
     function getNodeStatus(srv) {
         if (!srv.isAlive) return 'dead';
         if (srv.isIsolated) return 'isolated';
+        if (srv.isLeader) return 'leader';
         return 'alive';
     }
 
     function getNodeStatusText(srv) {
         if (!srv.isAlive) return '离线';
         if (srv.isIsolated) return '隔离';
+        if (srv.isLeader) return 'Leader';
         return '在线';
     }
 

@@ -36,6 +36,16 @@ type Config struct {
 	endName string // name of tester
 
 	trpc *TesterRPC
+
+	// leaderChangeCb is called on the tester (main) side when a Raft node in any group
+	// changes leader status. Parameters: (gid, sid, isLeader)
+	leaderChangeCb func(gid, sid int, isLeader bool)
+}
+
+// SetLeaderChangeListener 注册 leader 身份变更监听器。
+// 主进程在收到 daemon 子进程的 LeaderChange RPC 时调用此监听器。
+func (cfg *Config) SetLeaderChangeListener(cb func(gid, sid int, isLeader bool)) {
+	cfg.leaderChangeCb = cb
 }
 
 func MakeConfig(t *testing.T, n int, reliable bool, prog string, args []string) *Config {
@@ -57,13 +67,6 @@ func MakeConfig(t *testing.T, n int, reliable bool, prog string, args []string) 
 	cfg.start = time.Now()
 	cfg.net.Reliable(reliable)
 	return cfg
-}
-
-// MakeDemoConfig creates a Config suitable for non-test demo use.
-// It does not require a *testing.T, so it can be used from a regular main() binary.
-// NOTE: Do not call Config methods that use the nil t field (Fatalf, CheckTimeout, Begin, End, Cleanup).
-func MakeDemoConfig(prog string, args []string) *Config {
-	return MakeDemoConfigN(prog, args, 1)
 }
 
 // MakeDemoConfigN creates a Config with a specified number of servers for GRP0.

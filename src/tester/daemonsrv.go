@@ -90,6 +90,8 @@ func InitDaemon(args []string, mks FstartServer) error {
 	net := rpc.MakeNetwork()
 	ds := &DaemonSrv{
 		endName: endNames[sid],
+		gid:     Tgid(gid),
+		sid:     sid,
 		ch:      make(chan *Persister),
 	}
 	for i, e := range endNames {
@@ -110,6 +112,15 @@ func InitDaemon(args []string, mks FstartServer) error {
 		var reply PostObserveLogReply
 		ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
 	})
+
+	// 设置 leader 身份变更转发回调：Raft 层通过 debug.ReportLeaderChange 调用此回调，
+	// 将 (gid, sid, isLeader) 通过 sockrpc 转发到主进程 TesterRPC.LeaderChange handler。
+	debug.SetLeaderChangeForward(func(serverIndex int, isLeader bool) {
+		ds.ReportLeaderChange(isLeader)
+	})
+	// 新启动的节点总是以 follower 身份开始。
+	// 异步报告 isLeader=false，清除该节点被 kill 前向主进程报告的 leader 身份残留。
+	go ds.ReportLeaderChange(false)
 
 	// for ctl RPCS to this daemon (e.g., Start)
 
@@ -207,4 +218,21 @@ func (ds *DaemonSrv) MemSize(args MemSizeArgs, reply *MemSizeReply) {
 	var st runtime.MemStats
 	runtime.ReadMemStats(&st)
 	reply.MemSize = st.HeapAlloc
+}
+
+// ReportLeaderChange 供 Raft 层调用，将本节点 leader 身份变更事件通知主进程。
+// 使用方式：在子进程的 Raft 代码中检测到 leader 身份变化时，调用：
+//
+//	debug.ReportLeaderChange(rf.me, isLeader)
+//
+// DaemonSrv 内部的转发回调会将此方法注册到 debug.SetLeaderChangeForward，
+// 将 (gid, sid, isLeader) 通过 sockrpc 发送到主进程的 TesterRPC.LeaderChange handler。
+func (ds *DaemonSrv) ReportLeaderChange(isLeader bool) {
+	args := &LeaderChangeArgs{
+		Gid:      int(ds.gid),
+		Sid:      ds.sid,
+		IsLeader: isLeader,
+	}
+	var reply LeaderChangeReply
+	ds.rpcc.RPCMarshall("TesterRPC.LeaderChange", args, &reply)
 }

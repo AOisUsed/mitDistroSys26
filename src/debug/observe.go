@@ -240,3 +240,32 @@ func ObserveFaultPrintf(format string, a ...interface{}) {
 		observePush(TagFault, format, a...)
 	}
 }
+
+// --- Leader 身份变更通知（子进程模式）---
+//
+// Raft 层调用 ReportLeaderChange(serverIndex, isLeader)，
+// daemon 层通过 SetLeaderChangeForward 注册转发函数，
+// 将 (gid, sid, isLeader) 通过 sockrpc 发送到主进程。
+
+type LeaderChangeFn func(serverIndex int, isLeader bool)
+
+var reportLeaderChange atomic.Value // stores LeaderChangeFn
+
+// SetLeaderChangeForward 设置 leader 身份变更的转发回调。
+// 在 daemon 子进程的 InitDaemon 中调用，将通知转发到主进程。
+func SetLeaderChangeForward(fn LeaderChangeFn) {
+	reportLeaderChange.Store(fn)
+}
+
+// ReportLeaderChange 供 Raft 层调用，将本节点 leader 身份变更事件通知主进程。
+// 使用方式：在 raft.go 中检测到 leader 身份变化时，调用：
+//
+//	debug.ReportLeaderChange(rf.me, true/false)
+//
+// 在 daemon 子进程中，通知通过 SetLeaderChangeForward 注册的转发函数发送到主进程。
+// 在主进程（测试环境）中，此函数为空操作（无转发回调）。
+func ReportLeaderChange(serverIndex int, isLeader bool) {
+	if fn, ok := reportLeaderChange.Load().(LeaderChangeFn); ok {
+		fn(serverIndex, isLeader)
+	}
+}

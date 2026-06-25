@@ -60,3 +60,21 @@ type PostObserveLogReply struct{}
 func (trpc *TesterRPC) PostObserveLog(args *PostObserveLogArgs, reply *PostObserveLogReply) {
 	debug.ObservePushTagged(args.Tag, args.Text)
 }
+
+// ----- Leader 身份变更通知（子进程 → 主进程）-----
+
+type LeaderChangeArgs struct {
+	Gid      int
+	Sid      int
+	IsLeader bool
+}
+
+type LeaderChangeReply struct{}
+
+// LeaderChange 接收子进程 Raft 节点身份变更事件。
+// 主进程将事件广播到注册的观察者（如 cluster.Manager 更新缓存）
+func (trpc *TesterRPC) LeaderChange(args *LeaderChangeArgs, reply *LeaderChangeReply) {
+	if trpc.cfg.leaderChangeCb != nil {
+		trpc.cfg.leaderChangeCb(args.Gid, args.Sid, args.IsLeader)
+	}
+}

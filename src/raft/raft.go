@@ -203,8 +203,10 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
-	if rf.state == leader {
+	wasLeader := rf.state == leader
+	if wasLeader {
 		debug.ObserveFaultPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
+		debug.ReportLeaderChange(rf.me, false)
 	}
 	rf.state = follower
 	rf.CurrentTerm = term
@@ -876,6 +878,7 @@ func (rf *Raft) startElection() {
 					debug.D3APrintf("%v at %v wins ", rf.me, rf.CurrentTerm)
 					debug.ObserveElectionPrintf("server-%v 在任期 %v 赢得选举 -> leader", rf.me, rf.CurrentTerm)
 					rf.state = leader
+					debug.ReportLeaderChange(rf.me, true)
 					//reinitialise volatile state on leaders
 					for j := range rf.nextIndex {
 						rf.nextIndex[j] = rf.lastLogIndex() + 1
