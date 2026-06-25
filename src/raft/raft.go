@@ -240,6 +240,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.CurrentTerm = args.Term
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
+			debug.ObserveFaultPrintf("server-%v: candidate 变为 follower (旧任期 %v → 新任期 %v)", rf.me, args.Term, rf.CurrentTerm)
 		}
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm
@@ -454,6 +455,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term >= rf.CurrentTerm && (rf.VotedFor == args.CandidateId || rf.VotedFor == -1) { // if receiver didn't vote for itself (it's not a candidate)
 		if args.LastLogTerm > rf.lastLogTerm() || // and if the candidate term is greater than the receiver,
 			(args.LastLogTerm == rf.lastLogTerm() && args.LastLogIndex >= rf.lastLogIndex()) { //or of the same term but candidate has number of entries >= to receiver
+			// vote for this candidate:
 			rf.lastHeardTime = time.Now() // update lastHeardTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
 			debug.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 			reply.Term = rf.CurrentTerm
@@ -461,7 +463,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.VotedFor = args.CandidateId
 			rf.state = follower
 		}
-	} else {
+	} else { // in other cases: don't vote for this candidate
 		debug.D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false

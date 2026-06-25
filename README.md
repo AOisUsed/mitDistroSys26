@@ -27,7 +27,7 @@
 # 构建镜像
 make docker
 
-# 启动容器（访问 http://localhost:8080）
+# 启动容器 
 make run # 编辑 shardkv-demo/config.yaml 可调整集群初始拓扑（每组节点数、组个数、网络可靠性等）
 ```
 ### 方式二：本地启动
