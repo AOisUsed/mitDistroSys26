@@ -211,7 +211,13 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 	stopSubmit := rsm.stopSubmit
 	rsm.mu.Unlock()
 
-	// waiting for result from raft, or term changed message
+	// if the leader is partitioned and the command cannot be committed,
+	// this timeout prevents the client from hanging forever.
+	// but the value is tentative and should be adjusted according to the network quality (better quality: shorter deadline)
+	// nevertheless, no matter what value, this doesn't affect the correctness, and won't impact performance too much.
+	submissionDeadline := time.Now().Add(2 * time.Second)
+
+	// waiting for result from raft, term/leadership changed message, or deadline
 
 	for {
 		select {
@@ -230,29 +236,18 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 			//			  so when the leader sees the command, it has to know whether this command was actually applied. If it did, the leader does nothing and reply OK.
 			//			  But if the command wasn't applied, it follows the normal process of a Submit()
 			//
-			// In conclusion, whenever a servers finds out that it's no longer a leader, and has not observed the command applied (which is achieved by receiving result from resultCh), it replies ErrWrongLeader,
+			// In conclusion, whenever a server finds out that it's no longer the leader, and has not observed the command applied (which is achieved by receiving result from resultCh), it replies ErrWrongLeader,
 			// and it depends on the current leader to amend the possibly misleading information it sends to the client.
+
+			// by the way, 100ms polling is a magic number, but it's not entirely arbitrary:
+			// 		we want to know the leadership/term change ASAP, but too frequent check is a waste of CPU!
+			//		so i make this the same as raft heartbeat interval.
+			//		it's better if raft state change could be pushed to rsm, so we don't have to poll but too sad raft interface doesn't have this method :(
 			currentTerm, isStillLeader := rsm.rf.GetState()
-			if !isStillLeader || termAtStart != currentTerm {
-				// check again whether the result returns. This makes sure that result is always prioritised when the two cases fire at the same time
-				select {
-				case result := <-resultCh:
-					debug.D4APrintf("rsm%v Submited %v \n", rsm.me, op)
-					rsm.mu.Lock()
-					delete(rsm.resultByCommandId, commandId)
-
-					// if the req at the specific log index is replaced by other request (identified by opId),
-					// it means that that Submit() log was overwritten, so it won't have any chance to be committed, return ErrWrongLeader
-					if result.opId != OpId {
-						debug.D4APrintf("%v req doesn't match: expect %v, get %v\n, will reply ErrWrongLeader\n", rsm.me, OpId, result.opId)
-						rsm.mu.Unlock()
-						return rpcapi.ErrWrongLeader, nil
-					}
-					rsm.mu.Unlock()
-					return rpcapi.OK, result.value
-				default:
-				}
-
+			if !isStillLeader || termAtStart != currentTerm || // if it finds out that it's no longer the leader,
+				time.Now().After(submissionDeadline) { // or it's still leader but the request hasn't got committed when meeting deadline,
+				// suggesting that this server is possibly in network partition,
+				// this server gives up and "lie" (saying it's not the leader, but it ACTUALLY is). let [client retry + new leader deduplicate] amend this lie.
 				debug.D4APrintf("rsm%v loses leadership, stop Submit %v\n", rsm.me, op)
 				rsm.mu.Lock()
 				delete(rsm.resultByCommandId, commandId)
