@@ -118,9 +118,6 @@ func InitDaemon(args []string, mks FstartServer) error {
 	debug.SetLeaderChangeForward(func(serverIndex int, isLeader bool) {
 		ds.ReportLeaderChange(isLeader)
 	})
-	// 新启动的节点总是以 follower 身份开始。
-	// 异步报告 isLeader=false，清除该节点被 kill 前向主进程报告的 leader 身份残留。
-	go ds.ReportLeaderChange(false)
 
 	// for ctl RPCS to this daemon (e.g., Start)
 

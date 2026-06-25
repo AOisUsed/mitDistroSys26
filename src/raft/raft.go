@@ -203,12 +203,12 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
-	rf.lastHeardTime = time.Now() // when converted to follower, must update lastHeartBeat in order not to start Election immediately
-	wasLeader := rf.state == leader
-	if wasLeader {
+	if rf.state == leader {
 		debug.ObserveFaultPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
 		debug.ReportLeaderChange(rf.me, false)
 	}
+
+	rf.lastHeardTime = time.Now() // when converted to follower, must update lastHeartBeat in order not to start Election immediately
 	rf.state = follower
 	rf.CurrentTerm = term
 	rf.VotedFor = -1
@@ -966,6 +966,7 @@ func Make(peers []*rpc.ClientEnd, me int,
 	rf.snapshotPending = false
 
 	debug.D3APrintf("%v starts as a follower", rf.me)
+	debug.ReportLeaderChange(rf.me, false)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())
