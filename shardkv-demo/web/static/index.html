@@ -366,11 +366,12 @@
                             </div>
                         </div>
                         <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;">
-                            <div class="kv-inputs">
-                                <select id="targetShard" class="kv-input-sm"></select>
+                            <span style="font-size:11px;font-weight:600;color:#555;flex-shrink:0;display:flex;align-items:center;">随机生成键值对</span>
+                            <div class="kv-inputs" style="flex:0 0 auto;margin-left:auto;">
+                                <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;width:auto;"></select>
                             </div>
                             <div class="kv-actions">
-                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">随机生成 键值对</button>
+                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">生成</button>
                             </div>
                         </div>
                     </div>
@@ -384,7 +385,7 @@
                     <div class="kv-panel">
                         <div class="kv-row">
                             <div class="kv-inputs">
-                                <input type="text" id="raceKey" placeholder="竞赛 Key">
+                                <input type="text" id="raceKey" placeholder="键 Key">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">客户端数:</span>
                                 <input type="number" id="raceNClient" value="5" min="1" max="1000" style="flex:0 0 70px;min-width:60px;">
                             </div>
@@ -404,7 +405,7 @@
                         <div class="kv-row">
                             <div class="kv-inputs">
                                 <input type="number" id="batchCount" value="100" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
-                                <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key</span>
+                                <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key, 来自 </span>
                                 <select id="batchShard" class="kv-input-sm">
                                     <option value="-1">任意</option>
                                 </select>
@@ -467,7 +468,7 @@
                         <div style="display:flex;gap:8px;">
                             <!-- RPC 请求延迟 -->
                             <div class="slider-container" style="flex:1;min-width:0;">
-                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:4px;">RPC 请求延迟</div>
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">RPC 请求延迟</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
                                         oninput="updateNetParamLabel('shortDelayMs', this.value)"
@@ -479,7 +480,7 @@
 
                             <!-- RPC 回复乱序 -->
                             <div class="slider-container" style="flex:0 1 auto;min-width:0;padding:9px 12px;">
-                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#764ba2;margin-bottom:4px;">RPC 回复乱序</div>
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">RPC 回复乱序</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <label class="toggle-switch" style="vertical-align:middle;">
                                         <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
