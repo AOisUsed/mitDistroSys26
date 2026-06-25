@@ -79,8 +79,6 @@ func (cm *ClusterManager) getArgs() []string {
 //  2. configStore 写入初始配置：所有 shard → Gid1（与真实数据位置一致）
 //  3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard 到各组分担
 func (cm *ClusterManager) Init() error {
-	cm.mu.Lock()
-
 	// 从配置中读取参数
 	nsrv := cm.dcfg.Nsrv
 	if nsrv <= 0 {
@@ -90,6 +88,23 @@ func (cm *ClusterManager) Init() error {
 
 	// 创建 tester Config，使用 kvraft（nsrv 节点 Raft 组）作为 config store
 	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, nsrv)
+
+	// 注册回调
+	cm.cfg.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
+		cm.mu.Lock()
+		defer cm.mu.Unlock()
+		leaders, ok := cm.leaders[tester.Tgid(gid)]
+		if !ok {
+			leaders = make(map[int]bool)
+			cm.leaders[tester.Tgid(gid)] = leaders
+		}
+		if isLeader {
+			leaders[sid] = true
+		} else {
+			delete(leaders, sid)
+		}
+	})
+
 	cm.cfg.SetReliable(reliable)
 
 	// 创建 shard controller
@@ -122,34 +137,14 @@ func (cm *ClusterManager) Init() error {
 	}
 
 	// 2. 初始配置：所有 shard → Gid1（与真实数据位置一致）
-	//    不使用 JoinBalance，因为那会声称"shard 已均匀分布"但实际上从未迁移。
 	//    先 Join 添加 Gid1 到 Groups，再 Rebalance 将所有 shard 分配给 Gid1。
 	scfg := shardcfg.MakeShardConfig()
 	scfg.Join(map[tester.Tgid][]string{shardcfg.Gid1: servers[shardcfg.Gid1]})
 	scfg.Rebalance() // 将全部 12 个 shard 分配给唯一的组 Gid1
 	cm.ctl.InitConfig(scfg)
 
-	// GRP0 也加入管理
+	// GRP0 加入管理
 	cm.groups[tester.GRP0] = true
-
-	// 注册 leader 身份变更监听器：子进程 Raft 身份变化时，通过 sockrpc 转发到主进程，
-	// 主进程 TesterRPC.LeaderChange handler 调用此回调实时更新 cm.leaders 集合。
-	cm.cfg.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
-		cm.mu.Lock()
-		defer cm.mu.Unlock()
-		leaders, ok := cm.leaders[tester.Tgid(gid)]
-		if !ok {
-			leaders = make(map[int]bool)
-			cm.leaders[tester.Tgid(gid)] = leaders
-		}
-		if isLeader {
-			leaders[sid] = true
-		} else {
-			delete(leaders, sid)
-		}
-	})
-
-	cm.mu.Unlock()
 
 	// 3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard
 	//    必须在锁外执行（涉及 RPC）
@@ -162,9 +157,7 @@ func (cm *ClusterManager) Init() error {
 	}
 
 	// 创建 shardkv clerk（在所有迁移完成后，才能正确路由到各组的 shard）
-	cm.mu.Lock()
 	cm.ck = shardkv.MakeClerk(cm.clnt, cm.ctl)
-	cm.mu.Unlock()
 
 	// 构建日志描述
 	gidDescs := make([]string, 0, len(initGroups))
