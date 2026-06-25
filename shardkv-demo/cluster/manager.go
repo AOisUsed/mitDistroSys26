@@ -640,6 +640,14 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		if cur.Num >= newcfg.Num {
 			if _, ok := cur.Groups[gid]; ok {
 				log.Printf("[Cluster] 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
+				// 立即更新 cachedConfig 和 cachedNextConfig，确保后续 Status() 查询时
+				// 集群拓扑（cm.groups）和分片分布（cachedConfig）反映同一 configNum 的状态。
+				// 同时更新 cachedNextConfig 避免 tryHasPendingMigration() 因两者 Num 不一致误判为有 pending 迁移。
+				cm.mu.Lock()
+				cm.cachedConfig = cur
+				cm.cachedNextConfig = cur
+				cm.lastConfigOk = time.Now()
+				cm.mu.Unlock()
 				return true, ""
 			}
 		}
@@ -791,6 +799,14 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		}
 		if changed {
 			log.Printf("[Cluster] 组 %d 的 shard 迁移已完成 (config=%d)", gid, newcfg.Num)
+			// 立即更新 cachedConfig 和 cachedNextConfig，确保后续 Status() 查询时
+			// 集群拓扑（cm.groups）和分片分布（cachedConfig）反映同一 configNum 的状态。
+			// 同时更新 cachedNextConfig 避免 tryHasPendingMigration() 因两者 Num 不一致误判为有 pending 迁移。
+			cm.mu.Lock()
+			cm.cachedConfig = cm.ctl.Query()
+			cm.cachedNextConfig = cm.cachedConfig
+			cm.lastConfigOk = time.Now()
+			cm.mu.Unlock()
 			break
 		}
 		log.Printf("[Cluster] 组 %d Leave: shard 迁移尚未完成，重试 ChangeConfigTo (#%d)", gid, retry+1)
