@@ -1513,7 +1513,7 @@
             addLog(`批量写入异常: ${err.message}`, 'err');
         }
 
-        refreshStatus();
+        await refreshStatus();
     }
 
     initShardSelect();

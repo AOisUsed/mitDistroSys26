@@ -192,7 +192,8 @@ type Network struct {
 	bytes          int64         // total bytes send, for statistics
 
 	// Runtime-adjustable network parameters.
-	// 0 means "use default compile-time constant".
+	// Initialized in MakeNetwork() to compile-time defaults.
+	// Set to 0 to disable (no delay / no drops).
 	// These are accessed atomically so they can be changed at runtime without locks.
 	dropRate     int32 // per 1000, e.g. 100 = 10%
 	shortDelayMs int32 // short delay in ms when unreliable
@@ -202,6 +203,9 @@ type Network struct {
 func MakeNetwork() *Network {
 	rn := &Network{}
 	rn.reliable = true
+	rn.shortDelayMs = SHORTDELAY
+	rn.dropRate = DROPRATE
+	rn.longDelayMs = LONGDELAY
 	rn.ends = map[interface{}]*ClientEnd{}
 	rn.enabled = map[interface{}]bool{}
 	rn.servers = map[interface{}]*Server{}
@@ -275,16 +279,11 @@ func (rn *Network) IsLongDelays() bool {
 // --- Runtime-adjustable network parameters ---
 
 // getDropRate returns the drop rate per 1000.
-// If a custom value has been set (>0), returns that; otherwise returns the default DROPRATE.
 func (rn *Network) getDropRate() int {
-	if v := atomic.LoadInt32(&rn.dropRate); v > 0 {
-		return int(v)
-	}
-	return DROPRATE
+	return int(atomic.LoadInt32(&rn.dropRate))
 }
 
 // SetDropRate sets the drop rate per 1000 (0-1000).
-// Set to 0 to reset to the default compile-time value.
 func (rn *Network) SetDropRate(rate int) {
 	if rate < 0 {
 		rate = 0
@@ -301,16 +300,11 @@ func (rn *Network) GetDropRate() int {
 }
 
 // getShortDelayMs returns the short delay in ms for unreliable network.
-// If a custom value has been set (>0), returns that; otherwise returns the default SHORTDELAY.
 func (rn *Network) getShortDelayMs() int {
-	if v := atomic.LoadInt32(&rn.shortDelayMs); v > 0 {
-		return int(v)
-	}
-	return SHORTDELAY
+	return int(atomic.LoadInt32(&rn.shortDelayMs))
 }
 
 // SetShortDelayMs sets the short delay in ms for unreliable network.
-// Set to 0 to reset to the default compile-time value.
 func (rn *Network) SetShortDelayMs(ms int) {
 	if ms < 0 {
 		ms = 0
@@ -324,16 +318,11 @@ func (rn *Network) GetShortDelayMs() int {
 }
 
 // getLongDelayMs returns the long delay in ms for disabled network.
-// If a custom value has been set (>0), returns that; otherwise returns the default LONGDELAY.
 func (rn *Network) getLongDelayMs() int {
-	if v := atomic.LoadInt32(&rn.longDelayMs); v > 0 {
-		return int(v)
-	}
-	return LONGDELAY
+	return int(atomic.LoadInt32(&rn.longDelayMs))
 }
 
 // SetLongDelayMs sets the long delay in ms for disabled network.
-// Set to 0 to reset to the default compile-time value.
 func (rn *Network) SetLongDelayMs(ms int) {
 	if ms < 0 {
 		ms = 0
@@ -381,8 +370,10 @@ func (rn *Network) processReq(req reqMsg) {
 		if reliable == false {
 			// short delay — use runtime-adjustable value
 			shortDelay := rn.getShortDelayMs()
-			ms := rand.Int() % shortDelay
-			time.Sleep(time.Duration(ms) * time.Millisecond)
+			if shortDelay > 0 {
+				ms := rand.Int() % shortDelay
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
 		}
 
 		dropRate := rn.getDropRate()
@@ -458,7 +449,9 @@ func (rn *Network) processReq(req reqMsg) {
 			// let Raft tests check that leader doesn't send
 			// RPCs synchronously.
 			longDelay := rn.getLongDelayMs()
-			ms = rand.Int() % longDelay
+			if longDelay > 0 {
+				ms = rand.Int() % longDelay
+			}
 		} else {
 			// many kv tests require the client to try each
 			// server in fairly rapid succession.
