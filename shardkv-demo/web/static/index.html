@@ -990,6 +990,7 @@
         if (leaveInFlight) { addLog('LeaveGroup: 上次操作未完成，请等待', 'err'); return; }
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
+        if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         leaveInFlight = true;
         addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
@@ -1195,6 +1196,7 @@
 
     // ========== 快捷 Leave（从拓扑标题调用） ==========
     async function doLeaveGroupById(gid) {
+        if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
         refreshStatus();

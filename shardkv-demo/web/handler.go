@@ -467,6 +467,11 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	if req.GID == 0 {
+		log.Printf("[LeaveGroup] 组 0 (配置仓库) 是系统核心组件，拒绝离开")
+		writeJSON(w, map[string]any{"success": false, "action": "leave", "gid": 0, "error": "ConfigStore (组 0) 是系统配置仓库，不能离开集群", "message": "配置仓库 (组 0) 是系统核心组件，不允许离开集群"})
+		return
+	}
 	ok, errMsg := h.cm.LeaveGroup(tester.Tgid(req.GID))
 	resp := map[string]any{"success": ok, "action": "leave", "gid": req.GID}
 	if ok {
