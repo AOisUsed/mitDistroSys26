@@ -224,8 +224,6 @@
             transition: transform 0.3s;
         }
         .toggle-switch input:checked + .toggle-slider { background: #ff4d4f; }
-        .toggle-switch input:checked:disabled + .toggle-slider { background: #aaa; }
-        .toggle-switch input:checked:disabled + .toggle-slider::before { background: #e0e0e0; }
         .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
 
         .get-result {
@@ -1019,6 +1017,11 @@
                 el.classList.add('disabled');
             }
         });
+        // 同时同步更新 RPC 回复乱序 checkbox 的 disabled 属性
+        const reorderToggle = document.getElementById('longReorderingToggle');
+        if (reorderToggle) {
+            reorderToggle.disabled = !enabled;
+        }
     }
 
     // oninput: 仅更新标签显示，不触发网络请求
@@ -1106,7 +1109,6 @@
                     if (result && result.success) {
                         reorderToggle.checked = false;
                         reorderLabel.textContent = '关闭';
-                        addLog(`回复乱序: 已随不可靠网络一并关闭`, 'info');
                     }
                 } catch (err) {}
             }
@@ -1124,7 +1126,6 @@
                 if (result && result.success) {
                     reorderToggle.checked = true;
                     reorderLabel.textContent = '开启';
-                    addLog(`回复乱序: 已随不可靠网络自动恢复`, 'info');
                 }
             } catch (err) {}
         }
@@ -1153,6 +1154,14 @@
         const toggle = document.getElementById('longReorderingToggle');
         const label = document.getElementById('longReorderingLabel');
         const on = toggle.checked;
+        // 不可靠网络关闭时禁止操作回复乱序
+        if (!document.getElementById('unreliableToggle').checked) {
+            if (on) {
+                toggle.checked = false;
+                addLog('回复乱序: 不可靠网络关闭时无法开启', 'warn');
+            }
+            return;
+        }
         try {
             const result = await api('/api/network/long-reordering', {
                 method: 'POST',
