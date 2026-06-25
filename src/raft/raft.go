@@ -203,6 +203,7 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
+	rf.lastHeardTime = time.Now() // when converted to follower, must update lastHeartBeat in order not to start Election immediately
 	wasLeader := rf.state == leader
 	if wasLeader {
 		debug.ObserveFaultPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
@@ -240,6 +241,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else if rf.CurrentTerm == args.Term { //if getting equal term AppendEntries,
 		if rf.state == candidate { // and is in election, step down to be a follower
 			rf.CurrentTerm = args.Term
+			rf.lastHeardTime = time.Now()
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
 			debug.ObserveFaultPrintf("server-%v: candidate 变为 follower (旧任期 %v → 新任期 %v)", rf.me, args.Term, rf.CurrentTerm)
@@ -463,6 +465,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
+			rf.lastHeardTime = time.Now()
 			rf.state = follower
 		}
 	} else { // in other cases: don't vote for this candidate
