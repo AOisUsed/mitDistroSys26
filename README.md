@@ -29,7 +29,7 @@ make docker
 
 # 启动容器 
 make run 
-# 前端默认端口 8080, 自定义则运行 make run PORT=9090
+# 前端默认端口 8080, 自定义则运行 make run PORT=XXXX (XXXX是自定义端口号)
 # 编辑 shardkv-demo/config.yaml 可调整集群初始拓扑（每组节点数、组个数、网络可靠性、Raft快照阈值等）
 ```
 ### 方式二：本地启动
@@ -42,7 +42,7 @@ make run
 ```bash
 cd shardkv-demo
 make run 
-# 前端默认端口 8080, 自定义则运行 make run PORT=9090
+# 前端默认端口 8080, 自定义则运行 make run PORT=XXXX (XXXX是自定义端口号)
 # 编辑 shardkv-demo/config.yaml 可调整集群初始拓扑（每组节点数、组个数、网络可靠性、Raft快照阈值等）
 ```
 
