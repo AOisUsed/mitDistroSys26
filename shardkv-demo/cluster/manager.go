@@ -211,8 +211,8 @@ func (cm *ClusterManager) Clerk() kvtest.IKVClerk {
 	return cm.ck
 }
 
-// newGid 生成下一个可用的 GID
-func (cm *ClusterManager) newGid() tester.Tgid {
+// newGidLocked 生成下一个可用的 GID；调用者必须持有 cm.mu
+func (cm *ClusterManager) newGidLocked() tester.Tgid {
 	gid := cm.nextGid
 	cm.nextGid++
 	return gid
@@ -227,7 +227,7 @@ func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 
 // ============================================================
 // 后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
-// 只有 3 个固定的后台 goroutine，即使 configStore 永久阻塞也不泄漏
+// 只有 2 个固定的后台 goroutine，即使 configStore 永久阻塞也不泄漏
 // ============================================================
 
 const staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
@@ -263,7 +263,7 @@ func (cm *ClusterManager) startConfigPoller() {
 
 // tryQueryConfig 直接返回缓存（不阻塞不泄漏）。
 // 当 configStore（kvraft）无响应时，后台 goroutine 阻塞在 Query() 调用上，
-// 但只有 3 个固定的 goroutine，不会随着每次 refreshStatus() 泄漏新 goroutine。
+// 但只有 2 个固定的 goroutine，不会随着每次 refreshStatus() 泄漏新 goroutine。
 func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -608,7 +608,6 @@ func (cm *ClusterManager) tryResolvePendingMigration() bool {
 }
 
 // initJoinGroup 在进程已启动的情况下，将指定组通过 ChangeConfigTo 加入集群（含实际 shard 迁移）。
-// 这是 Init() 内部使用的，因为多组流程中进程都已提前启动，不能再用 MakeGroupStart。
 func (cm *ClusterManager) initJoinGroup(gid tester.Tgid, srvs []string) {
 	cfg := cm.ctl.Query()
 	newcfg := cfg.Copy()
@@ -616,20 +615,7 @@ func (cm *ClusterManager) initJoinGroup(gid tester.Tgid, srvs []string) {
 
 	log.Printf("[Cluster] initJoinGroup: 正在将组 %d 加入集群（迁移 shard）...", gid)
 	cm.ctl.ChangeConfigTo(newcfg)
-
-	// 轮询等待迁移完成（不设超时，一直重试直到成功）
-	for {
-		cur := cm.ctl.Query()
-		if cur.Num >= newcfg.Num {
-			if _, ok := cur.Groups[gid]; ok {
-				log.Printf("[Cluster] initJoinGroup: 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
-				return
-			}
-		}
-		log.Printf("[Cluster] initJoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试...", gid, cur.Num, newcfg.Num)
-		cm.ctl.ChangeConfigTo(newcfg)
-		time.Sleep(500 * time.Millisecond)
-	}
+	log.Printf("[Cluster] initJoinGroup: 组 %d 已加入集群, servers=%v", gid, srvs)
 }
 
 // JoinGroup 加入新组
@@ -684,61 +670,18 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	cm.migrationPending.Store(true)
 	defer cm.migrationPending.Store(false)
 
+	// ChangeConfigTo 是同步阻塞的（内部 wg.Wait 等待所有 shard 迁移完成），返回时迁移已完成。
 	cm.ctl.ChangeConfigTo(newcfg)
 
-	// ---- 轮询等待迁移完成（最多重试 20 次，约 10s）----
-	const maxRetries = 20
-	for retry := 0; retry < maxRetries; retry++ {
-		cur := cm.ctl.Query()
-		if cur.Num >= newcfg.Num {
-			if _, ok := cur.Groups[gid]; ok {
-				log.Printf("[Cluster] 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
-				// 立即更新 cachedConfig 和 cachedNextConfig，确保后续 Status() 查询时
-				// 集群拓扑（cm.groups）和分片分布（cachedConfig）反映同一 configNum 的状态。
-				// 同时更新 cachedNextConfig 避免 tryHasPendingMigration() 因两者 Num 不一致误判为有 pending 迁移。
-				cm.mu.Lock()
-				cm.cachedConfig = cur
-				cm.cachedNextConfig = cur
-				cm.lastConfigOk = time.Now()
-				cm.mu.Unlock()
-				return true, ""
-			}
-		}
-
-		// pending 迁移可能存在但未完成（集群节点不稳定），重试调用 ChangeConfigTo
-		log.Printf("[Cluster] JoinGroup: 组 %d 的迁移尚未完成（当前 config #%d，期望 #%d），正在重试 (attempt %d/%d)...", gid, cur.Num, newcfg.Num, retry+1, maxRetries)
-
-		// 在重试前检查是否有组完全死掉（无 quorum），给用户提示但继续重试
-		cm.mu.Lock()
-		for existingGid := range cm.groups {
-			if existingGid == gid {
-				continue
-			}
-			sg := cm.cfg.Group(existingGid)
-			if sg == nil {
-				continue
-			}
-			connected := sg.GetConnected()
-			nAlive := 0
-			for i := 0; i < sg.N(); i++ {
-				if i < len(connected) && connected[i] {
-					nAlive++
-				}
-			}
-			if nAlive < sg.N()/2+1 {
-				log.Printf("[Cluster] JoinGroup 重试中: 组 %d 仅有 %d/%d 节点存活", existingGid, nAlive, sg.N())
-			}
-		}
-		cm.mu.Unlock()
-
-		// 重试 ChangeConfigTo 以推动迁移
-		cm.ctl.ChangeConfigTo(newcfg)
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	msg := fmt.Sprintf("组 %d 加入超时：configStore 在 %ds 内未完成迁移，请检查集群状态后重试", gid, maxRetries/2)
-	log.Printf("[Cluster] JoinGroup: %s", msg)
-	return false, msg
+	// 迁移完成后，立即获取最新配置并更新缓存
+	cur := cm.ctl.Query()
+	log.Printf("[Cluster] 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
+	cm.mu.Lock()
+	cm.cachedConfig = cur
+	cm.cachedNextConfig = cur
+	cm.lastConfigOk = time.Now()
+	cm.mu.Unlock()
+	return true, ""
 }
 
 // LeaveGroup 移除组，返回 (是否成功, 错误信息)
@@ -831,44 +774,12 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		return false, msg
 	}
 
-	// ---- 阶段 4：轮询等待 shard 迁移完成（全部锁外 RPC）----
+	// ---- 阶段 4：执行 shard 迁移 ----
 	cm.migrationPending.Store(true)
 	defer cm.migrationPending.Store(false)
-	const maxRetries = 10 // 最多等 10 秒（每次 1s）
 
-	changed := false
-	for retry := 0; retry < maxRetries; retry++ {
-		cm.ctl.ChangeConfigTo(newcfg)
-
-		for poll := 0; poll < 20; poll++ {
-			cur := cm.ctl.Query()
-			if cur.Num >= newcfg.Num {
-				changed = true
-				// 立即更新 cachedConfig 和 cachedNextConfig，确保后续 Status() 查询时
-				// 集群拓扑（cm.groups）和分片分布（cachedConfig）反映同一 configNum 的状态。
-				// 同时更新 cachedNextConfig 避免 tryHasPendingMigration() 因两者 Num 不一致误判为有 pending 迁移。
-				cm.mu.Lock()
-				cm.cachedConfig = cur
-				cm.cachedNextConfig = cur
-				cm.lastConfigOk = time.Now()
-				cm.mu.Unlock()
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if changed {
-			log.Printf("[Cluster] 组 %d 的 shard 迁移已完成 (config=%d)", gid, newcfg.Num)
-			break
-		}
-		log.Printf("[Cluster] 组 %d Leave: shard 迁移尚未完成，重试 ChangeConfigTo (#%d)", gid, retry+1)
-		time.Sleep(1 * time.Second)
-	}
-
-	if !changed {
-		msg := fmt.Sprintf("组 %d 的 shard 迁移失败，请检查网络和集群状态后重试", gid)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
+	cm.ctl.ChangeConfigTo(newcfg)
+	log.Printf("[Cluster] 组 %d 的 shard 迁移已完成 (config=%d)", gid, newcfg.Num)
 
 	// ---- 阶段 5：锁外查询最新配置，确认无分片----
 	cfg = cm.ctl.Query()
@@ -896,20 +807,6 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 
 	log.Printf("[Cluster] 组 %d 已离开集群（已确认无分片）", gid)
 	return true, ""
-}
-
-// QueryConfig 查询当前 shard 配置，使用非阻塞 tryQueryConfig（configStore 无响应时返回缓存）
-func (cm *ClusterManager) QueryConfig() *shardcfg.ShardConfig {
-	cfg := cm.tryQueryConfig()
-	if cfg == nil {
-		return shardcfg.MakeShardConfig()
-	}
-	return cfg
-}
-
-// InitController 初始化控制器（用于恢复）
-func (cm *ClusterManager) InitController() {
-	cm.ctl.InitController()
 }
 
 // SetReliable 设置网络是否可靠（false 时随机延迟 + 可配置丢包率）
@@ -978,22 +875,11 @@ func (cm *ClusterManager) IsLongReordering() bool {
 	return cm.cfg.IsLongReordering()
 }
 
-// ConnectAll 恢复全部网络连接
-func (cm *ClusterManager) ConnectAll() {
-	cm.clnt.ConnectAll()
-}
-
-// Partition 网络分区
-func (cm *ClusterManager) Partition(gid tester.Tgid, p1, p2 []int) {
-	sg := cm.cfg.Group(gid)
-	if sg != nil {
-		sg.Partition(p1, p2)
-	}
-}
-
 // NewGid 返回一个新的 GID
 func (cm *ClusterManager) NewGid() tester.Tgid {
-	return cm.newGid()
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.newGidLocked()
 }
 
 // ========== 混沌猴子（Chaos Monkey）==========
@@ -1189,9 +1075,4 @@ func (m *ChaosMonkey) restartNode(idx int, sg *tester.ServerGrp) {
 	m.pmu.Lock()
 	delete(m.pendingRestart, idx)
 	m.pmu.Unlock()
-}
-
-// 初始化随机种子
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }

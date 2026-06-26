@@ -46,15 +46,6 @@ func (h *Handler) HandleIndex(w http.ResponseWriter, r *http.Request) {
 
 // --- API: 集群状态 (带超时保护) ---
 
-func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	state := h.cm.Status()
-	writeJSON(w, state)
-}
-
 func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -98,9 +89,6 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, tree)
 }
-
-// ErrTimeoutStr 定义超时字符串常量，与 rpcapi.Err 同类型
-const ErrTimeoutStr rpcapi.Err = "ErrTimeout"
 
 // --- API: KV 操作 (带超时保护) ---
 
@@ -348,10 +336,7 @@ func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		GID int `json:"gid"`
-		Srv int `json:"srv"`
-	}
+	var req nodeOpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
@@ -485,17 +470,6 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// --- API: Config ---
-
-func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	cfg := h.cm.QueryConfig()
-	writeJSON(w, cfg)
-}
-
 // --- API: Network ---
 
 func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
@@ -603,38 +577,6 @@ func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"success": true, "longReordering": h.cm.IsLongReordering()})
 }
 
-func (h *Handler) HandleConnectAll(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	h.cm.ConnectAll()
-	log.Printf("[ConnectAll] 所有连接已恢复")
-	writeJSON(w, map[string]any{"success": true, "action": "connect-all"})
-}
-
-type partitionRequest struct {
-	GID int   `json:"gid"`
-	P1  []int `json:"p1"`
-	P2  []int `json:"p2"`
-}
-
-func (h *Handler) HandlePartition(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req partitionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	h.cm.Partition(tester.Tgid(req.GID), req.P1, req.P2)
-	log.Printf("[Partition] 组 %d 分区 p1=%v p2=%v", req.GID, req.P1, req.P2)
-	writeJSON(w, map[string]any{"success": true, "action": "partition", "gid": req.GID, "p1": req.P1, "p2": req.P2})
-}
-
 // --- API: Chaos Monkey ---
 
 func (h *Handler) HandleChaosStart(w http.ResponseWriter, r *http.Request) {
@@ -682,17 +624,6 @@ func (h *Handler) HandleChaosStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	states := h.cm.ChaosStatus()
 	writeJSON(w, map[string]any{"success": true, "states": states})
-}
-
-// HandleInitController 手动触发 InitController 恢复 pending 迁移
-func (h *Handler) HandleInitController(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	log.Printf("[InitController] 手动触发 InitController 恢复...")
-	h.cm.InitController()
-	writeJSON(w, map[string]any{"success": true, "message": "InitController 已触发"})
 }
 
 // --- API: CAS Put（单次 CAS 写入，前端并发调用，每条实时可见） ---
@@ -972,9 +903,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 // RegisterRoutes 注册所有路由
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.HandleIndex)
-	mux.HandleFunc("/api/status", h.HandleStatus)
 	mux.HandleFunc("/api/status/tree", h.HandleStatusTree)
-	mux.HandleFunc("/api/config", h.HandleConfig)
 
 	// KV — single handler dispatches by method
 	mux.HandleFunc("/api/kv/", h.HandleKV)
@@ -993,9 +922,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/group/leave", h.HandleLeaveGroup)
 
 	// Network
-	mux.HandleFunc("/api/network/connect-all", h.HandleConnectAll)
 	mux.HandleFunc("/api/network/recover-all", h.HandleRecoverAllGroups)
-	mux.HandleFunc("/api/network/partition", h.HandlePartition)
 	mux.HandleFunc("/api/network/params", h.HandleNetParams)
 	mux.HandleFunc("/api/network/reliable", h.HandleReliable)
 	mux.HandleFunc("/api/network/long-reordering", h.HandleLongReordering)
@@ -1008,9 +935,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chaos/start", h.HandleChaosStart)
 	mux.HandleFunc("/api/chaos/stop", h.HandleChaosStop)
 	mux.HandleFunc("/api/chaos/status", h.HandleChaosStatus)
-
-	// InitController (手动恢复 pending 迁移)
-	mux.HandleFunc("/api/init-controller", h.HandleInitController)
 
 	// SSE 事件流
 	mux.HandleFunc("/api/events", h.HandleSSE)

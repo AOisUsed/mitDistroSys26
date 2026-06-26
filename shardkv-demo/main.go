@@ -70,8 +70,6 @@ func main() {
 		h.PublishLeaderChange(gid, sid, isLeader)
 	})
 	h.RegisterRoutes(mux)
-	sh := web.NewShardHandler(cm)
-	sh.RegisterRoutes(mux)
 
 	// 添加 CORS 中间件
 	handler := corsMiddleware(mux)

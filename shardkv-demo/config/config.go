@@ -30,7 +30,7 @@ func DefaultConfig() DemoConfig {
 	cfg.MaxRaftState = 5000
 	cfg.Nsrv = 3
 	cfg.Reliable = true
-	cfg.Groups = []GroupConfig{{Gid: 1, Servers: 3}}
+	cfg.Groups = []GroupConfig{{Gid: 1, Servers: cfg.Nsrv}}
 	return cfg
 }
 
