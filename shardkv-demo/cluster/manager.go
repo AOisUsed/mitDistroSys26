@@ -47,6 +47,8 @@ type ClusterManager struct {
 	lastConfigOk     time.Time // 最后一次成功查询 config 的时间戳，用于判断是否使用缓存
 	lastNextConfigOk time.Time // 最后一次成功查询 nextConfig 的时间戳
 
+	// leaderChangeListeners 注册的 Leader 变更通知回调列表
+	leaderChangeListeners []func(gid tester.Tgid, sid int, isLeader bool)
 }
 
 // NewClusterManager 创建一个新的集群管理器，使用给定配置
@@ -61,6 +63,14 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		maxRaftState: dcfg.MaxRaftState,
 	}
 	return cm
+}
+
+// RegisterLeaderChangeListener 注册 Leader 变更通知回调
+// 回调在 cm.mu 锁外被调用，可直接执行耗时操作
+func (cm *ClusterManager) RegisterLeaderChangeListener(fn func(gid tester.Tgid, sid int, isLeader bool)) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.leaderChangeListeners = append(cm.leaderChangeListeners, fn)
 }
 
 // getArgs returns common args for group creation
@@ -92,7 +102,6 @@ func (cm *ClusterManager) Init() error {
 	// 注册回调
 	cm.cfg.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
 		cm.mu.Lock()
-		defer cm.mu.Unlock()
 		leaders, ok := cm.leaders[tester.Tgid(gid)]
 		if !ok {
 			leaders = make(map[int]bool)
@@ -102,6 +111,14 @@ func (cm *ClusterManager) Init() error {
 			leaders[sid] = true
 		} else {
 			delete(leaders, sid)
+		}
+		// 复制 listener 列表，在锁外调用（避免死锁）
+		listeners := make([]func(gid tester.Tgid, sid int, isLeader bool), len(cm.leaderChangeListeners))
+		copy(listeners, cm.leaderChangeListeners)
+		cm.mu.Unlock()
+
+		for _, fn := range listeners {
+			fn(tester.Tgid(gid), sid, isLeader)
 		}
 	})
 

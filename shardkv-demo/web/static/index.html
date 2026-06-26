@@ -116,10 +116,12 @@
             width: 8px; height: 8px; border-radius: 50%; display: inline-block;
             flex-shrink: 0;
         }
-        .dot.leader { background: #52c41a; box-shadow: 0 0 6px #52c41a; }
-        .dot.alive { background: #52c41a; opacity: 0.6; }
+        .dot.leader { background: #52c41a; box-shadow: 0 0 12px #52c41a; }
+        .dot.alive { background: #52c41a; opacity: 0.65; }
         .dot.dead { background: #ff4d4f; }
         .dot.isolated { background: #faad14; }
+        .dot.leader-isolated { background: #faad14; box-shadow: 0 0 12px #faad14; }
+
         .server-item .name { font-family: 'SF Mono', Monaco, monospace; font-size: 11px; flex: 1; min-width: 0; }
         .server-item .status-label { font-size: 10px; color: #888; }
         .server-item .actions { display: flex; gap: 3px; margin-left: auto; flex-shrink: 0; }
@@ -1266,6 +1268,7 @@
 
     function getNodeStatus(srv) {
         if (!srv.isAlive) return 'dead';
+        if (srv.isIsolated && srv.isLeader) return 'leader-isolated';
         if (srv.isIsolated) return 'isolated';
         if (srv.isLeader) return 'leader';
         return 'alive';
@@ -1273,8 +1276,9 @@
 
     function getNodeStatusText(srv) {
         if (!srv.isAlive) return '离线';
+        if (srv.isIsolated && srv.isLeader) return 'Leader  隔离';
         if (srv.isIsolated) return '隔离';
-        if (srv.isLeader) return 'Leader';
+        if (srv.isLeader) return 'Leader  在线';
         return '在线';
     }
 
@@ -1554,6 +1558,44 @@
         refreshTimer = setTimeout(() => { refreshStatus().finally(scheduleRefresh); }, interval);
     }
     scheduleRefresh();
+
+    // ========== SSE Leader 变更推送 ==========
+    // Leader 变更时通过 SSE 即时通知前端，触发轻量刷新拓扑（不改"更新于"时间戳）
+    let sseReconnectTimer = null;
+    function connectSSE() {
+        if (sseReconnectTimer) {
+            clearTimeout(sseReconnectTimer);
+            sseReconnectTimer = null;
+        }
+        const evtSource = new EventSource('/api/events');
+        evtSource.addEventListener('leader-change', function(e) {
+            lightRefreshTopology();
+        });
+        evtSource.onerror = function() {
+            evtSource.close();
+            // 断线后 5 秒自动重连
+            sseReconnectTimer = setTimeout(connectSSE, 5000);
+        };
+    }
+    connectSSE();
+
+    async function lightRefreshTopology() {
+        try {
+            const tree = await api('/api/status/tree', {method: 'GET'}, 8000, true);
+            if (tree) {
+                usingCache = !!tree.configCached;
+                cachedTree = tree;
+                renderTopology(tree);
+                renderShards(tree);
+                if (tree.groups && tree.groups.length > 0) {
+                    populateGroupSelect([...tree.groups].sort((a, b) => a.gid - b.gid));
+                }
+                // 不改变 refreshInfo.textContent，保留现有"更新于"时间戳
+            }
+        } catch (err) {
+            // 静默，不输出日志
+        }
+    }
 
     // ========== 观测日志 ==========
     observeLogExpanded = false;

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"kvstore/tester"
 	"log"
 	"net/http"
 	"os"
@@ -64,6 +65,10 @@ func main() {
 	mux := http.NewServeMux()
 	h := web.NewHandler(cm)
 	h.SetStaticDir(demoDir) // 设置静态文件目录
+	// 注册 SSE 通知，Leader 变更时推送到前端
+	cm.RegisterLeaderChangeListener(func(gid tester.Tgid, sid int, isLeader bool) {
+		h.PublishLeaderChange(gid, sid, isLeader)
+	})
 	h.RegisterRoutes(mux)
 	sh := web.NewShardHandler(cm)
 	sh.RegisterRoutes(mux)

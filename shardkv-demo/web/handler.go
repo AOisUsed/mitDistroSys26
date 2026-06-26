@@ -19,10 +19,11 @@ import (
 type Handler struct {
 	cm        *cluster.ClusterManager
 	staticDir string // 静态文件目录（shardkv-demo 目录路径）
+	sseBroker *SSEBroker
 }
 
 func NewHandler(cm *cluster.ClusterManager) *Handler {
-	return &Handler{cm: cm}
+	return &Handler{cm: cm, sseBroker: NewSSEBroker()}
 }
 
 // SetStaticDir 设置静态文件目录路径（用于定位 index.html）
@@ -1010,6 +1011,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// InitController (手动恢复 pending 迁移)
 	mux.HandleFunc("/api/init-controller", h.HandleInitController)
+
+	// SSE 事件流
+	mux.HandleFunc("/api/events", h.HandleSSE)
 
 	// 批量写入
 	mux.HandleFunc("/api/kv/batch-put", h.HandleBatchPut)
