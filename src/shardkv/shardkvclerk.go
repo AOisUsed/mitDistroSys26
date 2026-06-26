@@ -36,6 +36,7 @@ type Clerk struct {
 	fetching     bool          // whether a config Query is in flight
 	fetchingDone chan struct{} // channel used to notify that the fetching is done
 	mu           sync.RWMutex
+	putMutex     sync.Mutex
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -153,6 +154,11 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.Err {
 	// You will have to modify this function.
+
+	// !! force serial PUT, because deduplicate mechanism (lastPutByClientId only save the latest Put, reordered Put request will break this)
+	// in server doesn't support one client execute multiple Put at a time
+	ck.putMutex.Lock()
+	defer ck.putMutex.Unlock()
 
 	reqId := ck.nextReqId()
 	// use key to get the shardId

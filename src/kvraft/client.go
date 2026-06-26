@@ -31,6 +31,7 @@ type Clerk struct {
 	clientId  uint64
 	requestId uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
 	mu        sync.Mutex
+	putMutex  sync.Mutex
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
@@ -114,6 +115,9 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.Err {
+	ck.putMutex.Lock()
+	defer ck.putMutex.Unlock()
+
 	args := rpcapi.PutArgs{
 		RequestInfo: rpcapi.RequestInfo{
 			ClientId:  ck.clientId,

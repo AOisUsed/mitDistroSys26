@@ -49,22 +49,6 @@ func (kv *KVServer) DoOp(req any) any {
 	var reply any
 	switch typedReq := req.(type) {
 	case rpcapi.GetArgs:
-		//// deduplicate request
-		//kv.rwMu.RLock()
-		//lastPut, exists := kv.lastPutByClientId[typedReq.ClientId]
-		//kv.rwMu.RUnlock()
-		//if exists {
-		//	// if the request has been executed, simply return the result and not execute it again.
-		//	if typedReq.RequestId <= lastPut.RequestId {
-		//		// note that typedReq.reqId < lastPut.reqId condition should not occur if client functions correctly
-		//		// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
-		//		if typedReq.RequestId < lastPut.RequestId {
-		//			debug.D4BPrintf("server%v:client %v sending request with impossible id:%v, as lastPut id: %v!\n", kv.me, typedReq.ClientId, typedReq.RequestId, lastPut.RequestId)
-		//		}
-		//		debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
-		//		return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
-		//	}
-		//}
 		// execute the operation
 		kv.rwMu.RLock()
 		verVal, exists := kv.kvm[typedReq.Key]
@@ -89,12 +73,29 @@ func (kv *KVServer) DoOp(req any) any {
 		if exists {
 			// if the request has been executed, simply return the result and not execute it again.
 			if typedReq.RequestId <= lastPut.RequestId {
-				// note that typedReq.Id < lastPut.Id condition should not occur if client functions correctly
-				// because requestId from the client shouldn't increase if the pending request wasn't successfully handled by server
+				// Note: if request.Id < lastPut.Id, the server will return inaccurate deduplication info.
+				// 		This happens because the dedup data for this request has already been overwritten by a
+				// 		request with a greater ID, but the server still replies with lastPut's result.
+				//
+				// 		Therefore, the client MUST serialise PUT requests — never increment requestId before
+				// 		receiving the result of the previous PUT.
+				//
+				// Design rationale (minimalist approach):
+				//
+				// To correctly handle a single client's concurrent PUTs over an unreliable network,
+				// the server would need to retain all dedup data until the client explicitly ACKs:
+				// "all requests before ID xxx have been received, you may safely discard older dedup data."
+				// This would require an ACK mechanism (e.g., including ACK info on each PUT request),
+				// as well as a deadline for garbage collection in case the client doesn't ACK (due to network or the termination of requesting).
+				//
+				// The main problem is that such a deadline must be tuned to network conditions,
+				// making it environment-dependent. For simplicity and universality,
+				// I opt for this design instead.
+
 				if typedReq.RequestId < lastPut.RequestId {
-					debug.D4BPrintf("server%v:client %v sending request with impossible id:%v!\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+					debug.D4BPrintf("server%v:client %v sent new PUT request  id: %v) before receiving previous result!\n", kv.me, typedReq.ClientId, typedReq.RequestId)
 				}
-				debug.D4BPrintf("server%v:client %v sending duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
+				debug.D4BPrintf("server%v:client %v sent duplicated request:%v\n", kv.me, typedReq.ClientId, typedReq.RequestId)
 				return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
 			}
 		}
