@@ -191,6 +191,11 @@ func (cm *ClusterManager) Init() error {
 	// 启动后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
 	cm.startConfigPoller()
 
+	// 初始化  Cfg / NextCfg Cache
+	if err := cm.initConfigCache(); err != nil {
+		return fmt.Errorf("初始化集群失败: %w", err)
+	}
+
 	return nil
 
 }
@@ -276,6 +281,27 @@ func (cm *ClusterManager) startConfigPoller() {
 			}
 		}
 	}()
+}
+
+// initConfigCache 在初始化阶段同步预填充 current 和 next 配置缓存。
+// 这样 NewClusterManager() 返回后，前端立即轮询 Status() 也不会读到 nil，
+// 避免 startConfigPoller() 的 ticker 首次触发（2 秒后）前的空窗期。
+func (cm *ClusterManager) initConfigCache() error {
+	cfg := cm.ctl.Query()
+	if cfg == nil {
+		return fmt.Errorf("config store 未返回 currentConfig")
+	}
+	nextCfg := cm.ctl.QueryNext()
+	if nextCfg == nil {
+		return fmt.Errorf("config store 未返回 nextConfig")
+	}
+	cm.mu.Lock()
+	cm.cachedConfig = cfg
+	cm.lastConfigOk = time.Now()
+	cm.cachedNextConfig = nextCfg
+	cm.lastNextConfigOk = time.Now()
+	cm.mu.Unlock()
+	return nil
 }
 
 // tryQueryConfig 直接返回缓存（不阻塞不泄漏）。
