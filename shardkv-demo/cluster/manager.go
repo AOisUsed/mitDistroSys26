@@ -53,6 +53,10 @@ type ClusterManager struct {
 	// done 用于通知后台 goroutine 退出；stopOnce 保证只关闭一次
 	done     chan struct{}
 	stopOnce sync.Once
+
+	// clerkPool 用于批量写入场景的 Clerk 复用池（懒初始化）
+	clerkPool *ClerkPool
+	poolOnce  sync.Once
 }
 
 // NewClusterManager 创建一个新的集群管理器，使用给定配置
@@ -430,6 +434,16 @@ func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	return shardkv.MakeClerk(cm.clnt, cm.ctl)
+}
+
+// GetClerkPool 返回全局 Clerk 池（懒初始化，容量 100）。
+// 批量写入等高并发场景通过 Borrow/Return 复用 Clerk，
+// 避免每次创建临时对象并减少 configStore 的 Query() 并发压力。
+func (cm *ClusterManager) GetClerkPool() *ClerkPool {
+	cm.poolOnce.Do(func() {
+		cm.clerkPool = NewClerkPool(cm, 100)
+	})
+	return cm.clerkPool
 }
 
 // Put 写入键值（带乐观锁版本号）

@@ -780,16 +780,21 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[BatchPut] 已生成 %d 个 key-value pair, 准备写入", len(pairs))
 
-	// 并发写入：每个 goroutine 使用独立的 Clerk（不同 clientId），避免共享锁竞争
+	// 并发写入：通过 Clerk 池复用 Clerk（独立 clerkId，服务端按 client 分别去重）
+	// 池容量 100，每个 goroutine 借出后必须归还
 	type opResult struct {
 		idx int
 		err rpcapi.Err
 	}
 	resultCh := make(chan opResult, len(pairs))
 
+	pool := h.cm.GetClerkPool()
+
 	for i, pair := range pairs {
 		go func(idx int, k, v string) {
-			ck := h.cm.NewClerk() // 每个 goroutine 独立 Clerk → 独立的 clientId + 无锁竞争
+			ck := pool.Borrow()
+			defer pool.Return(ck) // 确保所有路径都归还
+
 			_, ver, getErr := ck.Get(k)
 			if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
 				resultCh <- opResult{idx, getErr}
