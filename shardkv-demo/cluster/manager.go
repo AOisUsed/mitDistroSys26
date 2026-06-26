@@ -49,6 +49,10 @@ type ClusterManager struct {
 
 	// leaderChangeListeners 注册的 Leader 变更通知回调列表
 	leaderChangeListeners []func(gid tester.Tgid, sid int, isLeader bool)
+
+	// done 用于通知后台 goroutine 退出；stopOnce 保证只关闭一次
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // NewClusterManager 创建一个新的集群管理器，使用给定配置
@@ -61,6 +65,7 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		isolated:     make(map[tester.Tgid]map[int]bool),
 		leaders:      make(map[tester.Tgid]map[int]bool),
 		maxRaftState: dcfg.MaxRaftState,
+		done:         make(chan struct{}),
 	}
 	return cm
 }
@@ -233,30 +238,42 @@ func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 const staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
 
 func (cm *ClusterManager) startConfigPoller() {
-	// 轮询 Query() 写入 cachedConfig
+	// 轮询 Query() 写入 cachedConfig；收到 done 后立即退出
 	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 		for {
-			cfg := cm.ctl.Query()
-			if cfg != nil {
-				cm.mu.Lock()
-				cm.cachedConfig = cfg
-				cm.lastConfigOk = time.Now()
-				cm.mu.Unlock()
+			select {
+			case <-cm.done:
+				return
+			case <-ticker.C:
+				cfg := cm.ctl.Query()
+				if cfg != nil {
+					cm.mu.Lock()
+					cm.cachedConfig = cfg
+					cm.lastConfigOk = time.Now()
+					cm.mu.Unlock()
+				}
 			}
-			time.Sleep(2 * time.Second)
 		}
 	}()
-	// 轮询 QueryNext() 写入 cachedNextConfig
+	// 轮询 QueryNext() 写入 cachedNextConfig；收到 done 后立即退出
 	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 		for {
-			cfg := cm.ctl.QueryNext()
-			if cfg != nil {
-				cm.mu.Lock()
-				cm.cachedNextConfig = cfg
-				cm.lastNextConfigOk = time.Now()
-				cm.mu.Unlock()
+			select {
+			case <-cm.done:
+				return
+			case <-ticker.C:
+				cfg := cm.ctl.QueryNext()
+				if cfg != nil {
+					cm.mu.Lock()
+					cm.cachedNextConfig = cfg
+					cm.lastNextConfigOk = time.Now()
+					cm.mu.Unlock()
+				}
 			}
-			time.Sleep(2 * time.Second)
 		}
 	}()
 }
@@ -356,10 +373,21 @@ func (cm *ClusterManager) Status() *ClusterState {
 	return state
 }
 
-// Stop 关闭所有服务器
+// Stop 关闭所有服务器、停止混沌猴子，并通知后台 goroutine 退出
 func (cm *ClusterManager) Stop() {
+	// 先通知后台 goroutine 退出，不持锁，避免 poller 因等待 cm.mu 而延迟感知 done
+	cm.stopOnce.Do(func() {
+		close(cm.done)
+	})
+
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+
+	log.Printf("[Cluster] 正在停止混沌猴子...")
+	for _, m := range cm.chaosMonkeys {
+		close(m.stop)
+	}
+	cm.chaosMonkeys = nil
 
 	log.Printf("[Cluster] 正在关闭所有组...")
 	for gid := range cm.groups {
