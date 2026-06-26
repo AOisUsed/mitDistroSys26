@@ -116,11 +116,11 @@
             width: 8px; height: 8px; border-radius: 50%; display: inline-block;
             flex-shrink: 0;
         }
-        .dot.leader { background: #52c41a; box-shadow: 0 0 12px #52c41a; }
+        .dot.leader { background: #52c41a; box-shadow: 0 0 12px 1px #52c41a; }
         .dot.alive { background: #52c41a; opacity: 0.65; }
         .dot.dead { background: #ff4d4f; }
         .dot.isolated { background: #faad14; }
-        .dot.leader-isolated { background: #faad14; box-shadow: 0 0 12px #faad14; }
+        .dot.leader-isolated { background: #faad14; box-shadow: 0 0 12px 1px #faad14; }
 
         .server-item .name { font-family: 'SF Mono', Monaco, monospace; font-size: 11px; flex: 1; min-width: 0; }
         .server-item .status-label { font-size: 10px; color: #888; }
@@ -1081,7 +1081,7 @@
         // 记录 checkbox 变化前的原始状态，用于失败时回滚
         const origChecked = !toggle.checked;
         const enabled = toggle.checked;
-        const origLabelText = origChecked ? '开启 (丢包+延迟)' : '关闭';
+        const origLabelText = origChecked ? '开启 (丢包 + 延迟)' : '关闭';
         const origLabelColor = origChecked ? '#ff4d4f' : '#999';
         try {
             const result = await api('/api/network/reliable', {
@@ -1105,7 +1105,7 @@
         // 同步更新三个 slider 的禁用样式
         updateSliderDisabledState(enabled);
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 = ${dropPct}%, RPC请求延迟 = 0~${netParams.shortDelayMs}ms, 断线超时 = 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 = ${dropPct}%, RPC请求延迟 = 0~${netParams.shortDelayMs}ms, 断线超时延迟 = 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
 
         // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
         if (!enabled) {
@@ -1181,7 +1181,7 @@
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
-                addLog(`回复乱序: ${on ? '开启 (RPC 回复有2/3概率延迟 200 ~ 2200 ms)' : '关闭'}`, on ? 'err' : 'info');
+                addLog(`回复乱序: ${on ? '开启 (RPC 回复有 2/3 概率延迟 200 ~ 2200ms)' : '关闭'}`, on ? 'err' : 'info');
                 // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
                 if (on) {
                     document.getElementById('unreliableToggle').checked = true;
