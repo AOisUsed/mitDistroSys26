@@ -3,22 +3,19 @@
 基于 Raft 共识算法的高可用、强一致、可水平扩展的分布式分片键值存储系统。
 > **简单描述：** 这是一个分布式的键值数据库，把全部数据拆成多个分片（shard），分散存储到不同的服务器组上。每组内部用 Raft 算法保证数据一致，即使部分机器宕机，服务也不中断。需要扩容时，加一组或多组新机器，数据会重新分布（即分片迁移），以提高系统整体吞吐量。
 
----
-
 ## ✨ 主要特性
 
-| 特性             | 说明                                                                            |
-|----------------|-------------------------------------------------------------------------------|
-| **Raft 共识算法**  | 每个分片组独立运行 Raft，自动选举领导者，容忍少数节点故障                                               |
-| **线性一致读写**     | 所有操作对外表现如同单机顺序执行，支持原子 [CAS 条件更新](https://zh.wikipedia.org/wiki/比较并交换)，客户端自动去重 |
-| **数据分片**       | 数据按哈希自动分片，均匀分布到多个分片组，支持运行时扩缩容                                                 |
-| **分片自动迁移**     | 组加入或离开时数据自动重新分布，迁移过程服务不中断                                                     |
-| **多 Raft 组架构** | 每个分片组独立运行 Raft 实例，组间解耦，水平扩展无瓶颈                                                |
-| **Web 控制面板**   | 实时拓扑可视化、节点故障注入、网络模拟、CAS 并发演示                                                  |
-| **故障恢复**       | 全部节点崩溃重启后数据不丢失，未完成的分片迁移自动恢复                                                   |
-| **线性一致性校验**    | 集成 Porcupine，测试中自动校验操作历史是否符合线性一致性规范                                           |
+| 特性                | 说明                                                                            |
+|-------------------|-------------------------------------------------------------------------------|
+| **Raft 共识算法**     | 每个分片组独立运行 Raft，自动选举领导者，容忍少数节点故障                                               |
+| **线性一致读写**        | 所有操作对外表现如同单机顺序执行，支持原子 [CAS 条件更新](https://zh.wikipedia.org/wiki/比较并交换)，客户端请求去重 |
+| **数据分片**          | 数据按哈希自动分片，均匀分布到多个分片组，支持运行时扩缩容                                                 |
+| **分片自动迁移**        | 组加入或离开时数据自动重新分布，迁移过程服务不中断                                                     |
+| **Multi-Raft 架构** | 每个分片组独立运行 Raft 实例，组间解耦，水平扩展无瓶颈                                                |
+| **Web 控制面板**      | 实时拓扑可视化、节点故障注入、网络模拟、CAS 并发演示                                                  |
+| **故障恢复**          | 全部节点崩溃重启后数据不丢失，未完成的分片迁移自动恢复                                                   |
+| **线性一致性校验**       | 集成 Porcupine，测试中自动校验操作历史是否符合线性一致性规范                                           |
 
----
 
 ## 🚀 快速开始
 
@@ -32,6 +29,8 @@ make run
 # 前端默认端口 8080, 自定义则运行 make run PORT=XXXX (XXXX是自定义端口号)
 # 编辑 shardkv-demo/config.yaml 可调整集群初始拓扑（每组节点数、组个数、网络可靠性、Raft快照阈值等）
 ```
+浏览器打开 `http://localhost:8080`，`Ctrl+C` 停止。
+
 ### 方式二：本地启动
 
 #### 前置条件
@@ -52,12 +51,11 @@ make run
 
 ```bash
 cd src
-make raft             # Raft 测试
-make shardkv          # 全部 ShardKV 测试
-make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
+make raft             # Raft 全部测试
+make kvraft           # 单集群KV系统 全部测试
+make shardkv          # 分片KV系统 全部测试
 ```
-
----
+详见 [TESTING.md](docs/TESTING.md)
 
 ## 🕹️ 快速上手
 
@@ -79,8 +77,6 @@ make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
 
 > - 详细分步讲解（含操作描述和预期现象）见 [WALKTHROUGH.md](docs/WALKTHROUGH.md)
 > - 控制面板各按钮功能说明见 [PANEL.md](docs/PANEL.md)
-
----
 
 ## 📁 项目结构
 
@@ -124,8 +120,6 @@ make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
     
 ```
 
----
-
 ## 📚 技术文档
 
 | 文档                                      | 内容                    |
@@ -137,8 +131,6 @@ make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
 | [WALKTHROUGH.md](docs/WALKTHROUGH.md)   | 控制面板分步操作指南            |
 | [PANEL.md](docs/PANEL.md)               | 控制面板功能速查表             |
 
----
-
 ## 🙏 致谢
 
 本项目基于 [MIT 6.5840 Distributed Systems](https://pdos.csail.mit.edu/6.824/) 课程实验框架开发。
@@ -148,4 +140,4 @@ make RUN="-run TestJoinBasic5A" shardkv  # 单个用例
 - [Raft 论文](https://raft.github.io/raft.pdf)
 - [Porcupine 线性一致性检验器](https://github.com/anishathalye/porcupine)
 - [MIT 6.5840 Distributed Systems](https://pdos.csail.mit.edu/6.824/)
-- [本人最初使用仓库](https://github.com/AOisUsed/mitDistroSys25) - 包含 Raft, KVRaft, MapReduce等模块的开发历史。
+- [本人最初使用仓库](https://github.com/AOisUsed/mitDistroSys25) - 包含 Raft, KVRaft, MapReduce 等模块的开发历史。

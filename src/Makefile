@@ -23,7 +23,7 @@ shardkv-build: .FORCE check-version
 	go build $(RACE) -o main/kvsrv main/kvsrv.go
 	go build $(RACE) -o main/shardgrp main/shardgrp.go
 
-.PHONY: .FORCE $(MAINS) $(MAIN_BUILDS)
+.PHONY: .FORCE $(MAINS) $(MAIN_BUILDS) clean
 
 # -race with plug-ins on x86 MacOS 12 with go1.17 before 1.17.6 sometimes crash.
 check-version:
@@ -31,3 +31,7 @@ ifeq ($(VER), 0)
 	@echo '*** Turning off -race since it may not work on a Mac'
 	$(eval RACE := $(shell echo ""))
 endif
+
+# 清理测试中断后残留的 daemon 子进程和 /tmp/kvstore-* socket 文件
+clean:
+	bash cleanup_daemons.sh
