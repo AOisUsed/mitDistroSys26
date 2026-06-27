@@ -91,6 +91,43 @@
         .btn-danger:hover { background: #e04345; }
         .btn-success { background: #52c41a; color: white; }
         .btn-success:hover { background: #49b018; }
+        .btn-success:disabled { background: #a0d878; cursor: not-allowed; opacity: 0.7; }
+
+        /* 按钮抖动动画（防重发提示） */
+        @keyframes btn-shake {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-4px); }
+            40% { transform: translateX(4px); }
+            60% { transform: translateX(-3px); }
+            80% { transform: translateX(3px); }
+        }
+
+        /* 加载动画（写入中指示器） */
+        .spinner {
+            display: inline-block;
+            width: 12px; height: 12px;
+            border: 2px solid #52c41a;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* CAS 竞赛 spinner（模块主题色 #764ba2） */
+        .spinner-cas {
+            display: inline-block;
+            width: 12px; height: 12px;
+            border: 2px solid #764ba2;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
         .btn-warning { background: #faad14; color: white; }
         .btn-warning:hover { background: #e8a012; }
         .btn-sm { padding: 3px 8px; font-size: 11px; }
@@ -516,7 +553,7 @@
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f6ffed;border:1px solid #b7eb8f;">
                             <input type="checkbox" class="observe-toggle" data-scene="kvsubmit" onchange="toggleObserve(this)">
-                            <span style="color:#52c41a;">KV请求</span>
+                            <span style="color:#52c41a;">KV操作</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff7e6;border:1px solid #ffd591;">
                             <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
@@ -1498,8 +1535,33 @@
         sel.appendChild(frag);
     }
 
-    // ========== 批量随机写入 ==========
+    // ========== 批量随机写入（含防重发限制）==========
+    let batchPutBusy = false; // 前端限制：前一轮未完成时禁止下一轮
+
+    function getBatchBtn() {
+        // 查找"开始"按钮：批量随机写入面板内第一个 .btn-success
+        const panel = document.querySelector('.kv-panel');
+        // 更精确：直接取 batchResult 前一个 panel 中的按钮
+        const btn = document.querySelector('#batchResult')
+            ?.previousElementSibling?.querySelector('.btn-success');
+        return btn || document.querySelector('button[onclick="doBatchPut()"]');
+    }
+
     async function doBatchPut() {
+        const btn = getBatchBtn();
+
+        // === 前一轮尚未完成，禁止重发 ===
+        if (batchPutBusy) {
+            addLog('批量写入已在执行中，请等待完成后重试', 'warn');
+            // 视觉抖动提醒
+            if (btn) {
+                btn.style.animation = 'none';
+                void btn.offsetHeight; // 触发回流
+                btn.style.animation = 'btn-shake 0.4s ease';
+            }
+            return;
+        }
+
         const count = parseInt(document.getElementById('batchCount').value) || 100;
         const targetShard = parseInt(document.getElementById('batchShard').value);
         const resultDiv = document.getElementById('batchResult');
@@ -1509,8 +1571,12 @@
             return;
         }
 
+        // === 加锁：禁用按钮，禁止下一轮 ===
+        batchPutBusy = true;
+        if (btn) btn.disabled = true;
+
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `写入中 (${count} 个 key, 最多100个客户端并发)...`;
+        resultDiv.innerHTML = `<span class="spinner"></span> 写入中 (${count} 个 key, 最多 500 个客户端并发)...`;
         addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'}, 并发`, 'shard');
 
         const startTime = Date.now();
@@ -1538,6 +1604,10 @@
             resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入异常: ${err.message} (${elapsed}s)</div>`;
             addLog(`批量写入异常: ${err.message}`, 'err');
         }
+
+        // === 解锁：无论成败，都允许下一轮 ===
+        batchPutBusy = false;
+        if (btn) btn.disabled = false;
 
         await refreshStatus();
     }
@@ -1629,7 +1699,7 @@
     const OBSERVE_LOG_NAMES = {
         'Election': 'Raft选举',
         'Migration': '分片迁移',
-        'KVSubmit': 'KV请求',
+        'KVSubmit': 'KV操作',
         'Fault': '故障恢复',
     };
 
@@ -1803,7 +1873,7 @@
 
         const resultDiv = document.getElementById('raceResult');
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<div style="color:#764ba2;">CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
+        resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
         addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}"`, 'shard');
 
         // 1. 先获取当前版本号
@@ -1873,14 +1943,14 @@
                     addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer = ${version} ${errMsg}`, 'err');
                 }
                 completedCount++;
-                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
+                resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> 竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
             })
             .catch(err => {
                 if (err.name === 'AbortError') return; // 竞赛结束被中止，不输出日志
                 versionErrCount++;
                 completedCount++;
                 addLog(`CAS 竞赛请求异常: ${err.message}`, 'err');
-                resultDiv.innerHTML = `<div style="color:#764ba2;">竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
+                resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> 竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
             });
 
             promises.push(p);

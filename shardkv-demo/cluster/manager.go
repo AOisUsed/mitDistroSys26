@@ -434,12 +434,12 @@ func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
 	return shardkv.MakeClerk(cm.clnt, cm.ctl)
 }
 
-// GetClerkPool 返回全局 Clerk 池（懒初始化，容量 100）。
+// GetClerkPool 返回全局 Clerk 池（懒初始化，容量 500）。
 // 批量写入等高并发场景通过 Borrow/Return 复用 Clerk，
 // 避免每次创建临时对象并减少 configStore 的 Query() 并发压力。
 func (cm *ClusterManager) GetClerkPool() *ClerkPool {
 	cm.poolOnce.Do(func() {
-		cm.clerkPool = NewClerkPool(cm, 100)
+		cm.clerkPool = NewClerkPool(cm, 500)
 	})
 	return cm.clerkPool
 }

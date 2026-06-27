@@ -7,7 +7,7 @@ import (
 // ClerkPool 使用 buffered channel 实现的 Clerk 池。
 //
 // 设计要点：
-//   - 池大小固定（默认 100），创建时预填充 Clerk，不做 config 预热。
+//   - 池大小固定，创建时预填充 Clerk，不做 config 查询预热。
 //   - Borrow() 在池空时阻塞，天然限制并发度（背压）。
 //   - Return() 将 Clerk 放回池尾，供下次复用。
 //   - 每个 Clerk 拥有独立的 clerkId，服务端按 clientId 分别去重，互不干扰。
