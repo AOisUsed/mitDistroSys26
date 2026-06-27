@@ -827,6 +827,105 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- API: CAS 竞赛（后端并发）---
+
+func casRandomValue() string {
+	b := make([]byte, 3)
+	for i := range b {
+		randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
+		b[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+	}
+	return string(b)
+}
+
+// HandleCasRace 后端并发 CAS 竞赛。
+// POST /api/kv/cas-race  body: {key, nClient}
+func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Key     string `json:"key"`
+		NClient int    `json:"nClient"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+	if req.NClient < 1 || req.NClient > 1000 {
+		http.Error(w, "nClient must be 1~1000", http.StatusBadRequest)
+		return
+	}
+
+	shard := shardcfg.Key2Shard(req.Key)
+
+	// 1. 获取基线版本号
+	_, curVer, getErr := h.cm.Get(req.Key)
+	if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
+		writeJSON(w, map[string]any{"success": false, "err": string(getErr)})
+		return
+	}
+
+	log.Printf("[CasRace] 开始: key=%q S%d nClient=%d version=%d", req.Key, shard, req.NClient, curVer)
+	start := time.Now()
+
+	// 2. 预生成每个客户端的随机 value（主 goroutine 中串行生成，randomSeed 安全）
+	values := make([]string, req.NClient)
+	for i := range values {
+		values[i] = casRandomValue()
+	}
+
+	// 3. 并发启动 N 个独立 Clerk 执行 CAS Put
+	//    每个 Clerk 拥有独立 clientId，服务端按 clientId 分别去重，互不干扰
+	type raceResult struct {
+		err rpcapi.Err
+	}
+	resultCh := make(chan raceResult, req.NClient)
+
+	for i := 0; i < req.NClient; i++ {
+		go func(val string) {
+			ck := h.cm.NewClerk()
+			putErr := ck.Put(req.Key, val, curVer)
+			resultCh <- raceResult{putErr}
+		}(values[i])
+	}
+
+	// 4. 收集结果
+	successCount := 0
+	versionErrCount := 0
+	for i := 0; i < req.NClient; i++ {
+		res := <-resultCh
+		if res.err == rpcapi.OK {
+			successCount++
+		} else {
+			versionErrCount++
+		}
+	}
+
+	elapsed := time.Since(start).Seconds()
+
+	// 5. 获取最终值
+	finalValue, _, _ := h.cm.Get(req.Key)
+
+	log.Printf("[CasRace] 完成: 成功=%d 冲突=%d 用时=%.1fs 最终=%q", successCount, versionErrCount, elapsed, finalValue)
+
+	writeJSON(w, map[string]any{
+		"success":         true,
+		"key":             req.Key,
+		"version":         int(curVer),
+		"nClient":         req.NClient,
+		"successCount":    successCount,
+		"versionErrCount": versionErrCount,
+		"finalValue":      finalValue,
+		"elapsed":         fmt.Sprintf("%.1f", elapsed),
+	})
+}
+
 // --- API: 观测日志开关 ---
 
 func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
@@ -946,6 +1045,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// 批量写入
 	mux.HandleFunc("/api/kv/batch-put", h.HandleBatchPut)
+
+	// CAS 竞赛
+	mux.HandleFunc("/api/kv/cas-race", h.HandleCasRace)
 
 	// 观测日志
 	mux.HandleFunc("/api/observe", h.HandleObserve)

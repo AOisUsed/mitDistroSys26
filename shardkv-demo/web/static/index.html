@@ -1852,10 +1852,9 @@
         await initObserveState();
     });
 
-    // ========== CAS 并发竞赛（前端异步并发，每条日志实时显示） ==========
+    // ========== CAS 并发竞赛（后端并发) ==========
     //
-    // 流式 API：先 Get 版本号，再并发发起 N 个独立 POST 到 /api/put-cas，
-    // 每个请求独立经历网络丢包&延迟，收到一个响应立即输出一条日志。
+    // 前端发送 1 个 POST 到 /api/kv/cas-race，后端启动 N 个独立 Clerk 并发 CAS Put。
     //
     async function doCasRace() {
         const key = document.getElementById('raceKey').value.trim();
@@ -1875,102 +1874,26 @@
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
         addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}"`, 'shard');
-
-        // 1. 先获取当前版本号
-        let version;
         try {
-            const verResp = await api('/api/cas-get-version?key=' + encodeURIComponent(key), {method: 'GET'});
-            if (!verResp.success) {
-                resultDiv.textContent = `获取版本号失败: ${verResp.err}`;
-                addLog(`CAS 竞赛: 获取版本号失败: ${verResp.err}`, 'err');
-                return;
+            const result = await api('/api/kv/cas-race', {
+                method: 'POST',
+                body: JSON.stringify({key, nClient})
+            }, 60000);
+
+            if (result.success) {
+                addLog(`CAS 竞赛完成: 成功=${result.successCount} 冲突=${result.versionErrCount} → 最终="${result.finalValue}" 用时=${result.elapsed}s`, 'shard');
+                resultDiv.innerHTML = `<div style="color:#764ba2;">成功 <strong>${result.successCount}</strong> / 版本冲突 <strong>${result.versionErrCount}</strong> | 最终 "${result.finalValue}" | 用时 ${result.elapsed}s</div>`;
+                document.getElementById('putVal').value = result.finalValue || '';
+            } else {
+                addLog(`CAS 竞赛失败: ${result.err || '未知错误'}`, 'err');
+                resultDiv.innerHTML = `<div style="color:#ff4d4f;">CAS 竞赛失败: ${result.err || '未知错误'}</div>`;
             }
-            version = verResp.version;
-            addLog(`[Get] key="${key}" version = ${version} (基线版本)`, 'info');
         } catch (err) {
-            resultDiv.textContent = `获取版本号异常: ${err.message}`;
-            addLog(`CAS 竞赛: 获取版本号异常: ${err.message}`, 'err');
-            return;
+            addLog(`CAS 竞赛异常: ${err.message}`, 'err');
+            resultDiv.innerHTML = `<div style="color:#ff4d4f;">CAS 竞赛异常: ${err.message}</div>`;
         }
 
-        // 2. 并发发起 N 个独立请求
-        let successCount = 0;
-        let versionErrCount = 0;
-        let completedCount = 0;
-        const promises = [];
-
-        // 共享一个 AbortController，竞赛结束时取消所有仍在进行的请求
-        const raceAbort = new AbortController();
-        const raceTimeout = setTimeout(() => raceAbort.abort(), 15000);
-
-
-        function raceCleanup() {
-            clearTimeout(raceTimeout);
-            if (!raceAbort.signal.aborted) raceAbort.abort();
-        }
-
-        for (let i = 0; i < nClient; i++) {
-            // 每个客户端随机生成 value
-            const val = randomChars(3);
-
-            // 每个客户端独立 fetch
-            // 独立超时保护每个请求，共享 raceAbort 在结束时取消未完成的请求
-            const p = (async () => {
-                const controller = new AbortController();
-                // 当 raceAbort 被触发时，也终止这个请求
-                const onAbort = () => { if (!controller.signal.aborted) controller.abort(); };
-                raceAbort.signal.addEventListener('abort', onAbort);
-                try {
-                    const resp = await fetch(API + '/api/put-cas', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        signal: controller.signal,
-                        body: JSON.stringify({key, value: val, version})
-                    });
-                    return await resp.json();
-                } finally {
-                    raceAbort.signal.removeEventListener('abort', onAbort);
-                }
-            })()
-            .then(res => {
-                const shard = key2Shard(key);
-                if (res && res.success) {
-                    successCount++;
-                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer = ${version} OK`, 'ok');
-                } else {
-                    versionErrCount++;
-                    const errMsg = (res && res.err) || 'ErrVersion';
-                    addLog(`[Put] key="${key}" value="${val}" S${shard} reqVer = ${version} ${errMsg}`, 'err');
-                }
-                completedCount++;
-                resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> 竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
-            })
-            .catch(err => {
-                if (err.name === 'AbortError') return; // 竞赛结束被中止，不输出日志
-                versionErrCount++;
-                completedCount++;
-                addLog(`CAS 竞赛请求异常: ${err.message}`, 'err');
-                resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> 竞赛进行中: ${completedCount}/${nClient} 完成 (成功 ${successCount}, 冲突 ${versionErrCount})</div>`;
-            });
-
-            promises.push(p);
-        }
-
-        // 3. 等待所有请求完成
-        await Promise.allSettled(promises);
-        raceCleanup();
-
-        // 4. 验证最终值
-        let finalValue = '';
-        try {
-            const finalResp = await api(API + '/api/kv/' + encodeURIComponent(key), {method: 'GET'});
-            if (finalResp.success) {
-                finalValue = finalResp.value;
-                document.getElementById('putVal').value = finalResp.value || '';
-            }
-        } catch (err) {}
-        resultDiv.innerHTML = `<div style="color:#764ba2;">成功 <strong>${successCount}</strong> / 版本冲突 <strong>${versionErrCount}</strong> | 最终 "${finalValue}"</div>`;
-        addLog(`CAS 竞赛完成: 成功 = ${successCount} 版本冲突 = ${versionErrCount} → 最终 "${finalValue}"`, 'shard');
+        await refreshStatus();
     }
 
 </script>
