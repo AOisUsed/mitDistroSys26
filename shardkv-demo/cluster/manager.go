@@ -3,7 +3,6 @@ package cluster
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"shardkv-demo/config"
 	"sync"
 	"sync/atomic"
@@ -413,7 +412,6 @@ func (cm *ClusterManager) Stop() {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	log.Printf("[Cluster] 正在停止混沌猴子...")
 	for _, m := range cm.chaosMonkeys {
 		close(m.stop)
 	}
@@ -775,7 +773,7 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	_, inController := cfg.Groups[gid]
 
 	// 如果组在 tester.Config 中但不在 controller 中（Join 超时残留），直接清理本地
-	if sg != nil && !inController {
+	if !inController {
 		sg.Shutdown() // 锁外阻塞
 		cm.mu.Lock()
 		delete(cm.groups, gid)
@@ -950,25 +948,6 @@ func (cm *ClusterManager) NewGid() tester.Tgid {
 	return cm.newGidLocked()
 }
 
-// ========== 混沌猴子（Chaos Monkey）==========
-
-// ChaosState 表示一个组当前的混沌状态
-type ChaosState struct {
-	Active  bool   `json:"active"`
-	GID     int    `json:"gid"`
-	Summary string `json:"summary"`
-}
-
-// ChaosMonkey 在后台随机 kill/restart 指定组的节点
-// 保证同一时刻存活节点 ≥ quorum（3 节点组保活 ≥ 2）
-type ChaosMonkey struct {
-	cm             *ClusterManager
-	gid            tester.Tgid
-	stop           chan struct{}
-	pendingRestart map[int]struct{} // 正在等待自动重启的节点（避免重复操作）
-	pmu            sync.Mutex
-}
-
 // StartChaos 为指定组启动混沌猴子
 func (cm *ClusterManager) StartChaos(gid tester.Tgid) error {
 	cm.mu.Lock()
@@ -1046,101 +1025,4 @@ func (cm *ClusterManager) ChaosStatus() []ChaosState {
 		states = append(states, state)
 	}
 	return states
-}
-
-// run 是 ChaosMonkey 的主循环
-func (m *ChaosMonkey) run() {
-	for {
-		select {
-		case <-m.stop:
-			return
-		case <-time.After(time.Duration(1000+rand.Intn(2000)) * time.Millisecond):
-			m.tick()
-		}
-	}
-}
-
-// tick 执行一次混沌操作
-// 原则：只杀不救 — tick() 只在安全时可杀（alive > quorum），从不主动 restart
-//
-//	后续自动恢复由 killNode() 的延迟 goroutine 负责
-func (m *ChaosMonkey) tick() {
-	sg := m.cm.cfg.Group(m.gid)
-	if sg == nil {
-		return
-	}
-	connected := sg.GetConnected()
-	n := sg.N()
-
-	quorum := n/2 + 1
-
-	m.pmu.Lock()
-	pending := m.pendingRestart
-	if pending == nil {
-		pending = make(map[int]struct{})
-		m.pendingRestart = pending
-	}
-	// 清理已恢复的 pending 记录（节点已连接且不在 pending 中 → 实际已恢复）
-	for idx := range pending {
-		if idx < len(connected) && connected[idx] {
-			delete(pending, idx)
-		}
-	}
-	m.pmu.Unlock()
-
-	// 选出没有正在等待重启的存活节点
-	eligible := make([]int, 0)
-	for i := 0; i < n; i++ {
-		if i < len(connected) && connected[i] {
-			// 不在 pending 中才可杀（有 pending=即将自动重启，不需要再杀）
-			if _, ok := pending[i]; !ok {
-				eligible = append(eligible, i)
-			}
-		}
-	}
-
-	// 如果 eligible > quorum，随机杀一个（保证存活 ≥ quorum + 1 才杀）
-	if len(eligible) > quorum {
-		idx := eligible[rand.Intn(len(eligible))]
-		m.pmu.Lock()
-		m.pendingRestart[idx] = struct{}{}
-		m.pmu.Unlock()
-		go m.killNode(idx, sg)
-		return
-	}
-}
-
-func (m *ChaosMonkey) killNode(idx int, sg *tester.ServerGrp) {
-	log.Printf("[ChaosMonkey] Kill: GID %d 节点 %d (%s)", m.gid, idx, sg.SrvName(idx))
-	sg.ShutdownServer(idx)
-
-	// 2~4 秒后自动重启
-	delay := 2 + rand.Intn(3)
-	select {
-	case <-m.stop:
-		return
-	case <-time.After(time.Duration(delay) * time.Second):
-		m.restartNode(idx, sg)
-	}
-}
-
-func (m *ChaosMonkey) restartNode(idx int, sg *tester.ServerGrp) {
-	err := sg.StartServer(idx)
-	if err != nil {
-		log.Printf("[ChaosMonkey] Restart GID %d 节点 %d 失败: %v — 5 秒后重试", m.gid, idx, err)
-		select {
-		case <-m.stop:
-			return
-		case <-time.After(5 * time.Second):
-			m.restartNode(idx, sg)
-		}
-		return
-	}
-	sg.ConnectOne(idx)
-	log.Printf("[ChaosMonkey] Restart: GID %d 节点 %d (%s) 已恢复", m.gid, idx, sg.SrvName(idx))
-
-	// 清理 pending 记录
-	m.pmu.Lock()
-	delete(m.pendingRestart, idx)
-	m.pmu.Unlock()
 }

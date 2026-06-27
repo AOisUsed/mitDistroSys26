@@ -383,7 +383,7 @@
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 并发写入
+                        CAS 并发竞争写入
                     </div>
                     <div class="kv-panel">
                         <div class="kv-row">
@@ -407,7 +407,7 @@
                     <div class="kv-panel">
                         <div class="kv-row">
                             <div class="kv-inputs">
-                                <input type="number" id="batchCount" value="20" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
+                                <input type="number" id="batchCount" value="100" min="1" max="10000" style="flex:0 0 80px;min-width:60px;">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">个 key, 来自 </span>
                                 <select id="batchShard" class="kv-input-sm">
                                     <option value="-1">任意</option>
@@ -1510,7 +1510,7 @@
         }
 
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `写入中 (${count} 个 key, 并发)...`;
+        resultDiv.innerHTML = `写入中 (${count} 个 key, 最多100个客户端并发)...`;
         addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'}, 并发`, 'shard');
 
         const startTime = Date.now();
