@@ -120,20 +120,20 @@ func (sck *ShardCtrler) saveNextConfig(newCfg *shardcfg.ShardConfig) bool {
 // configuration from the current one to new.  While the controller
 // changes the configuration it may be superseded by another
 // controller.
-func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) {
-	// Your code here.
+func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) bool {
 	oldCfg, ver := sck.queryCurrentConfig()
 	// don't change config if newCfg has smaller config version (Num)
 	if newCfg.Num <= oldCfg.Num {
 		debug.D5APrintf("controller %v ChangeConfig called with older config: %v < current: %v , does nothing\n", sck.controllerId, oldCfg.Num, newCfg.Num)
-		return
+		return false
 	}
 	if !sck.saveNextConfig(newCfg) { // it fails to save reconfiguration intention
-		return
+		return false
 	}
 
 	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
 	sck.migrateShards(oldCfg, ver, newCfg, false)
+	return true
 }
 
 // check if the config has been superseded by a newer config ,
