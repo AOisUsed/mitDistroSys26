@@ -132,8 +132,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) bool {
 	}
 
 	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
-	sck.migrateShards(oldCfg, ver, newCfg, false)
-	return true
+	return sck.migrateShards(oldCfg, ver, newCfg, false)
 }
 
 // check if the config has been superseded by a newer config ,
@@ -146,7 +145,7 @@ func (sck *ShardCtrler) isSuperseded(newCfg *shardcfg.ShardConfig) bool {
 // migrateShards is called in ChangeConfigTo and InitController. ver is the version of currentConfig value, for CAS Put.
 // fromRecovery says whether this function is invoked from recovery (InitController) or a brand-new ChangeConfigTo(),
 // if it's from ChangeConfigTo(). it should retry indefinitely. But if it's from recovery, it should exit delete when reaching max retry (reasons explained below)
-func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.Tversion, newCfg *shardcfg.ShardConfig, fromRecovery bool) {
+func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.Tversion, newCfg *shardcfg.ShardConfig, fromRecovery bool) bool {
 	var wg sync.WaitGroup
 	var isSuperseded atomic.Bool
 
@@ -241,7 +240,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 	wg.Wait()
 
 	if isSuperseded.Load() { // if shard migration fails at any stage, don't save newCfg to configStore !
-		return
+		return false
 	}
 
 	// save newCfg to configStore
@@ -255,6 +254,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 	// the correctness assurance is that currentConfig updated by no matter which controller is the same.
 	// this is guaranteed because currentConfig comes from nextConfig stored in configStore as a universal truth.
 	sck.configStore.Put("currentConfig", marshalledCfg, ver)
+	return true
 }
 
 // queryCurrentConfig query the configStore that returns the config and the version
