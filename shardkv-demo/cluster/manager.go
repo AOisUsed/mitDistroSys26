@@ -80,8 +80,8 @@ func (cm *ClusterManager) RegisterLeaderChangeListener(fn func(gid tester.Tgid, 
 	cm.leaderChangeListeners = append(cm.leaderChangeListeners, fn)
 }
 
-// getArgs returns common args for group creation
-func (cm *ClusterManager) getArgs() []string {
+// serverArgs 返回分片组创建需要的参数（目前只使用 maxraftstate）
+func (cm *ClusterManager) serverArgs() []string {
 	if cm.maxRaftState > 0 {
 		return []string{fmt.Sprintf("--max-raft-state=%d", cm.maxRaftState)}
 	}
@@ -147,7 +147,7 @@ func (cm *ClusterManager) Init() error {
 	}
 
 	// 1. 启动所有配置的 shard group 进程
-	args := cm.getArgs()
+	args := cm.serverArgs()
 	servers := make(map[tester.Tgid][]string)
 	for _, g := range initGroups {
 		gid := tester.Tgid(g.Gid)
@@ -691,7 +691,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	if nsrv <= 0 {
 		nsrv = 3
 	}
-	args := cm.getArgs()
+	args := cm.serverArgs()
 	cm.cfg.MakeGroupStart("shardgrp", args, gid, nsrv)
 
 	// ---- 阶段 2：加锁做元数据更新（纯内存操作，不包含任何 RPC 或阻塞调用）----
