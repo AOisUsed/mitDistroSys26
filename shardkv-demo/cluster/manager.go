@@ -44,7 +44,6 @@ type ClusterManager struct {
 	cachedConfig     *shardcfg.ShardConfig
 	cachedNextConfig *shardcfg.ShardConfig
 	lastConfigOk     time.Time // 最后一次成功查询 config 的时间戳，用于判断是否使用缓存
-	lastNextConfigOk time.Time // 最后一次成功查询 nextConfig 的时间戳
 
 	// leaderChangeListeners 注册的 Leader 变更通知回调列表
 	leaderChangeListeners []func(gid tester.Tgid, sid int, isLeader bool)
@@ -278,7 +277,6 @@ func (cm *ClusterManager) startConfigPoller() {
 				if cfg != nil {
 					cm.mu.Lock()
 					cm.cachedNextConfig = cfg
-					cm.lastNextConfigOk = time.Now()
 					cm.mu.Unlock()
 				}
 			}
@@ -302,7 +300,6 @@ func (cm *ClusterManager) initConfigCache() error {
 	cm.cachedConfig = cfg
 	cm.lastConfigOk = time.Now()
 	cm.cachedNextConfig = nextCfg
-	cm.lastNextConfigOk = time.Now()
 	cm.mu.Unlock()
 	return nil
 }
@@ -741,7 +738,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 
 	// 迁移完成后，立即获取最新配置并更新缓存
 	cur := cm.ctl.Query()
-	log.Printf("[Cluster] 组 %d 已加入集群, servers=%v (config #%d)", gid, srvs, cur.Num)
+	log.Printf("[Cluster] 组 %d 已加入集群 (config #%d)", gid, cur.Num)
 	cm.mu.Lock()
 	cm.cachedConfig = cur
 	cm.cachedNextConfig = cur
