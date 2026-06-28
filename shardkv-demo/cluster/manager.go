@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"shardkv-demo/config"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,13 +173,16 @@ func (cm *ClusterManager) Init() error {
 
 	// 3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard
 	//    必须在锁外执行（涉及 RPC）
+
+	serversToJoin := make(map[tester.Tgid][]string)
 	for _, g := range initGroups {
 		gid := tester.Tgid(g.Gid)
 		if gid == shardcfg.Gid1 {
 			continue
 		}
-		cm.initJoinGroup(gid, servers[gid])
+		serversToJoin[gid] = servers[gid]
 	}
+	cm.initJoinGroup(serversToJoin)
 
 	// 创建 shardkv clerk（在所有迁移完成后，才能正确路由到各组的 shard）
 	cm.ck = shardkv.MakeClerk(cm.clnt, cm.ctl)
@@ -671,14 +675,27 @@ func (cm *ClusterManager) tryResolvePendingMigration() bool {
 }
 
 // initJoinGroup 在进程已启动的情况下，将指定组通过 ChangeConfigTo 加入集群（含实际 shard 迁移）。
-func (cm *ClusterManager) initJoinGroup(gid tester.Tgid, srvs []string) {
+func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
+	if len(servers) == 0 {
+		return
+	}
 	cfg := cm.ctl.Query()
 	newcfg := cfg.Copy()
-	newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs})
+	newcfg.JoinBalance(servers)
 
-	log.Printf("[Cluster] initJoinGroup: 正在将组 %d 加入集群（迁移 shard）...", gid)
+	// 构建组 ID 列表用于日志
+	gids := make([]string, 0, len(servers))
+	for gid := range servers {
+		gids = append(gids, fmt.Sprintf("%d", gid))
+	}
+	log.Printf("[Cluster] initJoinGroup: 正在将组 %s 加入集群（迁移 shard）...", strings.Join(gids, ","))
 	cm.ctl.ChangeConfigTo(newcfg)
-	log.Printf("[Cluster] initJoinGroup: 组 %d 已加入集群, servers=%v", gid, srvs)
+
+	// 构建详细的组服务器信息用于日志（多行格式）
+	log.Printf("[Cluster] initJoinGroup: 已加入 %d 个组", len(servers))
+	for gid, srvs := range servers {
+		log.Printf("  G%d: %s", gid, strings.Join(srvs, ", "))
+	}
 }
 
 // JoinGroup 加入新组

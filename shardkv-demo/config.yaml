@@ -28,3 +28,9 @@ reliable: true
 groups:
   - gid: 1
     servers: 3
+  - gid: 2
+    servers: 5
+  - gid: 3
+    servers: 7
+  - gid: 4
+    servers: 9
