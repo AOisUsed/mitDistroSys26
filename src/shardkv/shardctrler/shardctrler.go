@@ -60,6 +60,7 @@ func (sck *ShardCtrler) InitController() {
 
 	// if currentConfig has smaller Num, it means that previous shard reconfiguration wasn't completed, therefore redo it.
 	if currentConfig.Num < nextConfig.Num {
+		debug.ObserveFaultPrintf("分片控制器: 发现有未完成的分片迁移，恢复中")
 		sck.migrateShards(currentConfig, ver, nextConfig, true)
 	}
 }
@@ -240,6 +241,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 	wg.Wait()
 
 	if isSuperseded.Load() { // if shard migration fails at any stage, don't save newCfg to configStore !
+		debug.ObserveFaultPrintf("分片控制器：分片迁移中发现配置号已过期，放弃此次迁移")
 		return false
 	}
 
