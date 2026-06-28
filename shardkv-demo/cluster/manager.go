@@ -254,6 +254,25 @@ func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 	return cm.cfg.Group(gid)
 }
 
+// updateCachedCfg 更新缓存的Config和更新时间, 只有配置号不减小才生效
+func (cm *ClusterManager) updateCachedCfg(newcfg *shardcfg.ShardConfig) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.cachedConfig.Num <= newcfg.Num {
+		cm.cachedConfig = newcfg
+		cm.lastConfigOk = time.Now()
+	}
+}
+
+// updateCachedCfg 更新缓存的NextConfig, 只有配置号不减小才生效
+func (cm *ClusterManager) updateCachedNextCfg(newcfg *shardcfg.ShardConfig) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.cachedNextConfig.Num <= newcfg.Num {
+		cm.cachedNextConfig = newcfg
+	}
+}
+
 // ============================================================
 // 后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
 // 只有 2 个固定的后台 goroutine，即使 configStore 永久阻塞也不泄漏
@@ -273,10 +292,7 @@ func (cm *ClusterManager) startConfigPoller() {
 			case <-ticker.C:
 				cfg := cm.ctl.Query()
 				if cfg != nil {
-					cm.mu.Lock()
-					cm.cachedConfig = cfg
-					cm.lastConfigOk = time.Now()
-					cm.mu.Unlock()
+					cm.updateCachedCfg(cfg)
 				}
 			}
 		}
@@ -292,9 +308,7 @@ func (cm *ClusterManager) startConfigPoller() {
 			case <-ticker.C:
 				cfg := cm.ctl.QueryNext()
 				if cfg != nil {
-					cm.mu.Lock()
-					cm.cachedNextConfig = cfg
-					cm.mu.Unlock()
+					cm.updateCachedNextCfg(cfg)
 				}
 			}
 		}
