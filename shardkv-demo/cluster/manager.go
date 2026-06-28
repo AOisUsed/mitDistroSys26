@@ -147,19 +147,28 @@ func (cm *ClusterManager) Init() error {
 		initGroups = []config.GroupConfig{{Gid: int(shardcfg.Gid1), Servers: nsrv}}
 	}
 
-	// 1. 启动所有配置的 shard group 进程
+	log.Printf("[Cluster] Init: 正在启动组 ...")
+	// 1. 并发启动所有配置的 shard group 进程
 	args := cm.serverArgs()
 	servers := make(map[tester.Tgid][]string)
+	var wg sync.WaitGroup
 	for _, g := range initGroups {
-		gid := tester.Tgid(g.Gid)
-		srvN := g.Servers
-		if srvN <= 0 {
-			srvN = nsrv
-		}
-		cm.cfg.MakeGroupStart("shardgrp", args, gid, srvN)
-		servers[gid] = cm.cfg.Group(gid).SrvNames()
-		cm.groups[gid] = true
+		wg.Add(1)
+		go func(g config.GroupConfig) {
+			defer wg.Done()
+			gid := tester.Tgid(g.Gid)
+			srvN := g.Servers
+			if srvN <= 0 {
+				srvN = nsrv
+			}
+			cm.cfg.MakeGroupStart("shardgrp", args, gid, srvN)
+			cm.mu.Lock()
+			servers[gid] = cm.cfg.Group(gid).SrvNames()
+			cm.groups[gid] = true
+			cm.mu.Unlock()
+		}(g)
 	}
+	wg.Wait()
 
 	// 2. 初始配置：所有 shard → Gid1（与真实数据位置一致）
 	//    先 Join 添加 Gid1 到 Groups，再 Rebalance 将所有 shard 分配给 Gid1。
@@ -171,7 +180,7 @@ func (cm *ClusterManager) Init() error {
 	// GRP0 加入管理
 	cm.groups[tester.GRP0] = true
 
-	// 3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard
+	// 3. 如果有多个组，执行 ChangeConfigTo 实际迁移 shard
 	//    必须在锁外执行（涉及 RPC）
 
 	serversToJoin := make(map[tester.Tgid][]string)
@@ -229,6 +238,10 @@ func (cm *ClusterManager) Clerk() kvtest.IKVClerk {
 
 // newGidLocked 生成下一个可用的 GID；调用者必须持有 cm.mu
 func (cm *ClusterManager) newGidLocked() tester.Tgid {
+	// 跳过已被占用的 GID（防止与配置中初始组ID冲突）
+	for cm.groups[cm.nextGid] {
+		cm.nextGid++
+	}
 	gid := cm.nextGid
 	cm.nextGid++
 	return gid
@@ -688,13 +701,13 @@ func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
 	for gid := range servers {
 		gids = append(gids, fmt.Sprintf("%d", gid))
 	}
-	log.Printf("[Cluster] initJoinGroup: 正在将组 %s 加入集群（迁移 shard）...", strings.Join(gids, ","))
+	log.Printf("[Cluster] initJoinGroup: 正在将组 %s 加入集群（迁移分片）...", strings.Join(gids, ","))
 	cm.ctl.ChangeConfigTo(newcfg)
 
 	// 构建详细的组服务器信息用于日志（多行格式）
-	log.Printf("[Cluster] initJoinGroup: 已加入 %d 个组", len(servers))
+	log.Printf("[Cluster] initJoinGroup: 已加入 %d 个组:", len(servers))
 	for gid, srvs := range servers {
-		log.Printf("  G%d: %s", gid, strings.Join(srvs, ", "))
+		log.Printf("          G%d: {%s}", gid, strings.Join(srvs, ", "))
 	}
 }
 

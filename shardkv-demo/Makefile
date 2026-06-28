@@ -15,17 +15,17 @@ all: build
 # 编译二进制
 build:
 	@echo "==> 编译 shardkv-demo ..."
-	go build -o $(BINARY) .
+	@go build -o $(BINARY) .
 	@echo "==> 编译 daemon 二进制（kvsrv, kvraft, shardgrp）..."
-	cd ../src && go build -o main/kvsrv    main/kvsrv.go
-	cd ../src && go build -o main/kvraft   main/kvraft.go
-	cd ../src && go build -o main/shardgrp main/shardgrp.go
+	@cd ../src && go build -o main/kvsrv    main/kvsrv.go
+	@cd ../src && go build -o main/kvraft   main/kvraft.go
+	@cd ../src && go build -o main/shardgrp main/shardgrp.go
 	@echo "==> 编译完成"
 
 # 编译并启动（默认目标）
 run: build
 	@echo "==> 启动 shardkv-demo (端口: $(PORT), 配置: $(CONFIG)) ..."
-	./$(BINARY) -port $(PORT) -config $(CONFIG)
+	@./$(BINARY) -port $(PORT) -config $(CONFIG)
 
 # 仅启动（不重新编译）
 start:

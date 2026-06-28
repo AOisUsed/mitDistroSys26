@@ -34,3 +34,8 @@ groups:
     servers: 7
   - gid: 4
     servers: 9
+  - gid: 7
+    servers: 11
+  - gid: 11
+    servers: 5
+
