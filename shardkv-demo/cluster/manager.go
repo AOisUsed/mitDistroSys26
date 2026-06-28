@@ -95,7 +95,7 @@ func (cm *ClusterManager) serverArgs() []string {
 // 初始化流程：
 //  1. 启动所有配置的 shard group 进程
 //  2. configStore 写入初始配置：所有 shard → Gid1（与真实数据位置一致）
-//  3. 如果有多个组，逐一执行 ChangeConfigTo 实际迁移 shard 到各组分担
+//  3. 如果有多个组，将 Gid1 上 shard 重新分配，迁移到各组分担
 func (cm *ClusterManager) Init() error {
 	// 从配置中读取参数
 	nsrv := cm.dcfg.Nsrv
