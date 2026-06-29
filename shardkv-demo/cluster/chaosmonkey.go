@@ -44,7 +44,7 @@ func (m *ChaosMonkey) run() {
 //
 //	后续自动恢复由 killNode() 的延迟 goroutine 负责
 func (m *ChaosMonkey) tick() {
-	sg := m.cm.cfg.Group(m.gid)
+	sg := m.cm.infra.Group(m.gid)
 	if sg == nil {
 		return
 	}

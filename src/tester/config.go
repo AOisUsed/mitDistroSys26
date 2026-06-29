@@ -69,9 +69,9 @@ func MakeConfig(t *testing.T, n int, reliable bool, prog string, args []string) 
 	return cfg
 }
 
-// MakeDemoConfigN creates a Config with a specified number of servers for GRP0.
+// MakeDemoConfig creates a Config with a specified number of servers for GRP0.
 // Useful for demo scenarios where the config store should be replicated (e.g., kvraft with 3 nodes).
-func MakeDemoConfigN(prog string, args []string, n int) *Config {
+func MakeDemoConfig(prog string, args []string, n int) *Config {
 	cfg := &Config{}
 	cfg.net = rpc.MakeNetwork()
 	cfg.endName = Randstring(20)

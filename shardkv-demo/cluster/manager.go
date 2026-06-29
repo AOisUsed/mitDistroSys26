@@ -6,7 +6,6 @@ import (
 	"shardkv-demo/config"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"kvstore/kvraft"
@@ -18,42 +17,48 @@ import (
 	"kvstore/tester"
 )
 
+const (
+	staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
+	clerkPoolSize      = 500
+)
+
 // ClusterManager 管理集群生命周期
 type ClusterManager struct {
-	dcfg         config.DemoConfig // 集群启动配置
-	mu           sync.Mutex
-	cfg          *tester.Config
-	ctl          *shardctrler.ShardCtrler
-	ck           kvtest.IKVClerk
-	clnt         *tester.Clnt // controller's client
-	maxRaftState int
-	nextGid      tester.Tgid
-	groups       map[tester.Tgid]bool         // tracked groups
-	left         map[tester.Tgid]bool         // 已离开的组（防止重复 Leave 导致 nil panic）
-	isolated     map[tester.Tgid]map[int]bool // 被网络隔离的节点
-	chaosMonkeys []*ChaosMonkey               // 活跃的混沌猴子
+	// —— 不可变（new 时确定，之后只读）——
+	dcfg         config.DemoConfig // 启动参数
+	maxRaftState int               // raft 日志压缩阈值
 
-	// leaders 缓存每个组中当前已知的 leader 节点索引。
-	// 由 leaderChangeCb 回调实时更新（事件驱动），不依赖轮询。
-	leaders map[tester.Tgid]map[int]bool
+	// —— 核心依赖（Init 时注入，之后只读）——
+	infra *tester.Config           // 运行时基础设施（进程/网络）
+	ctl   *shardctrler.ShardCtrler // 分片控制器
+	ck    kvtest.IKVClerk          // shardkv 客户端
+	clnt  *tester.Clnt             // controller 的 RPC 客户端
 
-	// migrationPending 表示当前正在进行 Join/Leave 显式迁移操作，
-	// 用于在缓存轮询还未感知到 nextConfig 变化时，让 Status() 正确显示 pending 状态
-	migrationPending atomic.Bool
+	// —— 同步 ——
+	mu sync.Mutex // 保护以下所有可变字段
 
-	// cachedConfig 缓存最后一次成功查询的 config，当 configStore（kvraft）无响应时使用
-	cachedConfig     *shardcfg.ShardConfig
-	cachedNextConfig *shardcfg.ShardConfig
-	lastConfigOk     time.Time // 最后一次成功查询 config 的时间戳，用于判断是否使用缓存
+	// —— 集群成员状态 ——
+	nextGid tester.Tgid          // 下一个可分配的 GID
+	groups  map[tester.Tgid]bool // 活跃的组
 
-	// leaderChangeListeners 注册的 Leader 变更通知回调列表
+	// —— 故障注入状态 ——
+	isolated     map[tester.Tgid]map[int]bool // 网络隔离节点
+	chaosMonkeys []*ChaosMonkey               // 活跃混沌猴子
+
+	// —— Leader 感知 ——
+	leaders               map[tester.Tgid]map[int]bool
 	leaderChangeListeners []func(gid tester.Tgid, sid int, isLeader bool)
 
-	// done 用于通知后台 goroutine 退出；stopOnce 保证只关闭一次
-	done     chan struct{}
+	// —— Config 缓存（poller 写入，Status 读取）——
+	cachedConfig     *shardcfg.ShardConfig
+	cachedNextConfig *shardcfg.ShardConfig
+	lastConfigOk     time.Time
+
+	// —— 生命周期 ——
+	done     chan struct{} // 通知后台 goroutine 退出
 	stopOnce sync.Once
 
-	// clerkPool 用于批量写入场景的 Clerk 复用池（懒初始化）
+	// —— Clerk 池（懒初始化） ——
 	clerkPool *ClerkPool
 	poolOnce  sync.Once
 }
@@ -64,7 +69,6 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		dcfg:         dcfg,
 		nextGid:      shardcfg.Gid1 + 1, // Gid1(1) 已被 Init 使用
 		groups:       make(map[tester.Tgid]bool),
-		left:         make(map[tester.Tgid]bool),
 		isolated:     make(map[tester.Tgid]map[int]bool),
 		leaders:      make(map[tester.Tgid]map[int]bool),
 		maxRaftState: dcfg.MaxRaftState,
@@ -105,10 +109,10 @@ func (cm *ClusterManager) Init() error {
 	reliable := cm.dcfg.Reliable
 
 	// 创建 tester Config，使用 kvraft（nsrv 节点 Raft 组）作为 config store
-	cm.cfg = tester.MakeDemoConfigN("kvraft", []string{}, nsrv)
+	cm.infra = tester.MakeDemoConfig("kvraft", []string{}, nsrv)
 
 	// 注册回调
-	cm.cfg.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
+	cm.infra.SetLeaderChangeListener(func(gid, sid int, isLeader bool) {
 		cm.mu.Lock()
 		leaders, ok := cm.leaders[tester.Tgid(gid)]
 		if !ok {
@@ -130,14 +134,14 @@ func (cm *ClusterManager) Init() error {
 		}
 	})
 
-	cm.cfg.SetReliable(reliable)
+	cm.infra.SetReliable(reliable)
 
 	// 创建 shard controller
-	cm.clnt = cm.cfg.MakeClient()
+	cm.clnt = cm.infra.MakeClient()
 	cm.ctl = shardctrler.MakeShardCtrler(cm.clnt)
 
 	// 用 kvraft clerk 替换 ShardCtrler 的 configStore（连接 GRP0 的 nsrv 节点 Raft 组）
-	grp0Srvs := cm.cfg.Group(tester.GRP0).SrvNames()
+	grp0Srvs := cm.infra.Group(tester.GRP0).SrvNames()
 	kvraftCk := kvraft.MakeClerk(cm.clnt, grp0Srvs)
 	cm.ctl.SetConfigStore(kvraftCk)
 
@@ -161,9 +165,9 @@ func (cm *ClusterManager) Init() error {
 			if srvN <= 0 {
 				srvN = nsrv
 			}
-			cm.cfg.MakeGroupStart("shardgrp", args, gid, srvN)
+			cm.infra.MakeGroupStart("shardgrp", args, gid, srvN)
 			cm.mu.Lock()
-			servers[gid] = cm.cfg.Group(gid).SrvNames()
+			servers[gid] = cm.infra.Group(gid).SrvNames()
 			cm.groups[gid] = true
 			cm.mu.Unlock()
 		}(g)
@@ -201,7 +205,7 @@ func (cm *ClusterManager) Init() error {
 	for _, g := range initGroups {
 		gidDescs = append(gidDescs, fmt.Sprintf("Gid%d=%v", g.Gid, servers[tester.Tgid(g.Gid)]))
 	}
-	log.Printf("[Cluster] 初始化完成")
+	log.Printf("[Cluster] Init: 初始化完成")
 
 	// 启动后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
 	cm.startConfigPoller()
@@ -215,43 +219,11 @@ func (cm *ClusterManager) Init() error {
 
 }
 
-// Config 返回底层 Config
-func (cm *ClusterManager) Config() *tester.Config {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.cfg
-}
-
-// Ctl 返回 ShardCtrler
-func (cm *ClusterManager) Ctl() *shardctrler.ShardCtrler {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.ctl
-}
-
-// Clerk 返回 shardkv Clerk（kvtest.IKVClerk 类型）
-func (cm *ClusterManager) Clerk() kvtest.IKVClerk {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.ck
-}
-
-// newGidLocked 生成下一个可用的 GID；调用者必须持有 cm.mu
-func (cm *ClusterManager) newGidLocked() tester.Tgid {
-	// 跳过已被占用的 GID（防止与配置中初始组ID冲突）
-	for cm.groups[cm.nextGid] {
-		cm.nextGid++
-	}
-	gid := cm.nextGid
-	cm.nextGid++
-	return gid
-}
-
 // Group 返回指定 GID 的 ServerGrp
 func (cm *ClusterManager) Group(gid tester.Tgid) *tester.ServerGrp {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	return cm.cfg.Group(gid)
+	return cm.infra.Group(gid)
 }
 
 // updateCachedCfg 更新缓存的Config和更新时间, 只有配置号不减小才生效
@@ -273,17 +245,13 @@ func (cm *ClusterManager) updateCachedNextCfg(newcfg *shardcfg.ShardConfig) {
 	}
 }
 
-// ============================================================
-// 后台 config 轮询（替代每次调用开 goroutine → 消除 goroutine 泄漏）
-// 只有 2 个固定的后台 goroutine，即使 configStore 永久阻塞也不泄漏
-// ============================================================
+const pollInterval = 2 * time.Second
 
-const staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
-
+// startConfigPoller 开启轮询 config 和 nextConfig
 func (cm *ClusterManager) startConfigPoller() {
 	// 轮询 Query() 写入 cachedConfig；收到 done 后立即退出
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -299,7 +267,7 @@ func (cm *ClusterManager) startConfigPoller() {
 	}()
 	// 轮询 QueryNext() 写入 cachedNextConfig；收到 done 后立即退出
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -335,48 +303,26 @@ func (cm *ClusterManager) initConfigCache() error {
 	return nil
 }
 
-// tryQueryConfig 直接返回缓存（不阻塞不泄漏）。
-// 当 configStore（kvraft）无响应时，后台 goroutine 阻塞在 Query() 调用上，
-// 但只有 2 个固定的 goroutine，不会随着每次 refreshStatus() 泄漏新 goroutine。
-func (cm *ClusterManager) tryQueryConfig() *shardcfg.ShardConfig {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.cachedConfig
-}
-
-func (cm *ClusterManager) tryHasPendingMigration() bool {
-	// 如果当前正在进行显式迁移操作（Join/Leave），立即返回 true
-	if cm.migrationPending.Load() {
-		return true
-	}
+// hasPendingMigration 返回是否在分片迁移中（需要在读锁内使用）
+func (cm *ClusterManager) hasPendingMigration() bool {
 	// 仅依赖缓存（非阻塞）
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
 	if cm.cachedConfig == nil || cm.cachedNextConfig == nil {
 		return false
 	}
 	return cm.cachedConfig.Num != cm.cachedNextConfig.Num
 }
 
-func (cm *ClusterManager) tryQueryNextConfig() *shardcfg.ShardConfig {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.cachedNextConfig
-}
-
 // Status 返回完整集群状态。
 // 使用非阻塞查询：configStore（kvraft）无响应时使用缓存，但节点存活信息（GetConnected）始终是实时准确的。
 func (cm *ClusterManager) Status() *ClusterState {
-	// Query() 是 RPC 调用，使用超时保护避免阻塞。
-	// cm.mu 在 goroutine 中不持有，以免死锁。
-	cfg := cm.tryQueryConfig()
-	hasPending := cm.tryHasPendingMigration()
-	nextCfg := cm.tryQueryNextConfig()
-
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// 判断 config 是否来自缓存：无 cfg 或 lastConfigOk 超过阈值
+	cfg := cm.cachedConfig
+	nextCfg := cm.cachedNextConfig
+	hasPending := cm.hasPendingMigration()
+
+	// 判断 config 是否来自缓存： 为空或 lastConfigOk 超过阈值（太久未更新）
 	configCached := false
 	if cfg == nil {
 		// configStore 完全无响应且无缓存，退化为仅显示节点状态
@@ -393,7 +339,7 @@ func (cm *ClusterManager) Status() *ClusterState {
 	}
 	// 展示 cm.groups 中追踪的所有组（包括 configStore GRP0）
 	for gid := range cm.groups {
-		sg := cm.cfg.Group(gid)
+		sg := cm.infra.Group(gid)
 		if sg == nil {
 			continue
 		}
@@ -401,7 +347,7 @@ func (cm *ClusterManager) Status() *ClusterState {
 			GID:      gid,
 			SrvNames: sg.SrvNames(),
 		}
-		// Count shards assigned to this group
+		// 计算组中的分片数
 		for _, g := range state.Config.Shards {
 			if g == gid {
 				gs.NShards++
@@ -447,7 +393,7 @@ func (cm *ClusterManager) Stop() {
 
 	log.Printf("[Cluster] 正在关闭所有组...")
 	for gid := range cm.groups {
-		sg := cm.cfg.Group(gid)
+		sg := cm.infra.Group(gid)
 		if sg != nil {
 			sg.Shutdown()
 		}
@@ -457,17 +403,15 @@ func (cm *ClusterManager) Stop() {
 
 // NewClerk 创建一个新的独立 Clerk（用于 CAS 并发竞赛演示）
 func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
 	return shardkv.MakeClerk(cm.clnt, cm.ctl)
 }
 
-// GetClerkPool 返回全局 Clerk 池（懒初始化，容量 500）。
+// GetClerkPool 返回全局 Clerk 池 - 懒初始化
 // 批量写入等高并发场景通过 Borrow/Return 复用 Clerk，
-// 避免每次创建临时对象并减少 configStore 的 Query() 并发压力。
+// 避免每次创建临时对象并减少 configStore 的 Query() 并发压力
 func (cm *ClusterManager) GetClerkPool() *ClerkPool {
 	cm.poolOnce.Do(func() {
-		cm.clerkPool = NewClerkPool(cm, 500)
+		cm.clerkPool = NewClerkPool(cm, clerkPoolSize)
 	})
 	return cm.clerkPool
 }
@@ -484,7 +428,7 @@ func (cm *ClusterManager) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) 
 
 // KillServer 停掉指定组中的某个节点
 func (cm *ClusterManager) KillServer(gid tester.Tgid, srv int) {
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		log.Printf("[Cluster] KillServer: 组 %d 不存在", gid)
 		return
@@ -504,7 +448,7 @@ func (cm *ClusterManager) IsolateNode(gid tester.Tgid, srv int) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return
 	}
@@ -529,7 +473,7 @@ func (cm *ClusterManager) RecoverNode(gid tester.Tgid, srv int) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return
 	}
@@ -563,7 +507,7 @@ func (cm *ClusterManager) RecoverGroup(gid tester.Tgid) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return
 	}
@@ -586,7 +530,7 @@ func (cm *ClusterManager) RecoverAllGroups() {
 	defer cm.mu.Unlock()
 
 	for gid := range cm.groups {
-		sg := cm.cfg.Group(gid)
+		sg := cm.infra.Group(gid)
 		if sg == nil {
 			continue
 		}
@@ -603,7 +547,7 @@ func (cm *ClusterManager) RecoverAllGroups() {
 
 // StartServer 启动指定组中的某个节点，带健康检查
 func (cm *ClusterManager) StartServer(gid tester.Tgid, srv int) error {
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return fmt.Errorf("组 %d 不存在", gid)
 	}
@@ -628,36 +572,9 @@ func (cm *ClusterManager) StartServer(gid tester.Tgid, srv int) error {
 	return fmt.Errorf("启动节点 %s 超时: 节点未连入网络", sg.SrvName(srv))
 }
 
-// ensureServerLive 检查指定组是否有足够的存活节点完成 RPC 操作
-// 返回错误时附带可读原因，调用方应据此拒绝操作
-func (cm *ClusterManager) ensureServerLive(gid tester.Tgid) error {
-	sg := cm.cfg.Group(gid)
-	if sg == nil {
-		return fmt.Errorf("组 %d 不存在", gid)
-	}
-	connected := sg.GetConnected()
-	nAlive := 0
-	deadServers := []int{}
-	for i := 0; i < sg.N(); i++ {
-		if i < len(connected) && connected[i] {
-			nAlive++
-		} else {
-			deadServers = append(deadServers, i)
-		}
-	}
-	// 计算 quorum：N/2 + 1
-	quorum := sg.N()/2 + 1
-	if nAlive >= quorum {
-		return nil // 已有足够节点存活
-	}
-	return fmt.Errorf("组 %d 仅有 %d/%d 个节点存活，需要 quorum=%d 才能完成 shard 迁移。"+
-		"请先使用 Start 操作恢复至少 %d 个节点（当前已死亡节点: %v）",
-		gid, nAlive, sg.N(), quorum, quorum-nAlive, deadServers)
-}
-
 // KillGroup 停掉整个组
 func (cm *ClusterManager) KillGroup(gid tester.Tgid) {
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return
 	}
@@ -667,7 +584,7 @@ func (cm *ClusterManager) KillGroup(gid tester.Tgid) {
 
 // StartGroup 启动整个组
 func (cm *ClusterManager) StartGroup(gid tester.Tgid) error {
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return fmt.Errorf("组 %d 不存在", gid)
 	}
@@ -676,32 +593,7 @@ func (cm *ClusterManager) StartGroup(gid tester.Tgid) error {
 	return nil
 }
 
-// tryResolvePendingMigration 阻塞地恢复未完成的 shard 迁移，直到成功
-// 必须在锁外调用（会做 RPC）。
-// 返回: (recovered bool) — recovered 表示是否实际处理了 pending 迁移
-// 注意：不设超时，将一直重试直到 pending 迁移完成（controller.migrateShards 内部有 retry=5）
-func (cm *ClusterManager) tryResolvePendingMigration() bool {
-	for {
-		if !cm.ctl.HasPendingMigration() {
-			return false // 没有 pending 迁移
-		}
-		log.Printf("[Cluster] ===== 检测到未完成的 shard 迁移，正在恢复... =====")
-		cm.ctl.InitController()
-
-		if !cm.ctl.HasPendingMigration() {
-			nextCfg := cm.ctl.QueryNext()
-			curCfg := cm.ctl.Query()
-			log.Printf("[Cluster] ===== pending 迁移已恢复 (config #%d → #%d) =====", curCfg.Num, nextCfg.Num)
-			return true
-		}
-
-		// InitController 未能完成迁移，稍后重试
-		log.Printf("[Cluster] ===== pending 迁移尚未完成，1 秒后重试 =====")
-		time.Sleep(1 * time.Second)
-	}
-}
-
-// initJoinGroup 在进程已启动的情况下，将指定组通过 ChangeConfigTo 加入集群（含实际 shard 迁移）。
+// initJoinGroup 在进程已启动的情况下，将指定组通过 ChangeConfigTo 加入集群（含实际 shard 迁移）
 func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
 	if len(servers) == 0 {
 		return
@@ -736,7 +628,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		nsrv = 3
 	}
 	args := cm.serverArgs()
-	cm.cfg.MakeGroupStart("shardgrp", args, gid, nsrv)
+	cm.infra.MakeGroupStart("shardgrp", args, gid, nsrv)
 
 	// ---- 阶段 2：加锁做元数据更新（纯内存操作，不包含任何 RPC 或阻塞调用）----
 	cm.mu.Lock()
@@ -745,16 +637,16 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	if cm.groups[gid] {
 		cm.mu.Unlock()
 		// 回滚：关掉已启动的进程（锁外阻塞）
-		sg := cm.cfg.Group(gid)
+		sg := cm.infra.Group(gid)
 		if sg != nil {
 			sg.Shutdown()
 		}
-		cm.cfg.ExitGroup(gid)
+		cm.infra.ExitGroup(gid)
 		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（重复）", gid)
 		return false, fmt.Sprintf("组 %d 已存在", gid)
 	}
 
-	srvs := cm.cfg.Group(gid).SrvNames()
+	srvs := cm.infra.Group(gid).SrvNames()
 	cm.groups[gid] = true
 	cm.mu.Unlock()
 
@@ -918,75 +810,81 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 
 // SetReliable 设置网络是否可靠（false 时随机延迟 + 可配置丢包率）
 func (cm *ClusterManager) SetReliable(yes bool) {
-	cm.cfg.SetReliable(yes)
+	cm.infra.SetReliable(yes)
 	log.Printf("[Cluster] 网络可靠性: %v", yes)
 }
 
 // IsReliable 返回当前网络是否可靠
 func (cm *ClusterManager) IsReliable() bool {
-	return cm.cfg.IsReliable()
+	return cm.infra.IsReliable()
 }
 
 // SetDropRate 设置丢包率 (0-1000, 0=使用默认常量)
 func (cm *ClusterManager) SetDropRate(rate int) {
-	cm.cfg.SetDropRate(rate)
+	cm.infra.SetDropRate(rate)
 	log.Printf("[Cluster] 丢包率: %d/1000 (%d%%)", rate, rate/10)
 }
 
 // GetDropRate 返回当前丢包率
 func (cm *ClusterManager) GetDropRate() int {
-	return cm.cfg.GetDropRate()
+	return cm.infra.GetDropRate()
 }
 
 // SetShortDelayMs 设置不可靠网络下的最小延迟 (ms)
 func (cm *ClusterManager) SetShortDelayMs(ms int) {
-	cm.cfg.SetShortDelayMs(ms)
+	cm.infra.SetShortDelayMs(ms)
 	log.Printf("[Cluster] 最小延迟: %dms", ms)
 }
 
 // GetShortDelayMs 返回当前最小延迟
 func (cm *ClusterManager) GetShortDelayMs() int {
-	return cm.cfg.GetShortDelayMs()
+	return cm.infra.GetShortDelayMs()
 }
 
 // SetLongDelayMs 设置 disconnected 状态下的最大延迟 (ms)
 func (cm *ClusterManager) SetLongDelayMs(ms int) {
-	cm.cfg.SetLongDelayMs(ms)
+	cm.infra.SetLongDelayMs(ms)
 	log.Printf("[Cluster] 最大延迟: %dms", ms)
 }
 
 // GetLongDelayMs 返回当前最大延迟
 func (cm *ClusterManager) GetLongDelayMs() int {
-	return cm.cfg.GetLongDelayMs()
+	return cm.infra.GetLongDelayMs()
 }
 
 // SetLongDelays 设置断线时是否等待长超时（true 时使用 longDelayMs，false 时 0~100ms）
 func (cm *ClusterManager) SetLongDelays(yes bool) {
-	cm.cfg.SetLongDelays(yes)
+	cm.infra.SetLongDelays(yes)
 	log.Printf("[Cluster] 长延迟模式: %v", yes)
 }
 
 // IsLongDelays 返回当前是否使用长超时模式
 func (cm *ClusterManager) IsLongDelays() bool {
-	return cm.cfg.IsLongDelays()
+	return cm.infra.IsLongDelays()
 }
 
 // SetLongReordering 设置是否长延迟重排序（67% 回复延迟 200ms~2.2s）
 func (cm *ClusterManager) SetLongReordering(yes bool) {
-	cm.cfg.SetLongReordering(yes)
+	cm.infra.SetLongReordering(yes)
 	log.Printf("[Cluster] 长延迟重排序: %v", yes)
 }
 
 // IsLongReordering 返回当前是否开启回复乱序
 func (cm *ClusterManager) IsLongReordering() bool {
-	return cm.cfg.IsLongReordering()
+	return cm.infra.IsLongReordering()
 }
 
 // NewGid 返回一个新的 GID
 func (cm *ClusterManager) NewGid() tester.Tgid {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	return cm.newGidLocked()
+	// 跳过已被占用的 GID（防止与配置中初始组ID冲突）
+	for cm.groups[cm.nextGid] {
+		cm.nextGid++
+	}
+	gid := cm.nextGid
+	cm.nextGid++
+	return gid
 }
 
 // StartChaos 为指定组启动混沌猴子
@@ -994,7 +892,7 @@ func (cm *ClusterManager) StartChaos(gid tester.Tgid) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
 		return fmt.Errorf("组 %d 不存在", gid)
 	}
@@ -1043,7 +941,7 @@ func (cm *ClusterManager) ChaosStatus() []ChaosState {
 		active[m.gid] = true
 	}
 	for gid := range cm.groups {
-		sg := cm.cfg.Group(gid)
+		sg := cm.infra.Group(gid)
 		if sg == nil {
 			continue
 		}
