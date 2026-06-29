@@ -619,10 +619,16 @@ func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
 
 // JoinGroup 加入新组
 func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
-	// ---- 阶段 0：先处理任何 pending migration（锁外执行 RPC，阻塞直到完成）----
-	_ = cm.tryResolvePendingMigration()
+	// 1：锁内检查，避免重复创建进程
+	cm.mu.Lock()
+	if cm.groups[gid] {
+		cm.mu.Unlock()
+		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
+		return false, fmt.Sprintf("组 %d 已存在", gid)
+	}
+	cm.mu.Unlock()
 
-	// ---- 阶段 1：锁外启动子进程（不可持有锁，否则 child → ReportLeaderChange → 主进程 cm.mu 死锁）----
+	// 2：锁外启动子进程
 	nsrv := cm.dcfg.Nsrv
 	if nsrv <= 0 {
 		nsrv = 3
@@ -630,56 +636,42 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	args := cm.serverArgs()
 	cm.infra.MakeGroupStart("shardgrp", args, gid, nsrv)
 
-	// ---- 阶段 2：加锁做元数据更新（纯内存操作，不包含任何 RPC 或阻塞调用）----
+	// 3：加锁注册元数据（二次检查处理并发）
 	cm.mu.Lock()
-
-	// 防重复
 	if cm.groups[gid] {
 		cm.mu.Unlock()
-		// 回滚：关掉已启动的进程（锁外阻塞）
+		// 并发场景下另一调用者已抢先注册，回滚本调用创建的进程
 		sg := cm.infra.Group(gid)
 		if sg != nil {
 			sg.Shutdown()
 		}
 		cm.infra.ExitGroup(gid)
-		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（重复）", gid)
+		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（并发重复）", gid)
 		return false, fmt.Sprintf("组 %d 已存在", gid)
 	}
-
-	srvs := cm.infra.Group(gid).SrvNames()
+	srvs := cm.infra.Group(gid).SrvNames() // 记录名字后面日志输出用
 	cm.groups[gid] = true
 	cm.mu.Unlock()
 
-	// ---- 阶段 3：锁外执行 RPC 和轮询等待----
-	cfg := cm.ctl.Query()
-	newcfg := cfg.Copy()
-	if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs}); !ok {
-		sg := cm.cfg.Group(gid)
-		if sg != nil {
-			sg.Shutdown()
+	// 4：重复执行分片配置变更（分片迁移）直到成功
+	var newcfg *shardcfg.ShardConfig
+	for {
+		cm.ctl.InitController()
+		cfg := cm.ctl.Query()
+		newcfg = cfg.Copy()
+		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs}); !ok {
+			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
+			return false, fmt.Sprintf("组 %d 已存在", gid)
 		}
-		cm.cfg.ExitGroup(gid)
-		cm.mu.Lock()
-		delete(cm.groups, gid)
-		cm.mu.Unlock()
-		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（重复）", gid)
-		return false, fmt.Sprintf("组 %d 已存在", gid)
+		if cm.ctl.ChangeConfigTo(newcfg) {
+			log.Printf("[Cluster] 组 %d 已加入集群 (config #%d)", gid, newcfg.Num)
+			break
+		}
 	}
 
-	cm.migrationPending.Store(true)
-	defer cm.migrationPending.Store(false)
-
-	// ChangeConfigTo 是同步阻塞的（内部 wg.Wait 等待所有 shard 迁移完成），返回时迁移已完成。
-	cm.ctl.ChangeConfigTo(newcfg)
-
-	// 迁移完成后，立即获取最新配置并更新缓存
-	cur := cm.ctl.Query()
-	log.Printf("[Cluster] 组 %d 已加入集群 (config #%d)", gid, cur.Num)
-	cm.mu.Lock()
-	cm.cachedConfig = cur
-	cm.cachedNextConfig = cur
-	cm.lastConfigOk = time.Now()
-	cm.mu.Unlock()
+	// 5: 迁移完成后，更新缓存
+	cm.updateCachedCfg(newcfg)
+	cm.updateCachedNextCfg(newcfg)
 	return true, ""
 }
 
