@@ -619,7 +619,7 @@ func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
 
 // JoinGroup 加入新组
 func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
-	// 1：锁内检查，避免重复创建进程
+	// 1. 锁内检查，避免重复创建进程
 	cm.mu.Lock()
 	if cm.groups[gid] {
 		cm.mu.Unlock()
@@ -628,7 +628,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	}
 	cm.mu.Unlock()
 
-	// 2：锁外启动子进程
+	// 2. 锁外启动子进程
 	nsrv := cm.dcfg.Nsrv
 	if nsrv <= 0 {
 		nsrv = 3
@@ -636,7 +636,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	args := cm.serverArgs()
 	cm.infra.MakeGroupStart("shardgrp", args, gid, nsrv)
 
-	// 3：加锁注册元数据（二次检查处理并发）
+	// 3. 加锁注册元数据（二次检查处理并发）
 	cm.mu.Lock()
 	if cm.groups[gid] {
 		cm.mu.Unlock()
@@ -653,26 +653,22 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	cm.groups[gid] = true
 	cm.mu.Unlock()
 
-	// 4：重复执行分片配置变更（分片迁移）直到成功
-	var newcfg *shardcfg.ShardConfig
+	// 4. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
-		cfg := cm.ctl.Query()
-		newcfg = cfg.Copy()
+		newcfg := cm.ctl.Query()
 		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs}); !ok {
 			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
 			return false, fmt.Sprintf("组 %d 已存在", gid)
 		}
 		if cm.ctl.ChangeConfigTo(newcfg) {
+			// 5. 迁移完成后，更新缓存
+			cm.updateCachedCfg(newcfg)
+			cm.updateCachedNextCfg(newcfg)
 			log.Printf("[Cluster] 组 %d 已加入集群 (config #%d)", gid, newcfg.Num)
-			break
+			return true, ""
 		}
 	}
-
-	// 5: 迁移完成后，更新缓存
-	cm.updateCachedCfg(newcfg)
-	cm.updateCachedNextCfg(newcfg)
-	return true, ""
 }
 
 // LeaveGroup 移除组，返回 (是否成功, 错误信息)
