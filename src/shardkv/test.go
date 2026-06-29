@@ -189,40 +189,26 @@ func (ts *Test) shutdownLeader(ck *kvtest.TestClerk, gid tester.Tgid) int {
 // Get()s don't succeed.
 func (ts *Test) checkShutdownSharding(down tester.Tgid, ka []string, va []string) {
 	const NSEC = 2
-	const NWKR = 30 // limit concurrent goroutines to avoid gob contention
 
 	ts.Group(down).Shutdown()
 
 	n := len(ka)
-	ch := make(chan string, n) // buffered to prevent blocking
+	ch := make(chan string)
 	done := int32(0)
-	jobCh := make(chan int, n)
-
-	var wg sync.WaitGroup
-	for w := 0; w < NWKR; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range jobCh {
-				ck1 := ts.MakeClerk()
-				v, _, _ := ck1.Get(ka[i])
-				if atomic.LoadInt32(&done) == 1 {
-					return
-				}
-				if v != va[i] {
-					ch <- fmt.Sprintf("Get(%v): expected:\n%v\nreceived:\n%v", ka[i], va[i], v)
-				} else {
-					ch <- ""
-				}
-			}
-		}()
-	}
-
-	// Submit all jobs
 	for xi := 0; xi < n; xi++ {
-		jobCh <- xi
+		ck1 := ts.MakeClerk()
+		go func(i int) {
+			v, _, _ := ck1.Get(ka[i])
+			if atomic.LoadInt32(&done) == 1 {
+				return
+			}
+			if v != va[i] {
+				ch <- fmt.Sprintf("Get(%v): expected:\n%v\nreceived:\n%v", ka[i], va[i], v)
+			} else {
+				ch <- ""
+			}
+		}(xi)
 	}
-	close(jobCh)
 
 	ndone := 0
 	for atomic.LoadInt32(&done) != 1 {
