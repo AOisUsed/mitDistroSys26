@@ -210,8 +210,10 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 			// t2: controller B picks up the work undone from InitConfig().
 			//	   but since some groups have already left, it gets ErrRetryExhausted indefinitely.
 			//
-			// therefore we need a maximum of retry numbers, if the maximum is reached, we can conclude that it's due to the group leave.
+			// therefore we need a maximum of retry numbers, if the maximum is reached, it's likely that the group left.
 			// because kv server is fault-tolerant with raft, the case that the majority is dead isn't likely to happen.
+			// and even if this happens (old group shard lost majority during migration and get recovered later),
+			// the only impact is that the shard didn't get removed. but the consistency isn't broken because frozen shard doesn't accept Put/Get
 
 			err = rpcapi.ErrRetryExhausted // set to ErrRetryExhausted to trigger action
 			maxAttempts := 5
@@ -230,6 +232,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				}
 				attempts++
 				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left
+					debug.ObserveFaultPrintf("分片控制器: 删除分片(%v), Config #%v -> 组 %v 重试第 %v 次仍无响应, 组应已离开，放弃操作", shid, newCfg.Num, newGid, attempts)
 					break
 				}
 			}

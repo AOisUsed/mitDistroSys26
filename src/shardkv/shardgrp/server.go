@@ -88,7 +88,7 @@ func (kv *KVServer) DoOp(req any) any {
 		// check whether the shard that the key belongs to is frozen
 		shid := shardcfg.Key2Shard(request.Key)
 		// check whether it's serving for the shard
-		if kv.shardStatuses[shid] == Absent {
+		if kv.shardStatuses[shid] != Serving {
 			reply = rpcapi.GetReply{
 				Err: rpcapi.ErrWrongGroup,
 			}
