@@ -399,6 +399,15 @@ func (cm *ClusterManager) Stop() {
 		}
 	}
 	log.Printf("[Cluster] 所有组已关闭")
+
+	// 清理本地未追踪但 tester 中仍存活的残留组
+	for _, gid := range cm.infra.Groups.Gids() {
+		if cm.groups[gid] {
+			continue
+		}
+		log.Printf("[Cluster] Stop: 清理残留组 %d", gid)
+		cm.infra.ExitGroup(gid)
+	}
 }
 
 // NewClerk 创建一个新的独立 Clerk（用于 CAS 并发竞赛演示）
@@ -671,128 +680,65 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	}
 }
 
-// LeaveGroup 移除组，返回 (是否成功, 错误信息)
+// LeaveGroup 移除组
 func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
-	// ---- 阶段 1：锁内检查初始状态（纯内存，不包含 RPC 或阻塞调用）----
+	// 1. 检查进程是否存在
 	cm.mu.Lock()
-	// 如果组已经离开过，直接返回成功（no-op，防止重复 Leave 导致 nil panic）
-	if cm.left[gid] {
-		cm.mu.Unlock()
-		log.Printf("[Cluster] LeaveGroup: 组 %d 已经离开（重复操作，忽略）", gid)
-		return true, ""
-	}
-	sg := cm.cfg.Group(gid)
+	sg := cm.infra.Group(gid)
 	if sg == nil {
+		delete(cm.groups, gid)
 		cm.mu.Unlock()
-		log.Printf("[Cluster] LeaveGroup: 组 %d 不存在于任何地方", gid)
-		return false, fmt.Sprintf("组 %d 不存在", gid)
+		log.Printf("[Cluster] LeaveGroup: 组 %d 已离开", gid)
+		return true, ""
 	}
 	cm.mu.Unlock()
 
-	// ---- 锁外 RPC：查询 controller 配置，判断组是否在集群中----
-	cfg := cm.ctl.Query()
-	_, inController := cfg.Groups[gid]
-
-	// 如果组在 tester.Config 中但不在 controller 中（Join 超时残留），直接清理本地
-	if !inController {
-		sg.Shutdown() // 锁外阻塞
-		cm.mu.Lock()
-		delete(cm.groups, gid)
-		cm.left[gid] = true
-		cm.cfg.ExitGroup(gid) // 内含 map delete（需锁保护）+ 幂等 Shutdown
-		cm.mu.Unlock()
-		cm.StopChaos(gid)
-		log.Printf("[Cluster] 组 %d 已清理（有进程但不在集群配置中）", gid)
-		return true, ""
-	}
-
-	// ---- 阶段 2：先做 pending migration 恢复（锁外 RPC，阻塞直到完成）----
-	_ = cm.tryResolvePendingMigration()
-
-	// ---- 锁外 RPC：重新查询 controller（pending 恢复后可能已变化）----
-	cfg = cm.ctl.Query()
-
-	// ---- 阶段 3：锁内检查和配置生成（纯内存操作）----
-	cm.mu.Lock()
-	sg = cm.cfg.Group(gid)
-	if sg == nil {
-		cm.mu.Unlock()
-		msg := fmt.Sprintf("组 %d 不存在", gid)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
-
-	// 再次检查是否在 controller 中（pending 恢复后可能已变化）
-	if _, exists := cfg.Groups[gid]; !exists {
-		// 不在 controller config 中，直接清理
-		cm.mu.Unlock()
-		sg.Shutdown() // 锁外阻塞
-		cm.mu.Lock()
-		delete(cm.groups, gid)
-		cm.left[gid] = true
-		cm.cfg.ExitGroup(gid)
-		cm.mu.Unlock()
-		cm.StopChaos(gid)
-		log.Printf("[Cluster] 组 %d 已清理（有进程但不在集群配置中）", gid)
-		return true, ""
-	}
-
-	// 检查是否有其他组可以接管 shard
-	if len(cfg.Groups) <= 1 {
-		cm.mu.Unlock()
-		msg := fmt.Sprintf("不能移除最后一个组 %d，集群中至少需要保留一个组", gid)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
-	cm.mu.Unlock()
-
-	// 在迁移前确保组内至少 quorum 节点存活（锁外，只读 GetConnected）
-	if err := cm.ensureServerLive(gid); err != nil {
-		msg := fmt.Sprintf("LeaveGroup 失败: %v", err)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
-
-	// 生成新配置（纯内存，基于已查询的 cfg）
-	newcfg := cfg.Copy()
-	if ok := newcfg.LeaveBalance([]tester.Tgid{gid}); !ok {
-		msg := fmt.Sprintf("组 %d 移除失败（LeaveBalance 拒绝）", gid)
-		log.Printf("[Cluster] LeaveGroup: %s", msg)
-		return false, msg
-	}
-
-	// ---- 阶段 4：执行 shard 迁移 ----
-	cm.migrationPending.Store(true)
-	defer cm.migrationPending.Store(false)
-
-	cm.ctl.ChangeConfigTo(newcfg)
-	log.Printf("[Cluster] 组 %d 的 shard 迁移已完成 (config=%d)", gid, newcfg.Num)
-
-	// ---- 阶段 5：锁外查询最新配置，确认无分片----
-	cfg = cm.ctl.Query()
-
-	cm.mu.Lock()
-	// 验证组已没有分片
-	for _, g := range cfg.Shards {
-		if g == gid {
-			cm.mu.Unlock()
-			msg := fmt.Sprintf("组 %d 迁移后仍有分片分配（config #%d），拒绝关闭进程", gid, cfg.Num)
-			log.Printf("[Cluster] LeaveGroup: %s", msg)
-			return false, msg
+	// 2. 检查是否正在 JoinGroup（本地有记录但 config store 配置中没有）
+	//    此时 JoinGroup 的 ChangeConfigTo 可能正在进行，不应中断
+	if cm.groups[gid] {
+		cfg := cm.ctl.Query()
+		if _, ok := cfg.Groups[gid]; !ok {
+			return false, fmt.Sprintf("组 %d 正在加入集群中，请勿移除", gid)
 		}
 	}
 
-	// 纯内存更新：删除组记录
-	sg = cm.cfg.Group(gid)
+	// 3. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
+	for {
+		cm.ctl.InitController()
+		newcfg := cm.ctl.Query()
+
+		if _, ok := newcfg.Groups[gid]; !ok {
+			// 别的请求已经移除了这个组，幂等返回
+			cm.mu.Lock()
+			delete(cm.groups, gid)
+			cm.mu.Unlock()
+			log.Printf("[Cluster] LeaveGroup: 组 %d 已不存在于配置中", gid)
+			return true, ""
+		}
+		if len(newcfg.Groups) <= 1 {
+			return false, fmt.Sprintf("不能移除最后一个组 %d，集群中至少需要保留一个组", gid)
+		}
+
+		if ok := newcfg.LeaveBalance([]tester.Tgid{gid}); !ok {
+			return false, fmt.Sprintf("组 %d 移除失败（LeaveBalance 拒绝）", gid)
+		}
+
+		if cm.ctl.ChangeConfigTo(newcfg) {
+			// 更新缓存
+			cm.updateCachedCfg(newcfg)
+			cm.updateCachedNextCfg(newcfg)
+			log.Printf("[Cluster] 组 %d 已离开集群", gid)
+			break
+		}
+	}
+
+	// 4. 清理本地记录和进程
+	cm.mu.Lock()
 	delete(cm.groups, gid)
-	cm.left[gid] = true
-	cm.cfg.ExitGroup(gid) // 内含 map delete（需锁保护）+ 幂等 Shutdown
+	cm.infra.ExitGroup(gid)
 	cm.mu.Unlock()
-
-	// 锁外：StopChaos 安全
+	// 5. 停止混沌猴子
 	cm.StopChaos(gid)
-
-	log.Printf("[Cluster] 组 %d 已离开集群（已确认无分片）", gid)
 	return true, ""
 }
 
