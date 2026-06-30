@@ -568,11 +568,11 @@
             </div>
         </div>
 
-        <!-- 集群拓扑 -->
+        <!-- 节点状态 -->
         <div class="card">
             <h3>
                 <span style="display:flex;align-items:center;">
-                    集群拓扑
+                    节点状态
                     <button class="btn btn-primary btn-sm" style="margin-left:20px;" onclick="doJoinGroup()">+ 添加新组</button>
                 </span>
                 <span id="refreshInfo" style="flex:1;text-align:center;font-weight:400;font-size:11px;color:#888;"></span>
@@ -582,7 +582,7 @@
                     </span>
                 </span>
             </h3>
-            <div id="topology" class="node-grid">
+            <div id="nodeStatus" class="node-grid">
                 <div style="color:#888;text-align:center;width:100%;padding:20px;">正在加载...</div>
             </div>
         </div>
@@ -915,7 +915,7 @@
     }
 
     // ========== 节点操作 ==========
-    // 节点操作在集群拓扑中通过按钮直接调用 doKillNodeById / doStartNodeById
+    // 节点操作在节点状态中通过按钮直接调用 doKillNodeById / doStartNodeById
 
     // ========== 网络操作 ==========
     async function doIsolateNode(gid, srv) {
@@ -1234,7 +1234,7 @@
         }
     }
 
-    // ========== 快捷 Leave（从拓扑标题调用） ==========
+    // ========== 快捷 Leave（从节点状态标题调用） ==========
     async function doLeaveGroupById(gid) {
         if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
@@ -1335,11 +1335,11 @@
         }
     }
 
-    // ========== 增强版 renderTopology（集成网络操作） ==========
-    function renderTopology(tree) {
-        const topo = document.getElementById('topology');
+    // ========== 增强版 renderNodeStatus（集成网络操作） ==========
+    function renderNodeStatus(tree) {
+        const statusPanel = document.getElementById('nodeStatus');
         if (!tree.groups || tree.groups.length === 0) {
-            topo.innerHTML = '<div style="color:#888;text-align:center;width:100%;padding:20px;">无活跃组</div>';
+            statusPanel.innerHTML = '<div style="color:#888;text-align:center;width:100%;padding:20px;">无活跃组</div>';
             return;
         }
         const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
@@ -1392,7 +1392,7 @@
             }
             html += `</div>`;
         }
-        topo.innerHTML = html;
+        statusPanel.innerHTML = html;
     }
 
     function renderShards(tree) {
@@ -1417,7 +1417,7 @@
 
     // ========== 刷新（并行超时保护） ==========
     let refreshing = false;
-    let usingCache = false; // 标记当前显示的拓扑是否来自缓存
+    let usingCache = false; // 标记当前显示的节点状态是否来自缓存
     async function refreshStatus() {
         if (refreshing) return;
         refreshing = true;
@@ -1427,12 +1427,12 @@
         }
         // 如果正在使用缓存，不显示"刷新中"以免误导用户以为在连接
 
-        // 并行请求，各自独立降级：configStore 死掉不会阻塞拓扑显示
+        // 并行请求，各自独立降级：configStore 死掉不会阻塞节点状态显示
         // 如果已在缓存/离线状态，静默处理网络错误，避免日志刷屏
         const [treeResult, chaosResult] = await Promise.all([
             api('/api/status/tree', {method: 'GET'}, 15000, usingCache).catch(err => {
                 if (!usingCache) {
-                    addLog('刷新拓扑失败: ' + err.message, 'err');
+                    addLog('刷新节点状态失败: ' + err.message, 'err');
                 }
                 return null;
             }),
@@ -1442,7 +1442,7 @@
 
         const tree = treeResult;
 
-        // 渲染拓扑——即使 tree 为空也显示基础界面，不崩溃
+        // 渲染节点状态——即使 tree 为空也显示基础界面，不崩溃
         try {
             if (tree) {
                 usingCache = !!tree.configCached;
@@ -1450,7 +1450,7 @@
                     // configStore 无响应，使用缓存数据
                     cachedTree = tree;
                     document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'} (缓存)`;
-                    renderTopology(cachedTree);
+                    renderNodeStatus(cachedTree);
                     renderShards(cachedTree);
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
                         populateGroupSelect([...cachedTree.groups].sort((a, b) => a.gid - b.gid));
@@ -1462,7 +1462,7 @@
 
                 cachedTree = tree;
                 document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'}`;
-                renderTopology(tree);
+                renderNodeStatus(tree);
                 renderShards(tree); // tree.shards 已有完整分片数据
                 if (tree.groups && tree.groups.length > 0) {
                     const sortedGroups = [...tree.groups].sort((a, b) => a.gid - b.gid);
@@ -1481,11 +1481,11 @@
                 refreshInfo.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
                 refreshFailCount = 0; // 成功后重置退避计数
             } else {
-                // tree 为 null：configStore 完全挂了，但仍然显示本地缓存的拓扑
+                // tree 为 null：configStore 完全挂了，但仍然显示本地缓存的节点状态
                 if (cachedTree) {
                     usingCache = true;
                     document.getElementById('configNum').textContent = `Config #${cachedTree.configNum} (缓存)`;
-                    renderTopology(cachedTree);
+                    renderNodeStatus(cachedTree);
                     renderShards(cachedTree);
 
                     if (cachedTree.groups && cachedTree.groups.length > 0) {
@@ -1495,7 +1495,7 @@
                 } else {
                     usingCache = false;
                     document.getElementById('configNum').textContent = 'ConfigStore 离线';
-                    document.getElementById('topology').innerHTML =
+                    document.getElementById('nodeStatus').innerHTML =
                         '<div style="color:#ff4d4f;text-align:center;width:100%;padding:20px;">⚠ ConfigStore 离线，节点操作仍然可用</div>';
                     document.getElementById('shardGrid').innerHTML =
                         '<div style="color:#888;text-align:center;width:100%;padding:10px;">ConfigStore 离线，分片分布不可用</div>';
@@ -1504,7 +1504,7 @@
                 refreshFailCount++; // 连接失败，增加退避计数
             }
         } catch (err) {
-            addLog('渲染拓扑异常: ' + err.message, 'err');
+            addLog('渲染节点状态异常: ' + err.message, 'err');
             refreshInfo.textContent = '渲染异常';
             refreshFailCount++; // 失败后增加退避计数
         } finally {
@@ -1630,7 +1630,7 @@
     scheduleRefresh();
 
     // ========== SSE Leader 变更推送 ==========
-    // Leader 变更时通过 SSE 即时通知前端，触发轻量刷新拓扑（不改"更新于"时间戳）
+    // Leader 变更时通过 SSE 即时通知前端，触发轻量刷新节点状态（不改"更新于"时间戳）
     let sseReconnectTimer = null;
     function connectSSE() {
         if (sseReconnectTimer) {
@@ -1639,7 +1639,7 @@
         }
         const evtSource = new EventSource('/api/events');
         evtSource.addEventListener('leader-change', function(e) {
-            lightRefreshTopology();
+            lightRefreshNodeStatus();
         });
         evtSource.onerror = function() {
             evtSource.close();
@@ -1649,13 +1649,13 @@
     }
     connectSSE();
 
-    async function lightRefreshTopology() {
+    async function lightRefreshNodeStatus() {
         try {
             const tree = await api('/api/status/tree', {method: 'GET'}, 8000, true);
             if (tree) {
                 usingCache = !!tree.configCached;
                 cachedTree = tree;
-                renderTopology(tree);
+                renderNodeStatus(tree);
                 renderShards(tree);
                 if (tree.groups && tree.groups.length > 0) {
                     populateGroupSelect([...tree.groups].sort((a, b) => a.gid - b.gid));
