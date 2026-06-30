@@ -410,7 +410,7 @@ func (cm *ClusterManager) Stop() {
 	}
 }
 
-// NewClerk 创建一个新的独立 Clerk（用于 CAS 并发竞赛演示）
+// NewClerk 创建一个新的独立 Clerk
 func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
 	return shardkv.MakeClerk(cm.clnt, cm.ctl)
 }

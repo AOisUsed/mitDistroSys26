@@ -769,16 +769,19 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		values[i] = casRandomValue()
 	}
 
-	// 3. 并发启动 N 个独立 Clerk 执行 CAS Put
-	//    每个 Clerk 拥有独立 clientId，服务端按 clientId 分别去重，互不干扰
+	// 3. 并发启动 N 个 goroutine 从 ClerkPool 借还 Clerk 执行 CAS Put
+	//    每个 Clerk 拥有独立 clientId，服务端按 clientId 分别去重，互不干扰。
+	//    通过池化复用 Clerk，减少临时对象创建，降低 configStore 的 Query() 并发压力。
 	type raceResult struct {
 		err rpcapi.Err
 	}
 	resultCh := make(chan raceResult, req.NClient)
+	pool := h.cm.GetClerkPool()
 
 	for i := 0; i < req.NClient; i++ {
 		go func(val string) {
-			ck := h.cm.NewClerk()
+			ck := pool.Borrow()
+			defer pool.Return(ck)
 			putErr := ck.Put(req.Key, val, curVer)
 			resultCh <- raceResult{putErr}
 		}(values[i])
