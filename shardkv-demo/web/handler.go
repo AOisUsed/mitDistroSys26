@@ -346,35 +346,6 @@ func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"success": true, "action": "recover-node", "gid": req.GID, "srv": req.Srv})
 }
 
-// HandleRecoverGroup 恢复指定组的全部网络连接（取消所有节点分区，但只操作存活节点）
-func (h *Handler) HandleRecoverGroup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		GID int `json:"gid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	h.cm.RecoverGroup(tester.Tgid(req.GID))
-	log.Printf("[RecoverGroup] 组 %d 网络已恢复（仅操作存活节点）", req.GID)
-	writeJSON(w, map[string]any{"success": true, "action": "recover-group", "gid": req.GID})
-}
-
-// HandleRecoverAllGroups 恢复所有组的网络连接
-func (h *Handler) HandleRecoverAllGroups(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	h.cm.RecoverAllGroups()
-	log.Printf("[RecoverAllGroups] 所有组网络已恢复")
-	writeJSON(w, map[string]any{"success": true, "action": "recover-all"})
-}
-
 // --- API: Group 操作 ---
 
 type groupOpRequest struct {
@@ -624,88 +595,6 @@ func (h *Handler) HandleChaosStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	states := h.cm.ChaosStatus()
 	writeJSON(w, map[string]any{"success": true, "states": states})
-}
-
-// --- API: CAS Put（单次 CAS 写入，前端并发调用，每条实时可见） ---
-// 前端先 Get 当前版本号，然后并发发起 N 个独立的 POST 到 /api/put-cas，
-// 每个请求独立经历网络延迟/丢包，前端收到响应后立即输出日志。
-//
-// 注意：每个 CAS 请求必须使用独立的 Clerk（不同 clientId），
-// 因为 server 端去重机制（shardgrp/server.go:128-138）按 (clientId, requestId)
-// 判定重复。若多个并发 CAS 请求共享同一个 Clerk，会因 requestId 线性增长
-// 但 Raft 提交顺序不确定，导致低 requestId 的请求被误判为重复而被静默丢弃。
-
-func (h *Handler) HandlePutCas(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Key     string          `json:"key"`
-		Value   string          `json:"value"`
-		Version rpcapi.Tversion `json:"version"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Key == "" {
-		http.Error(w, "key is required", http.StatusBadRequest)
-		return
-	}
-
-	shard := shardcfg.Key2Shard(req.Key)
-
-	// 创建独立 Clerk（不同 clientId），确保并发 CAS 请求不会因去重机制互相干扰。
-	// 对于 demo 场景，这些 Clerk 是瞬态的，不在 Clerk 池中缓存（避免泄漏），
-	// 也不需要显式注销——它们共享同一个底层 *tester.Clnt RPC 连接。
-	casCk := h.cm.NewClerk()
-
-	// 超时保护的 Put：在 goroutine 中执行，12s 超时
-	putCh := make(chan rpcapi.Err, 1)
-	go func() {
-		putCh <- casCk.Put(req.Key, req.Value, req.Version)
-	}()
-
-	var putErr rpcapi.Err
-	select {
-	case putErr = <-putCh:
-	case <-time.After(12 * time.Second):
-		log.Printf("[Put] key=%q S%d CAS 超时: PUT 无响应 (Raft 可能无 leader)", req.Key, shard)
-
-		writeJSON(w, map[string]any{
-			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version),
-			"err": "ErrTimeout", "message": "PUT 超时（可能是 Raft 组无 leader）",
-		})
-		return
-	}
-
-	if putErr == rpcapi.OK {
-		log.Printf("[Put] key=%q value=%q S%d version=%d OK", req.Key, req.Value, shard, req.Version)
-		writeJSON(w, map[string]any{"success": true, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version)})
-	} else {
-		log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (err=%s)", req.Key, req.Value, shard, req.Version, putErr)
-		writeJSON(w, map[string]any{"success": false, "key": req.Key, "value": req.Value, "shard": int(shard), "reqVer": int(req.Version), "err": string(putErr)})
-	}
-}
-
-// HandleCasGetVersion 获取当前 key 的版本号，用于 CAS 竞赛
-func (h *Handler) HandleCasGetVersion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "key query param required", http.StatusBadRequest)
-		return
-	}
-	_, curVer, getErr := h.cm.Get(key)
-	if getErr == rpcapi.OK || getErr == rpcapi.ErrNoKey {
-		writeJSON(w, map[string]any{"success": true, "key": key, "version": int(curVer)})
-	} else {
-		writeJSON(w, map[string]any{"success": false, "err": string(getErr)})
-	}
 }
 
 // --- API: 批量随机写入 ---
@@ -1017,7 +906,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/node/start", h.HandleStartNode)
 	mux.HandleFunc("/api/node/isolate", h.HandleIsolateNode)
 	mux.HandleFunc("/api/node/recover-node", h.HandleRecoverNode)
-	mux.HandleFunc("/api/node/recover-group", h.HandleRecoverGroup)
 
 	// Group operations
 	mux.HandleFunc("/api/group/kill", h.HandleKillGroup)
@@ -1026,14 +914,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/group/leave", h.HandleLeaveGroup)
 
 	// Network
-	mux.HandleFunc("/api/network/recover-all", h.HandleRecoverAllGroups)
 	mux.HandleFunc("/api/network/params", h.HandleNetParams)
 	mux.HandleFunc("/api/network/reliable", h.HandleReliable)
 	mux.HandleFunc("/api/network/long-reordering", h.HandleLongReordering)
-
-	// CAS Put（独立单次，前端并发调用实时显示）
-	mux.HandleFunc("/api/put-cas", h.HandlePutCas)
-	mux.HandleFunc("/api/cas-get-version", h.HandleCasGetVersion)
 
 	// Chaos Monkey
 	mux.HandleFunc("/api/chaos/start", h.HandleChaosStart)

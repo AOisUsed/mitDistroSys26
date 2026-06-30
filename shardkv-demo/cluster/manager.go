@@ -511,49 +511,6 @@ func (cm *ClusterManager) RecoverNode(gid tester.Tgid, srv int) {
 	log.Printf("[Cluster] 已恢复节点 %s 的网络连接（连接到 %v）", sg.SrvName(srv), alive)
 }
 
-// RecoverGroup 恢复指定组的全部网络连接（取消所有分区），但只操作存活节点，跳过已下线节点
-func (cm *ClusterManager) RecoverGroup(gid tester.Tgid) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	sg := cm.infra.Group(gid)
-	if sg == nil {
-		return
-	}
-	connected := sg.GetConnected()
-	alive := make([]int, 0)
-	for i := 0; i < sg.N(); i++ {
-		if i < len(connected) && connected[i] {
-			alive = append(alive, i)
-		}
-	}
-	sg.Partition(alive, []int{})
-	// 清除指定组的隔离记录
-	delete(cm.isolated, gid)
-	log.Printf("[Cluster] 已恢复组 %d 的网络连接（仅操作 %d 个存活节点）", gid, len(alive))
-}
-
-// RecoverAllGroups 恢复所有组的网络连接
-func (cm *ClusterManager) RecoverAllGroups() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	for gid := range cm.groups {
-		sg := cm.infra.Group(gid)
-		if sg == nil {
-			continue
-		}
-		n := sg.N()
-		all := make([]int, n)
-		for i := 0; i < n; i++ {
-			all[i] = i
-		}
-		sg.Partition(all, []int{})
-	}
-	cm.isolated = make(map[tester.Tgid]map[int]bool) // 清除所有隔离记录
-	log.Printf("[Cluster] 已恢复全部组的网络连接")
-}
-
 // StartServer 启动指定组中的某个节点，带健康检查
 func (cm *ClusterManager) StartServer(gid tester.Tgid, srv int) error {
 	sg := cm.infra.Group(gid)

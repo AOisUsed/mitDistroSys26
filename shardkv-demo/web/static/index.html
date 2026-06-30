@@ -944,25 +944,6 @@
         refreshStatus();
     }
 
-    async function doRecoverGroup(gid) {
-        const result = await api('/api/node/recover-group', {
-            method: 'POST',
-            body: JSON.stringify({gid})
-        });
-        if (result.success) {
-            addLog(`RecoverGroup: 组 ${gid} 全部存活节点网络已恢复`, 'ok');
-        } else {
-            addLog(`RecoverGroup: 组 ${gid} 恢复失败 - ${result.error || '未知错误'}`, 'err');
-        }
-        refreshStatus();
-    }
-
-    async function doRecoverAll() {
-        await api('/api/network/recover-all', {method: 'POST'});
-        addLog(`RecoverAll: 所有组的网络连接已恢复`, 'ok');
-        refreshStatus();
-    }
-
     async function doKillNodeById(gid, srv) {
         await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv})});
         addLog(`KillNode: server-${gid}-${srv}`, 'err');
