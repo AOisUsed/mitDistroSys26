@@ -787,7 +787,97 @@
         }
     }
 
-    // 默认超时 10s，可通过 options.timeoutSec 按操作定制。
+    // ========== 异步任务跟踪 ==========
+    let pendingTasks = {}; // {taskId: {action, key, value, shard, label, resultDiv, gid, btn, ...}}
+
+    function handleTaskDone(task) {
+        const pending = pendingTasks[task.taskId];
+        if (pending) { delete pendingTasks[task.taskId]; }
+        switch (task.action) {
+            case 'put': {
+                const k = (pending && pending.key) || task.key || '?';
+                const v = (pending && pending.value) || '?';
+                const sh = (pending && pending.shard) || key2Shard(k);
+                document.getElementById('kvResult').textContent = task.success
+                    ? `Put: ${k} = ${v} (分片 ${sh})`
+                    : `Put 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh})`;
+                if (task.success) {
+                    addLog(`Put key="${k}" value="${v}" (分片 ${sh}) ✅`, 'ok');
+                } else {
+                    addLog(`Put key="${k}" value="${v}" 失败 ${task.error || task.message} (分片 ${sh})`, 'err');
+                }
+                document.getElementById('putVal').value = randomChars(3);
+                refreshStatus();
+                break;
+            }
+            case 'get': {
+                const k = (pending && pending.key) || task.key || '?';
+                const sh = (pending && pending.shard);
+                if (task.success && task.data) {
+                    const d = task.data;
+                    document.getElementById('kvResult').textContent = `Get: ${d.key} = "${d.value}" (分片 ${sh}, v${d.version})`;
+                    addLog(`Get key="${k}" -> "${d.value}" (分片 ${sh}, v${d.version}) ✅`, 'ok');
+                } else {
+                    document.getElementById('kvResult').textContent = `Get 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh || '?'})`;
+                    addLog(`Get key="${k}" 失败 ${task.error || task.message}`, 'err');
+                }
+                break;
+            }
+            case 'join': {
+                if (task.success) {
+                    if (task.message) addLog(`JoinGroup: ${task.message}`, 'shard');
+                    addLog(`JoinGroup: ✅ 新组 ${task.gid} 已加入集群，分片迁移完成`, 'shard');
+                } else {
+                    addLog(`JoinGroup: ❌ ${task.error || '组加入失败'}`, 'err');
+                }
+                optimisticPendingMigration = false;
+                refreshStatus();
+                break;
+            }
+            case 'leave': {
+                if (pending) leaveInFlight = false;
+                if (task.success) {
+                    addLog(`LeaveGroup: ✅ 组 ${task.gid} 已离开集群，分片已迁移到其他组`, 'shard');
+                } else {
+                    addLog(`LeaveGroup: ❌ ${task.error || '组移除失败'}`, 'err');
+                }
+                optimisticPendingMigration = false;
+                refreshStatus();
+                break;
+            }
+            case 'batch-put': {
+                if (task.success && task.data) {
+                    const d = task.data;
+                    if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
+                        `<div>成功 <strong>${d.successCount}</strong> / 失败 <strong>${d.failCount}</strong> | 用时 ${d.elapsed}s</div>`;
+                    addLog(`批量写入完成: 成功 = ${d.successCount} 失败 = ${d.failCount} 用时 = ${d.elapsed}s`, 'ok');
+                } else {
+                    if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
+                        `<div style="color:#ff4d4f;">批量写入失败: ${task.error || '未知错误'}</div>`;
+                    addLog(`批量写入失败: ${task.error || '未知错误'}`, 'err');
+                }
+                if (pending && pending.btn) { pending.btn.disabled = false; }
+                batchPutBusy = false;
+                refreshStatus();
+                break;
+            }
+            case 'cas-race': {
+                if (task.success && task.data) {
+                    const d = task.data;
+                    if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
+                        `<div style="color:#764ba2;">成功 <strong>${d.successCount}</strong> / 版本冲突 <strong>${d.versionErrCount}</strong> | 最终 "${d.finalValue}" | 用时 ${d.elapsed}s</div>`;
+                    addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}s`, 'shard');
+                    document.getElementById('putVal').value = d.finalValue || '';
+                } else {
+                    if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
+                        `<div style="color:#ff4d4f;">CAS 竞赛失败: ${task.error || '未知错误'}</div>`;
+                    addLog(`CAS 竞赛失败: ${task.error || '未知错误'}`, 'err');
+                }
+                refreshStatus();
+                break;
+            }
+        }
+    }
     async function api(path, options, silent) {
         const timeoutSec = (options && options.timeoutSec) || 10;
         const controller = new AbortController();
@@ -881,38 +971,26 @@
         const value = document.getElementById('putVal').value.trim();
         if (!key) { addLog('Put: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
+        addLog(`⏳ Put: key="${key}" value="${value}" (分片 ${shard}) 已提交...`, 'shard');
         const result = await api('/api/kv/', {
             method: 'PUT',
             body: JSON.stringify({key, value}),
+            timeoutSec: 5,
             label: '写入'
         });
-        document.getElementById('kvResult').textContent =
-            result.success
-                ? `Put: ${key} = ${value} (分片 ${shard}, reqVer = ${result.reqVer})`
-                : `Put 失败: ${result.err || 'unknown error'} (分片 ${shard}, reqVer = ${result.reqVer})`;
-        if (result.success) {
-            addLog(`Put key="${key}" value="${value}" (分片 ${shard}, version = ${result.reqVer})`, 'ok');
-        } else {
-            addLog(`Put key="${key}" value="${value}" 失败 ${result.err} (分片 ${shard}, version = ${result.reqVer})`, 'err');
+        if (result.async) {
+            pendingTasks[result.taskId] = { action: 'put', key, value, shard };
         }
-
-        document.getElementById('putVal').value = randomChars(3);
-        refreshStatus();
     }
 
     async function doGet() {
         const key = document.getElementById('getKey').value.trim();
         if (!key) { addLog('Get: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', label: '读取'});
-        document.getElementById('kvResult').textContent =
-            result.success
-                ? `Get: ${key} = "${result.value}" (分片 ${shard}, v${result.version})`
-                : `Get 失败: ${result.err || 'unknown error'} (分片 ${shard})`;
-        if (result.success) {
-            addLog(`Get key="${key}" -> "${result.value}" (分片 ${shard}, v${result.version})`, 'ok');
-        } else {
-            addLog(`Get key="${key}" 失败 ${result.err || 'unknown error'} (分片 ${shard})`, 'err');
+        addLog(`⏳ Get: key="${key}" (分片 ${shard}) 已提交...`, 'shard');
+        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', timeoutSec: 5, label: '读取'});
+        if (result.async) {
+            pendingTasks[result.taskId] = { action: 'get', key, shard };
         }
     }
 
@@ -988,28 +1066,20 @@
     }
 
     async function doJoinGroup() {
-        addLog(`JoinGroup: ── 发起新组加入操作 ──`, 'shard');
+        addLog(`⏳ JoinGroup: ── 发起新组加入操作 ──`, 'shard');
         // 乐观更新：立即显示 pending 标记，不等 POST 返回
         optimisticPendingMigration = true;
         refreshStatus();
 
         let result;
         try {
-            result = await api('/api/group/join', {method: 'POST', label: '加入组'});
+            result = await api('/api/group/join', {method: 'POST', timeoutSec: 5, label: '加入组'});
         } finally {
-            optimisticPendingMigration = false; // 异常也清除标记
+            // 不在 finally 清除 optimisticPendingMigration，等 SSE 任务完成后 handleTaskDone 清除
         }
-        if (result.success) {
-            if (result.message) {
-                addLog(`JoinGroup: ${result.message}`, 'shard');
-            }
-            addLog(`JoinGroup: ✅ 新组 ${result.gid} 已加入集群，分片迁移完成`, 'shard');
-        } else if (result.message) {
-            addLog(`JoinGroup: ❌ ${result.message}`, 'err');
-        } else {
-            addLog(`JoinGroup: ❌ 组加入失败`, 'err');
+        if (result.async) {
+            pendingTasks[result.taskId] = { action: 'join', gid: result.gid };
         }
-        refreshStatus();
     }
 
     let leaveInFlight = false;
@@ -1019,24 +1089,24 @@
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
         if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         leaveInFlight = true;
-        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        addLog(`⏳ LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
         try {
-            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), label: '离开组'});
-        } finally {
-            optimisticPendingMigration = false; // 异常也清除标记
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '离开组'});
+        } catch (err) {
+            optimisticPendingMigration = false;
+            leaveInFlight = false;
+            return;
         }
-        if (result.success) {
-            addLog(`LeaveGroup: ✅ 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
-        } else if (result.message) {
-            addLog(`LeaveGroup: ❌ ${result.message}`, 'err');
+        if (result.async) {
+            pendingTasks[result.taskId] = { action: 'leave', gid };
         } else {
-            addLog(`LeaveGroup: ❌ 组 ${gid} 移除失败`, 'err');
+            // 同步失败（如 gid=0 拒绝）
+            optimisticPendingMigration = false;
+            leaveInFlight = false;
         }
-        leaveInFlight = false;
-        refreshStatus();
     }
 
 
@@ -1235,23 +1305,21 @@
     // ========== 快捷 Leave（从节点状态标题调用） ==========
     async function doLeaveGroupById(gid) {
         if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
-        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        addLog(`⏳ LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
         try {
-            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), label: '离开组'});
-        } finally {
-            optimisticPendingMigration = false; // 异常也清除标记
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '离开组'});
+        } catch (err) {
+            optimisticPendingMigration = false;
+            return;
         }
-        if (result.success) {
-            addLog(`LeaveGroup: 组 ${gid} 已离开集群，分片已迁移到其他组`, 'shard');
-        } else if (result.message) {
-            addLog(`LeaveGroup: ${result.message}`, 'err');
+        if (result.async) {
+            pendingTasks[result.taskId] = { action: 'leave', gid };
         } else {
-            addLog(`LeaveGroup: 组 ${gid} 移除失败`, 'err');
+            optimisticPendingMigration = false;
         }
-        refreshStatus();
     }
 
     // ========== 混沌猴子 ==========
@@ -1581,8 +1649,8 @@
         if (btn) btn.disabled = true;
 
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<span class="spinner"></span> 写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...`;
-        addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'}, 并发`, 'shard');
+        resultDiv.innerHTML = `<span class="spinner"></span> ⏳ 写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...`;
+        addLog(`⏳ 批量写入: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'} 已提交...`, 'shard');
 
         const startTime = Date.now();
 
@@ -1594,29 +1662,25 @@
             const result = await api('/api/kv/batch-put', {
                 method: 'POST',
                 body: JSON.stringify(body),
-                timeoutSec: 60,
+                timeoutSec: 5,
                 label: '批量写入'
             });
 
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            if (result.success) {
-                resultDiv.innerHTML = `<div>成功 <strong>${result.successCount}</strong> / 失败 <strong>${result.failCount}</strong> | 用时 ${elapsed}s</div>`;
-                addLog(`批量写入完成: 成功 = ${result.successCount} 失败 = ${result.failCount} 用时 = ${elapsed}s`, 'ok');
+            if (result.async) {
+                pendingTasks[result.taskId] = { action: 'batch-put', resultDiv, btn };
             } else {
-                resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入失败: ${result.err || '未知错误'}</div>`;
-                addLog(`批量写入失败: ${result.err || '未知错误'}`, 'err');
+                // 同步失败（参数错误等）
+                resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入失败: ${result.error || '请求被拒绝'}</div>`;
+                addLog(`批量写入失败: ${result.error || '请求被拒绝'}`, 'err');
+                batchPutBusy = false;
+                if (btn) btn.disabled = false;
             }
         } catch (err) {
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入异常: ${err.message} (${elapsed}s)</div>`;
+            batchPutBusy = false;
+            if (btn) btn.disabled = false;
+            resultDiv.innerHTML = `<div style="color:#ff4d4f;">批量写入异常: ${err.message}</div>`;
             addLog(`批量写入异常: ${err.message}`, 'err');
         }
-
-        // === 解锁：无论成败，都允许下一轮 ===
-        batchPutBusy = false;
-        if (btn) btn.disabled = false;
-
-        await refreshStatus();
     }
 
     initShardSelect();
@@ -1647,6 +1711,12 @@
         const evtSource = new EventSource('/api/events');
         evtSource.addEventListener('leader-change', function(e) {
             lightRefreshNodeStatus();
+        });
+        evtSource.addEventListener('task-done', function(e) {
+            try {
+                const task = JSON.parse(e.data);
+                handleTaskDone(task);
+            } catch (err) {}
         });
         evtSource.onerror = function() {
             evtSource.close();
@@ -1879,30 +1949,26 @@
 
         const resultDiv = document.getElementById('raceResult');
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
-        addLog(`CAS 竞赛开始: ${nClient} 个客户端并发 CAS Put key="${key}"`, 'shard');
+        resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> ⏳ CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
+        addLog(`⏳ CAS 竞赛: ${nClient} 个客户端并发 CAS Put key="${key}" 已提交...`, 'shard');
         try {
             const result = await api('/api/kv/cas-race', {
                 method: 'POST',
                 body: JSON.stringify({key, nClient}),
-                timeoutSec: 60,
+                timeoutSec: 5,
                 label: 'CAS 竞赛'
             });
 
-            if (result.success) {
-                addLog(`CAS 竞赛完成: 成功=${result.successCount} 冲突=${result.versionErrCount} → 最终="${result.finalValue}" 用时=${result.elapsed}s`, 'shard');
-                resultDiv.innerHTML = `<div style="color:#764ba2;">成功 <strong>${result.successCount}</strong> / 版本冲突 <strong>${result.versionErrCount}</strong> | 最终 "${result.finalValue}" | 用时 ${result.elapsed}s</div>`;
-                document.getElementById('putVal').value = result.finalValue || '';
+            if (result.async) {
+                pendingTasks[result.taskId] = { action: 'cas-race', key, resultDiv };
             } else {
-                addLog(`CAS 竞赛失败: ${result.err || '未知错误'}`, 'err');
-                resultDiv.innerHTML = `<div style="color:#ff4d4f;">CAS 竞赛失败: ${result.err || '未知错误'}</div>`;
+                addLog(`CAS 竞赛失败: ${result.error || '请求被拒绝'}`, 'err');
+                resultDiv.innerHTML = `<div style="color:#ff4d4f;">CAS 竞赛失败: ${result.error || '请求被拒绝'}</div>`;
             }
         } catch (err) {
             addLog(`CAS 竞赛异常: ${err.message}`, 'err');
             resultDiv.innerHTML = `<div style="color:#ff4d4f;">CAS 竞赛异常: ${err.message}</div>`;
         }
-
-        await refreshStatus();
     }
 
 </script>

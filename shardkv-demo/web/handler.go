@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"kvstore/kvsrv/rpcapi"
@@ -20,6 +21,7 @@ type Handler struct {
 	cm        *cluster.ClusterManager
 	staticDir string // 静态文件目录（shardkv-demo 目录路径）
 	sseBroker *SSEBroker
+	taskSeq   atomic.Int64 // 异步任务序列号
 }
 
 func NewHandler(cm *cluster.ClusterManager) *Handler {
@@ -112,81 +114,102 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shard := shardcfg.Key2Shard(req.Key)
+	taskID := fmt.Sprintf("put-%s-%d", req.Key, h.taskSeq.Add(1))
 
-	// 超时保护的 Get：在 goroutine 中执行，12s 超时
-	type getResult struct {
-		val     string
-		version rpcapi.Tversion
-		err     rpcapi.Err
-	}
-	getCh := make(chan getResult, 1)
+	// 立即返回 taskId，异步执行
+	writeJSON(w, map[string]any{
+		"taskId": taskID,
+		"async":  true,
+		"action": "put",
+		"key":    req.Key,
+	})
+
 	go func() {
-		v, ver, e := h.cm.Get(req.Key)
-		getCh <- getResult{v, ver, e}
-	}()
+		shard := shardcfg.Key2Shard(req.Key)
 
-	var version rpcapi.Tversion
-	select {
-	case gres := <-getCh:
-		if gres.err != rpcapi.OK && gres.err != rpcapi.ErrNoKey {
-			log.Printf("[Put] key=%q S%d Get 失败: %s", req.Key, shard, gres.err)
-			writeJSON(w, map[string]any{
-				"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
-				"err": string(gres.err),
+		// Get 当前版本
+		type getResult struct {
+			val     string
+			version rpcapi.Tversion
+			err     rpcapi.Err
+		}
+		getCh := make(chan getResult, 1)
+		go func() {
+			v, ver, e := h.cm.Get(req.Key)
+			getCh <- getResult{v, ver, e}
+		}()
+
+		var version rpcapi.Tversion
+		select {
+		case gres := <-getCh:
+			if gres.err != rpcapi.OK && gres.err != rpcapi.ErrNoKey {
+				log.Printf("[Put] key=%q S%d Get 失败 (task=%s): %s", req.Key, shard, taskID, gres.err)
+				h.PublishTaskDone(TaskDoneEvent{
+					TaskID:  taskID,
+					Success: false,
+					Action:  "put",
+					Error:   string(gres.err),
+				})
+				return
+			}
+			version = gres.version
+		case <-time.After(12 * time.Second):
+			log.Printf("[Put] key=%q S%d Get 超时 (task=%s)", req.Key, shard, taskID)
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "put",
+				Error:   "ErrTimeout",
+				Message: "集群无响应（可能是 Raft 组无 leader）",
 			})
 			return
 		}
-		version = gres.version
-	case <-time.After(12 * time.Second):
-		log.Printf("[Put] key=%q S%d Get 超时: 集群无响应 (Raft 可能无 leader)", req.Key, shard)
 
-		writeJSON(w, map[string]any{
-			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
-			"err": "ErrTimeout", "message": "集群无响应（可能是 Raft 组无 leader）",
-		})
-		return
-	}
+		// Put
+		putCh := make(chan rpcapi.Err, 1)
+		go func() {
+			putCh <- h.cm.Put(req.Key, req.Value, version)
+		}()
 
-	// 超时保护的 Put
-	putCh := make(chan rpcapi.Err, 1)
-	go func() {
-		putCh <- h.cm.Put(req.Key, req.Value, version)
+		var putErr rpcapi.Err
+		select {
+		case putErr = <-putCh:
+		case <-time.After(12 * time.Second):
+			log.Printf("[Put] key=%q S%d 超时 (task=%s): PUT 无响应", req.Key, shard, taskID)
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "put",
+				Error:   "ErrTimeout",
+				Message: "PUT 超时（集群无响应）",
+			})
+			return
+		}
+
+		if putErr == rpcapi.OK {
+			log.Printf("[Put] key=%q value=%q S%d version=%d OK (task=%s)", req.Key, req.Value, shard, version, taskID)
+			payload, _ := json.Marshal(map[string]any{
+				"key":    req.Key,
+				"value":  req.Value,
+				"shard":  int(shard),
+				"reqVer": int(version),
+			})
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: true,
+				Action:  "put",
+				Data:    payload,
+			})
+		} else {
+			log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (task=%s, err=%s)", req.Key, req.Value, shard, version, taskID, putErr)
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "put",
+				Error:   string(putErr),
+			})
+		}
 	}()
-
-	var putErr rpcapi.Err
-	select {
-	case putErr = <-putCh:
-	case <-time.After(12 * time.Second):
-		log.Printf("[Put] key=%q S%d 超时: PUT 无响应", req.Key, shard)
-		writeJSON(w, map[string]any{
-			"success": false, "key": req.Key, "value": req.Value, "shard": int(shard),
-			"err": "ErrTimeout", "message": "PUT 超时（集群无响应）",
-		})
-		return
-	}
-
-	resp := struct {
-		Success bool   `json:"success"`
-		Err     string `json:"err,omitempty"`
-		Key     string `json:"key"`
-		Value   string `json:"value"`
-		Shard   int    `json:"shard"`
-		ReqVer  int    `json:"reqVer"`
-	}{
-		Key:    req.Key,
-		Value:  req.Value,
-		Shard:  int(shard),
-		ReqVer: int(version),
-	}
-	if putErr == rpcapi.OK {
-		resp.Success = true
-		log.Printf("[Put] key=%q value=%q S%d version=%d OK", req.Key, req.Value, shard, version)
-	} else {
-		resp.Err = string(putErr)
-		log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (err=%s)", req.Key, req.Value, shard, version, putErr)
-	}
-	writeJSON(w, resp)
 }
 
 func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
@@ -200,56 +223,71 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 超时保护的 Get
-	type getResult struct {
-		val     string
-		version rpcapi.Tversion
-		err     rpcapi.Err
-	}
-	getCh := make(chan getResult, 1)
+	taskID := fmt.Sprintf("get-%s-%d", key, h.taskSeq.Add(1))
+
+	// 立即返回 taskId，异步执行
+	writeJSON(w, map[string]any{
+		"taskId": taskID,
+		"async":  true,
+		"action": "get",
+		"key":    key,
+	})
+
 	go func() {
-		v, ver, e := h.cm.Get(key)
-		getCh <- getResult{v, ver, e}
+		type getResult struct {
+			val     string
+			version rpcapi.Tversion
+			err     rpcapi.Err
+		}
+		getCh := make(chan getResult, 1)
+		go func() {
+			v, ver, e := h.cm.Get(key)
+			getCh <- getResult{v, ver, e}
+		}()
+
+		select {
+		case gres := <-getCh:
+			if gres.err == rpcapi.OK {
+				log.Printf("[Get] key=%q value=%q version=%d OK (task=%s)", key, gres.val, gres.version, taskID)
+				payload, _ := json.Marshal(map[string]any{
+					"key":     key,
+					"value":   gres.val,
+					"version": int(gres.version),
+				})
+				h.PublishTaskDone(TaskDoneEvent{
+					TaskID:  taskID,
+					Success: true,
+					Action:  "get",
+					Data:    payload,
+				})
+			} else if gres.err == rpcapi.ErrNoKey {
+				log.Printf("[Get] key=%q 失败 (task=%s, err=ErrNoKey)", key, taskID)
+				h.PublishTaskDone(TaskDoneEvent{
+					TaskID:  taskID,
+					Success: false,
+					Action:  "get",
+					Error:   "ErrNoKey",
+				})
+			} else {
+				log.Printf("[Get] key=%q 失败 (task=%s, err=%s)", key, taskID, gres.err)
+				h.PublishTaskDone(TaskDoneEvent{
+					TaskID:  taskID,
+					Success: false,
+					Action:  "get",
+					Error:   string(gres.err),
+				})
+			}
+		case <-time.After(12 * time.Second):
+			log.Printf("[Get] key=%q 超时 (task=%s): 集群无响应 (Raft 可能无 leader)", key, taskID)
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "get",
+				Error:   "ErrTimeout",
+				Message: "集群无响应（可能是 Raft 组无 leader）",
+			})
+		}
 	}()
-
-	var value string
-	var version rpcapi.Tversion
-	var getErr rpcapi.Err
-	select {
-	case gres := <-getCh:
-		value, version, getErr = gres.val, gres.version, gres.err
-	case <-time.After(12 * time.Second):
-		log.Printf("[Get] key=%q 超时: 集群无响应 (Raft 可能无 leader)", key)
-
-		writeJSON(w, map[string]any{
-			"success": false, "key": key,
-			"err": "ErrTimeout", "message": "集群无响应（可能是 Raft 组无 leader）",
-		})
-		return
-	}
-
-	resp := struct {
-		Success bool            `json:"success"`
-		Key     string          `json:"key"`
-		Value   string          `json:"value,omitempty"`
-		Version rpcapi.Tversion `json:"version,omitempty"`
-		Err     string          `json:"err,omitempty"`
-	}{
-		Key: key,
-	}
-	if getErr == rpcapi.OK {
-		resp.Success = true
-		resp.Value = value
-		resp.Version = version
-		log.Printf("[Get] key=%q value=%q version=%d OK", key, value, version)
-	} else if getErr == rpcapi.ErrNoKey {
-		resp.Err = "ErrNoKey"
-		log.Printf("[Get] key=%q 失败 (err=ErrNoKey)", key)
-	} else {
-		resp.Err = string(getErr)
-		log.Printf("[Get] key=%q 失败 (err=%s)", key, getErr)
-	}
-	writeJSON(w, resp)
 }
 
 // --- API: Node 操作 ---
@@ -396,24 +434,33 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gid := h.cm.NewGid()
-	ok, msg := h.cm.JoinGroup(gid)
-	resp := map[string]any{"success": ok, "action": "join", "gid": int(gid)}
-	if ok {
-		if msg != "" {
-			resp["message"] = msg
+	taskID := fmt.Sprintf("join-%d-%d", int(gid), h.taskSeq.Add(1))
+
+	// 立即返回 taskId，异步执行 JoinGroup
+	writeJSON(w, map[string]any{
+		"taskId": taskID,
+		"async":  true,
+		"action": "join",
+		"gid":    int(gid),
+	})
+
+	go func() {
+		ok, msg := h.cm.JoinGroup(gid)
+		ev := TaskDoneEvent{
+			TaskID:  taskID,
+			Success: ok,
+			Action:  "join",
+			GID:     int(gid),
 		}
-		log.Printf("[JoinGroup] 新组 %d 已加入 %s", gid, func() string {
-			if msg != "" {
-				return fmt.Sprintf(" (%s)", msg)
-			}
-			return ""
-		}())
-	} else {
-		resp["error"] = msg
-		resp["message"] = msg
-		log.Printf("[JoinGroup] 加入新组失败: %s", msg)
-	}
-	writeJSON(w, resp)
+		if ok {
+			ev.Message = msg
+			log.Printf("[JoinGroup] 新组 %d 已加入 (task=%s)", gid, taskID)
+		} else {
+			ev.Error = msg
+			log.Printf("[JoinGroup] 加入新组失败 (task=%s): %s", taskID, msg)
+		}
+		h.PublishTaskDone(ev)
+	}()
 }
 
 func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
@@ -431,16 +478,33 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"success": false, "action": "leave", "gid": 0, "error": "ConfigStore (组 0) 是系统配置仓库，不能离开集群", "message": "配置仓库 (组 0) 是系统核心组件，不允许离开集群"})
 		return
 	}
-	ok, errMsg := h.cm.LeaveGroup(tester.Tgid(req.GID))
-	resp := map[string]any{"success": ok, "action": "leave", "gid": req.GID}
-	if ok {
-		log.Printf("[LeaveGroup] 组 %d 已离开", req.GID)
-	} else {
-		resp["error"] = errMsg
-		resp["message"] = errMsg // 便于前端直接展示
-		log.Printf("[LeaveGroup] 组 %d 离开失败: %s", req.GID, errMsg)
-	}
-	writeJSON(w, resp)
+	gid := req.GID
+	taskID := fmt.Sprintf("leave-%d-%d", gid, h.taskSeq.Add(1))
+
+	// 立即返回 taskId，异步执行 LeaveGroup
+	writeJSON(w, map[string]any{
+		"taskId": taskID,
+		"async":  true,
+		"action": "leave",
+		"gid":    gid,
+	})
+
+	go func() {
+		ok, errMsg := h.cm.LeaveGroup(tester.Tgid(gid))
+		ev := TaskDoneEvent{
+			TaskID:  taskID,
+			Success: ok,
+			Action:  "leave",
+			GID:     gid,
+		}
+		if ok {
+			log.Printf("[LeaveGroup] 组 %d 已离开 (task=%s)", gid, taskID)
+		} else {
+			ev.Error = errMsg
+			log.Printf("[LeaveGroup] 组 %d 离开失败 (task=%s): %s", gid, taskID, errMsg)
+		}
+		h.PublishTaskDone(ev)
+	}()
 }
 
 // --- API: Network ---
@@ -637,85 +701,89 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 	if req.Shard != nil {
 		shardInfo = fmt.Sprintf("分片 %d", *req.Shard)
 	}
-	log.Printf("[BatchPut] 开始批量写入: count=%d shard=%s", req.Count, shardInfo)
-	start := time.Now()
+	taskID := fmt.Sprintf("batch-%d", h.taskSeq.Add(1))
 
-	// 生成 key-value pair
-	type kvPair struct {
-		key   string
-		value string
-	}
-	pairs := make([]kvPair, 0, req.Count)
-
-	// 预分配用于生成随机 value 的 buffer
-	valBuf := make([]byte, 3)
-
-	// 生成 key：若指定分片则持续生成直到映射到目标分片
-	for len(pairs) < req.Count {
-		key := batchRandomKey()
-		shard := shardcfg.Key2Shard(key)
-
-		// 如果指定了目标分片，跳过不符合的 key
-		if req.Shard != nil && int(shard) != *req.Shard {
-			continue
-		}
-
-		// 生成随机 value
-		for i := range valBuf {
-			randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
-			valBuf[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
-		}
-
-		pairs = append(pairs, kvPair{key: key, value: string(valBuf)})
-	}
-
-	log.Printf("[BatchPut] 已生成 %d 个 key-value pair, 准备写入", len(pairs))
-
-	// 并发写入：通过 Clerk 池复用 Clerk（独立 clerkId，服务端按 client 分别去重）
-	// 池容量见 cluster.ClerkPoolSize，每个 goroutine 借出后必须归还
-	type opResult struct {
-		idx int
-		err rpcapi.Err
-	}
-	resultCh := make(chan opResult, len(pairs))
-
-	pool := h.cm.GetClerkPool()
-
-	for i, pair := range pairs {
-		go func(idx int, k, v string) {
-			ck := pool.Borrow()
-			defer pool.Return(ck) // 确保所有路径都归还
-
-			_, ver, getErr := ck.Get(k)
-			if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
-				resultCh <- opResult{idx, getErr}
-				return
-			}
-			putErr := ck.Put(k, v, ver)
-			resultCh <- opResult{idx, putErr}
-		}(i, pair.key, pair.value)
-	}
-
-	// 收集结果
-	successCount := 0
-	failCount := 0
-	for i := 0; i < len(pairs); i++ {
-		res := <-resultCh
-		if res.err == rpcapi.OK {
-			successCount++
-		} else {
-			failCount++
-			log.Printf("[BatchPut] key=%q 写入失败: %s", pairs[res.idx].key, res.err)
-		}
-	}
-	elapsed := time.Since(start).Seconds()
-	log.Printf("[BatchPut] 完成: 成功=%d 失败=%d 用时=%.1fs", successCount, failCount, elapsed)
+	// 立即返回 taskId，异步执行
 	writeJSON(w, map[string]any{
-		"success":      true,
-		"successCount": successCount,
-		"failCount":    failCount,
-		"elapsed":      elapsed,
+		"taskId": taskID,
+		"async":  true,
+		"action": "batch-put",
+		"count":  req.Count,
 	})
+
+	go func() {
+		log.Printf("[BatchPut] 开始批量写入 (task=%s): count=%d shard=%s", taskID, req.Count, shardInfo)
+		start := time.Now()
+
+		// 生成 key-value pair
+		type kvPair struct {
+			key   string
+			value string
+		}
+		pairs := make([]kvPair, 0, req.Count)
+		valBuf := make([]byte, 3)
+
+		for len(pairs) < req.Count {
+			key := batchRandomKey()
+			shard := shardcfg.Key2Shard(key)
+			if req.Shard != nil && int(shard) != *req.Shard {
+				continue
+			}
+			for i := range valBuf {
+				randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
+				valBuf[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+			}
+			pairs = append(pairs, kvPair{key: key, value: string(valBuf)})
+		}
+
+		log.Printf("[BatchPut] 已生成 %d 个 key-value pair (task=%s)", len(pairs), taskID)
+
+		type opResult struct {
+			idx int
+			err rpcapi.Err
+		}
+		resultCh := make(chan opResult, len(pairs))
+		pool := h.cm.GetClerkPool()
+
+		for i, pair := range pairs {
+			go func(idx int, k, v string) {
+				ck := pool.Borrow()
+				defer pool.Return(ck)
+				_, ver, getErr := ck.Get(k)
+				if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
+					resultCh <- opResult{idx, getErr}
+					return
+				}
+				putErr := ck.Put(k, v, ver)
+				resultCh <- opResult{idx, putErr}
+			}(i, pair.key, pair.value)
+		}
+
+		successCount := 0
+		failCount := 0
+		for i := 0; i < len(pairs); i++ {
+			res := <-resultCh
+			if res.err == rpcapi.OK {
+				successCount++
+			} else {
+				failCount++
+			}
+		}
+		elapsed := time.Since(start).Seconds()
+		log.Printf("[BatchPut] 完成 (task=%s): 成功=%d 失败=%d 用时=%.1fs", taskID, successCount, failCount, elapsed)
+
+		payload, _ := json.Marshal(map[string]any{
+			"successCount": successCount,
+			"failCount":    failCount,
+			"elapsed":      elapsed,
+		})
+		h.PublishTaskDone(TaskDoneEvent{
+			TaskID:  taskID,
+			Success: true,
+			Action:  "batch-put",
+			Data:    payload,
+		})
+	}()
 }
 
 // --- API: CAS 竞赛（后端并发）---
@@ -729,7 +797,7 @@ func casRandomValue() string {
 	return string(b)
 }
 
-// HandleCasRace 后端并发 CAS 竞赛。
+// HandleCasRace 后端并发 CAS 竞赛（异步 + SSE 推送）。
 // POST /api/kv/cas-race  body: {key, nClient}
 func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -753,71 +821,92 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shard := shardcfg.Key2Shard(req.Key)
+	taskID := fmt.Sprintf("cas-%d", h.taskSeq.Add(1))
 
-	// 1. 获取基线版本号
-	_, curVer, getErr := h.cm.Get(req.Key)
-	if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
-		writeJSON(w, map[string]any{"success": false, "err": string(getErr)})
-		return
-	}
-
-	log.Printf("[CasRace] 开始: key=%q S%d nClient=%d version=%d", req.Key, shard, req.NClient, curVer)
-	start := time.Now()
-
-	// 2. 预生成每个客户端的随机 value（主 goroutine 中串行生成，randomSeed 安全）
-	values := make([]string, req.NClient)
-	for i := range values {
-		values[i] = casRandomValue()
-	}
-
-	// 3. 并发启动 N 个 goroutine 从 ClerkPool 借还 Clerk 执行 CAS Put
-	//    每个 Clerk 拥有独立 clientId，服务端按 clientId 分别去重，互不干扰。
-	//    通过池化复用 Clerk，减少临时对象创建，降低 configStore 的 Query() 并发压力。
-	type raceResult struct {
-		err rpcapi.Err
-	}
-	resultCh := make(chan raceResult, req.NClient)
-	pool := h.cm.GetClerkPool()
-
-	for i := 0; i < req.NClient; i++ {
-		go func(val string) {
-			ck := pool.Borrow()
-			defer pool.Return(ck)
-			putErr := ck.Put(req.Key, val, curVer)
-			resultCh <- raceResult{putErr}
-		}(values[i])
-	}
-
-	// 4. 收集结果
-	successCount := 0
-	versionErrCount := 0
-	for i := 0; i < req.NClient; i++ {
-		res := <-resultCh
-		if res.err == rpcapi.OK {
-			successCount++
-		} else {
-			versionErrCount++
-		}
-	}
-
-	elapsed := time.Since(start).Seconds()
-
-	// 5. 获取最终值
-	finalValue, _, _ := h.cm.Get(req.Key)
-
-	log.Printf("[CasRace] 完成: 成功=%d 冲突=%d 用时=%.1fs 最终=%q", successCount, versionErrCount, elapsed, finalValue)
-
+	// 立即返回 taskId，异步执行
 	writeJSON(w, map[string]any{
-		"success":         true,
-		"key":             req.Key,
-		"version":         int(curVer),
-		"nClient":         req.NClient,
-		"successCount":    successCount,
-		"versionErrCount": versionErrCount,
-		"finalValue":      finalValue,
-		"elapsed":         fmt.Sprintf("%.1f", elapsed),
+		"taskId":  taskID,
+		"async":   true,
+		"action":  "cas-race",
+		"key":     req.Key,
+		"nClient": req.NClient,
 	})
+
+	go func() {
+		shard := shardcfg.Key2Shard(req.Key)
+
+		// 1. 获取基线版本号
+		_, curVer, getErr := h.cm.Get(req.Key)
+		if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "cas-race",
+				Error:   string(getErr),
+			})
+			return
+		}
+
+		log.Printf("[CasRace] 开始 (task=%s): key=%q S%d nClient=%d version=%d", taskID, req.Key, shard, req.NClient, curVer)
+		start := time.Now()
+
+		// 2. 预生成每个客户端的随机 value
+		values := make([]string, req.NClient)
+		for i := range values {
+			values[i] = casRandomValue()
+		}
+
+		// 3. 并发启动 N 个 goroutine 执行 CAS Put
+		type raceResult struct {
+			err rpcapi.Err
+		}
+		resultCh := make(chan raceResult, req.NClient)
+		pool := h.cm.GetClerkPool()
+
+		for i := 0; i < req.NClient; i++ {
+			go func(val string) {
+				ck := pool.Borrow()
+				defer pool.Return(ck)
+				putErr := ck.Put(req.Key, val, curVer)
+				resultCh <- raceResult{putErr}
+			}(values[i])
+		}
+
+		// 4. 收集结果
+		successCount := 0
+		versionErrCount := 0
+		for i := 0; i < req.NClient; i++ {
+			res := <-resultCh
+			if res.err == rpcapi.OK {
+				successCount++
+			} else {
+				versionErrCount++
+			}
+		}
+
+		elapsed := time.Since(start).Seconds()
+
+		// 5. 获取最终值
+		finalValue, _, _ := h.cm.Get(req.Key)
+
+		log.Printf("[CasRace] 完成 (task=%s): 成功=%d 冲突=%d 用时=%.1fs 最终=%q", taskID, successCount, versionErrCount, elapsed, finalValue)
+
+		payload, _ := json.Marshal(map[string]any{
+			"key":             req.Key,
+			"version":         int(curVer),
+			"nClient":         req.NClient,
+			"successCount":    successCount,
+			"versionErrCount": versionErrCount,
+			"finalValue":      finalValue,
+			"elapsed":         fmt.Sprintf("%.1f", elapsed),
+		})
+		h.PublishTaskDone(TaskDoneEvent{
+			TaskID:  taskID,
+			Success: true,
+			Action:  "cas-race",
+			Data:    payload,
+		})
+	}()
 }
 
 // --- API: 观测日志开关 ---
