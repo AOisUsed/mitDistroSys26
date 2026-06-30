@@ -85,7 +85,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		HasPendingMigration: state.HasPendingMigration,
 		PendingConfigNum:    state.PendingConfigNum,
 		ConfigCached:        state.ConfigCached,
-		PoolSize:            cluster.ClerkPoolSize,
+		PoolSize:            h.cm.ClerkPoolSize(),
 	}
 
 	for _, gs := range state.Groups {
@@ -713,12 +713,12 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		elapsed := time.Since(start).Seconds()
-		log.Printf("[BatchPut] 完成 (task=%s): 成功=%d 失败=%d 用时=%.1fs", taskID, successCount, failCount, elapsed)
+		log.Printf("[BatchPut] 完成 (task=%s): 成功=%d 失败=%d 用时=%.2fs", taskID, successCount, failCount, elapsed)
 
 		payload, _ := json.Marshal(map[string]any{
 			"successCount": successCount,
 			"failCount":    failCount,
-			"elapsed":      elapsed,
+			"elapsed":      fmt.Sprintf("%.2fs", elapsed),
 		})
 		h.PublishTaskDone(TaskDoneEvent{
 			TaskID:  taskID,
@@ -759,8 +759,8 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
 	}
-	if req.NClient < 1 || req.NClient > cluster.ClerkPoolSize {
-		http.Error(w, fmt.Sprintf("nClient must be 1~%d", cluster.ClerkPoolSize), http.StatusBadRequest)
+	if req.NClient < 1 || req.NClient > h.cm.ClerkPoolSize() {
+		http.Error(w, fmt.Sprintf("nClient must be 1~%d", h.cm.ClerkPoolSize()), http.StatusBadRequest)
 		return
 	}
 
@@ -832,7 +832,7 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		// 5. 获取最终值
 		finalValue, _, _ := h.cm.Get(req.Key)
 
-		log.Printf("[CasRace] 完成 (task=%s): 成功=%d 冲突=%d 用时=%.1fs 最终=%q", taskID, successCount, versionErrCount, elapsed, finalValue)
+		log.Printf("[CasRace] 完成 (task=%s): 成功=%d 冲突=%d 用时=%.2fs 最终=%q", taskID, successCount, versionErrCount, elapsed, finalValue)
 
 		payload, _ := json.Marshal(map[string]any{
 			"key":             req.Key,
@@ -841,7 +841,7 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 			"successCount":    successCount,
 			"versionErrCount": versionErrCount,
 			"finalValue":      finalValue,
-			"elapsed":         fmt.Sprintf("%.1f", elapsed),
+			"elapsed":         fmt.Sprintf("%.2fs", elapsed),
 		})
 		h.PublishTaskDone(TaskDoneEvent{
 			TaskID:  taskID,

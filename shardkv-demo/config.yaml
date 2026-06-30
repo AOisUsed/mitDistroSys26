@@ -10,6 +10,10 @@ nsrv: 3
 # 是否是可靠网络 (true / false)
 reliable: true
 
+# --- Clerk 池容量（同时限制 CAS 并发竞赛 & 批量写入并发度）---
+# 默认 500
+clerkPoolSize: 500
+
 # --- 初始启动的 Shard Group 列表，指定组号及副本节点数 ---
 # 说明：
 # - gid:     组 ID，正整数（1, 2, 3 ...）
@@ -28,14 +32,4 @@ reliable: true
 groups:
   - gid: 1
     servers: 3
-  - gid: 2
-    servers: 5
-  - gid: 3
-    servers: 7
-  - gid: 4
-    servers: 9
-  - gid: 7
-    servers: 11
-  - gid: 11
-    servers: 5
 

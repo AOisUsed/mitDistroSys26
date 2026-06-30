@@ -849,8 +849,8 @@
                 if (task.success && task.data) {
                     const d = task.data;
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
-                        `<div>成功 <strong>${d.successCount}</strong> / 失败 <strong>${d.failCount}</strong> | 用时 ${d.elapsed}s</div>`;
-                    addLog(`批量写入完成: 成功 = ${d.successCount} 失败 = ${d.failCount} 用时 = ${d.elapsed}s`, 'ok');
+                        `<div>成功 <strong>${d.successCount}</strong> / 失败 <strong>${d.failCount}</strong> | 用时 ${d.elapsed}</div>`;
+                    addLog(`批量写入完成: 成功 = ${d.successCount} 失败 = ${d.failCount} 用时 = ${d.elapsed}`, 'ok');
                 } else {
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
                         `<div style="color:#ff4d4f;">批量写入失败: ${task.error || '未知错误'}</div>`;
@@ -865,8 +865,8 @@
                 if (task.success && task.data) {
                     const d = task.data;
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
-                        `<div style="color:#764ba2;">成功 <strong>${d.successCount}</strong> / 版本冲突 <strong>${d.versionErrCount}</strong> | 最终 "${d.finalValue}" | 用时 ${d.elapsed}s</div>`;
-                    addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}s`, 'shard');
+                        `<div style="color:#764ba2;">成功 <strong>${d.successCount}</strong> / 版本冲突 <strong>${d.versionErrCount}</strong> | 最终 "${d.finalValue}" | 用时 ${d.elapsed}</div>`;
+                    addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}`, 'shard');
                     document.getElementById('putVal').value = d.finalValue || '';
                 } else {
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =

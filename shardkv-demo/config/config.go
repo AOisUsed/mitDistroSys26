@@ -15,10 +15,11 @@ type GroupConfig struct {
 
 // DemoConfig 完整配置，对应 config.yaml
 type DemoConfig struct {
-	MaxRaftState int  `yaml:"maxRaftState"` // Raft State 超过此字节数时触发快照；0 或负值表示不触发快照
-	Nsrv         int  `yaml:"nsrv"`         // 每组副本节点数
-	Reliable     bool `yaml:"reliable"`     // 是否可靠网络
-	Cluster      struct {
+	MaxRaftState  int  `yaml:"maxRaftState"`  // Raft State 超过此字节数时触发快照；0 或负值表示不触发快照
+	Nsrv          int  `yaml:"nsrv"`          // 每组副本节点数
+	Reliable      bool `yaml:"reliable"`      // 是否可靠网络
+	ClerkPoolSize int  `yaml:"clerkPoolSize"` // Clerk 池容量 — 同时限制 CAS 并发竞赛 & 批量写入并发度
+	Cluster       struct {
 		Groups []GroupConfig `yaml:"groups"` // 初始组列表（嵌套在 cluster 下，兼容旧配置）
 	} `yaml:"cluster"`
 	Groups []GroupConfig `yaml:"groups"` // 初始组列表（顶层，优先级更高）
@@ -30,6 +31,7 @@ func DefaultConfig() DemoConfig {
 	cfg.MaxRaftState = 5000
 	cfg.Nsrv = 3
 	cfg.Reliable = true
+	cfg.ClerkPoolSize = 500
 	cfg.Groups = []GroupConfig{{Gid: 1, Servers: cfg.Nsrv}}
 	return cfg
 }
@@ -66,6 +68,9 @@ func Load(path string) (DemoConfig, error) {
 	}
 	if cfg.Nsrv <= 0 {
 		cfg.Nsrv = 3
+	}
+	if cfg.ClerkPoolSize <= 0 {
+		cfg.ClerkPoolSize = 500
 	}
 
 	return cfg, nil
