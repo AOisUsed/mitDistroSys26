@@ -62,7 +62,4 @@ restart: stop build start-bg
 
 # 清理
 clean:
-	@echo "==> 清理 ..."
-	rm -f $(BINARY) $(PIDFILE)
-	rm -f ../src/main/kvsrv ../src/main/kvraft ../src/main/shardgrp
-	@echo "==> 清理完成"
+	@bash ../src/cleanup_daemons.sh
