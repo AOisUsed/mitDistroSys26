@@ -47,7 +47,7 @@ func (b *SSEBroker) Unsubscribe(ch chan sseEvent) {
 }
 
 // publish 广播事件到所有 subscriber（非阻塞，channel 满则丢弃）
-func (b *SSEBroker) publish(event sseEvent) {
+func (b *SSEBroker) Publish(event sseEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subscribers {
@@ -70,7 +70,7 @@ type LeaderEvent struct {
 
 // PublishLeaderChange 供外部调用，将 Leader 变更事件发布到 SSE 总线。
 func (h *Handler) PublishLeaderChange(gid tester.Tgid, sid int, isLeader bool) {
-	h.sseBroker.publish(sseEvent{
+	h.sseBroker.Publish(sseEvent{
 		Type: "leader-change",
 		Data: LeaderEvent{
 			GID:      int(gid),
@@ -95,9 +95,32 @@ type TaskDoneEvent struct {
 
 // PublishTaskDone 发布异步任务完成事件。
 func (h *Handler) PublishTaskDone(ev TaskDoneEvent) {
-	h.sseBroker.publish(sseEvent{
+	h.sseBroker.Publish(sseEvent{
 		Type: "task-done",
 		Data: ev,
+	})
+}
+
+// ---------- 观测日志实时推送 ----------
+
+// ObserveLogEvent 观测日志实时推送事件。
+type ObserveLogEvent struct {
+	Tag       string `json:"tag"`
+	Text      string `json:"text"`
+	Id        int64  `json:"id"`
+	UnixMilli int64  `json:"unixMilli"`
+}
+
+// PublishObserveLog 推送观测日志到 SSE 流。
+func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64) {
+	h.sseBroker.Publish(sseEvent{
+		Type: "observe-log",
+		Data: ObserveLogEvent{
+			Tag:       tag,
+			Text:      text,
+			Id:        id,
+			UnixMilli: unixMilli,
+		},
 	})
 }
 

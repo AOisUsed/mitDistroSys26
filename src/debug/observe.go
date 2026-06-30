@@ -80,7 +80,13 @@ var (
 // observeWrite 直接写入环形缓冲区（无终端输出，供 RPC handler 使用避免重复）
 func observeWrite(tag, text string) {
 	idx := observeIdx.Add(1) - 1
-	observeBuf[idx%observeBufSize] = ObserveLine{Tag: tag, Text: text, Id: idx, UnixMilli: time.Now().UnixMilli()}
+	unixMilli := time.Now().UnixMilli()
+	observeBuf[idx%observeBufSize] = ObserveLine{Tag: tag, Text: text, Id: idx, UnixMilli: unixMilli}
+
+	// 实时推送到 SSE（非阻塞，如果回调未注册则跳过）
+	if fn := getObserveLogCallback(); fn != nil {
+		fn(tag, text, idx, unixMilli)
+	}
 }
 
 // observePush 格式化后写入环形缓冲区
@@ -170,6 +176,26 @@ func GetObserveLinesSince(sinceId int64) (lines []ObserveLine, nextId int64) {
 		}
 	}
 	return all, current
+}
+
+// --- SSE 推送回调（Web Demo 实时日志） ---
+//
+// observeWrite 写入环形缓冲区时，同时调用此回调将日志实时推送到 SSE 流。
+// 由 web 包在启动时通过 SetObserveLogCallback 注册。
+
+type ObserveLogCallbackFn func(tag, text string, id int64, unixMilli int64)
+
+var observeLogCallback atomic.Value // stores ObserveLogCallbackFn
+
+// SetObserveLogCallback 设置实时日志推送回调。
+// web 包在 SSEBroker 初始化后调用此函数注册推送逻辑。
+func SetObserveLogCallback(fn ObserveLogCallbackFn) {
+	observeLogCallback.Store(fn)
+}
+
+func getObserveLogCallback() ObserveLogCallbackFn {
+	fn, _ := observeLogCallback.Load().(ObserveLogCallbackFn)
+	return fn
 }
 
 // --- 转发回调（子进程模式） ---

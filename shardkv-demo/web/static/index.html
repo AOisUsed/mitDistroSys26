@@ -1718,6 +1718,19 @@
                 handleTaskDone(task);
             } catch (err) {}
         });
+        // 观测日志实时推送：收到即直接追加，不轮询
+        evtSource.addEventListener('observe-log', function(e) {
+            try {
+                const d = JSON.parse(e.data);
+                addObserveLog(d.tag, d.text, d.unixMilli);
+            } catch (err) {}
+        });
+        evtSource.onopen = function() {
+            // SSE 重连成功时，补拉一次历史日志（追上断线期间漏掉的）
+            if (observeLogExpanded && observeLogLastId > 0) {
+                fetchObserveLogs();
+            }
+        };
         evtSource.onerror = function() {
             evtSource.close();
             // 断线后 5 秒自动重连
@@ -1755,13 +1768,10 @@
         area.style.display = observeLogExpanded ? 'block' : 'none';
         toggle.textContent = observeLogExpanded ? '收起' : '展开';
         if (observeLogExpanded) {
-            // 展开时重置游标为0，先 await 首次拉取完成后再启动轮询
+            // 展开时重置游标，拉取历史日志一次；后续靠 SSE 实时推送
             observeLogLastId = 0;
             area.innerHTML = '';
             await fetchObserveLogs();
-            startObserveLogPoll();
-        } else {
-            stopObserveLogPoll();
         }
         recalculateLogLayout();
     }
@@ -1814,27 +1824,7 @@
         return div.innerHTML;
     }
 
-    let observeLogPollTimer = null;
-    const OBSERVE_LOG_POLL_INTERVAL = 500; // 500ms 轮询间隔
-
-    function startObserveLogPoll() {
-        if (observeLogPollTimer) return;
-        // 用 setTimeout 链式调用替代 setInterval，确保前一次完成后再发起下一次
-        async function pollLoop() {
-            if (!observeLogPollTimer) return;
-            await fetchObserveLogs();
-            observeLogPollTimer = setTimeout(pollLoop, OBSERVE_LOG_POLL_INTERVAL);
-        }
-        observeLogPollTimer = setTimeout(pollLoop, OBSERVE_LOG_POLL_INTERVAL);
-    }
-
-    function stopObserveLogPoll() {
-        if (observeLogPollTimer) {
-            clearTimeout(observeLogPollTimer);
-            observeLogPollTimer = null;
-        }
-    }
-
+    // 首次加载 / 面板展开时拉取历史观测日志
     async function fetchObserveLogs() {
         try {
             const resp = await fetch(API + '/api/observe/logs?since=' + observeLogLastId, {method: 'GET'});

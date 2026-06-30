@@ -25,7 +25,14 @@ type Handler struct {
 }
 
 func NewHandler(cm *cluster.ClusterManager) *Handler {
-	return &Handler{cm: cm, sseBroker: NewSSEBroker()}
+	h := &Handler{cm: cm, sseBroker: NewSSEBroker()}
+
+	// 注册观测日志 SSE 推送回调
+	debug.SetObserveLogCallback(func(tag, text string, id int64, unixMilli int64) {
+		h.PublishObserveLog(tag, text, id, unixMilli)
+	})
+
+	return h
 }
 
 // SetStaticDir 设置静态文件目录路径（用于定位 index.html）
