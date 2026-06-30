@@ -808,8 +808,8 @@
             clearTimeout(timer);
             if (!silent) {
                 if (err.name === 'AbortError') {
-                    const method = (options && options.method) || 'GET';
-                    addLog(`⏳ ${method} ${path} 超时 (${timeoutSec}s) — 后端仍在处理，可稍后查看状态`, 'warn');
+                    const label = (options && options.label) || path.replace(/^\/api\//, '');
+                    addLog(`⏳ ${label} 前端超时 (${timeoutSec}s) — 后端仍在处理`, 'warn');
                 } else {
                     addLog(`API 错误: ${err.message}`, 'err');
                 }
@@ -883,7 +883,8 @@
         const shard = key2Shard(key);
         const result = await api('/api/kv/', {
             method: 'PUT',
-            body: JSON.stringify({key, value})
+            body: JSON.stringify({key, value}),
+            label: '写入'
         });
         document.getElementById('kvResult').textContent =
             result.success
@@ -903,7 +904,7 @@
         const key = document.getElementById('getKey').value.trim();
         if (!key) { addLog('Get: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET'});
+        const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', label: '读取'});
         document.getElementById('kvResult').textContent =
             result.success
                 ? `Get: ${key} = "${result.value}" (分片 ${shard}, v${result.version})`
@@ -923,7 +924,8 @@
         const result = await api('/api/node/isolate', {
             method: 'POST',
             body: JSON.stringify({gid, srv}),
-            timeoutSec: 5
+            timeoutSec: 5,
+            label: '隔离节点'
         });
         if (result.success) {
             addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 已隔离网络 (进程保持运行)`, 'warn');
@@ -937,7 +939,8 @@
         const result = await api('/api/node/recover-node', {
             method: 'POST',
             body: JSON.stringify({gid, srv}),
-            timeoutSec: 5
+            timeoutSec: 5,
+            label: '恢复节点'
         });
         if (result.success) {
             addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 网络已恢复`, 'ok');
@@ -948,13 +951,13 @@
     }
 
     async function doKillNodeById(gid, srv) {
-        await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5});
+        await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5, label: '终止节点'});
         addLog(`KillNode: server-${gid}-${srv}`, 'err');
         refreshStatus();
     }
 
     async function doStartNodeById(gid, srv) {
-        const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5});
+        const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5, label: '启动节点'});
         if (result.success) {
             addLog(`StartNode: server-${gid}-${srv} 已启动`, 'ok');
         } else {
@@ -967,7 +970,7 @@
     async function doKillGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('KillGroup: 请选择有效的组', 'err'); return; }
-        await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
+        await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '终止组'});
         addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'err');
         refreshStatus();
     }
@@ -975,7 +978,7 @@
     async function doStartGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('StartGroup: 请选择有效的组', 'err'); return; }
-        const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
+        const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '启动组'});
         if (result.success) {
             addLog(`StartGroup: 组 ${gid} 全部节点已启动`, 'ok');
         } else {
@@ -992,7 +995,7 @@
 
         let result;
         try {
-            result = await api('/api/group/join', {method: 'POST'});
+            result = await api('/api/group/join', {method: 'POST', label: '加入组'});
         } finally {
             optimisticPendingMigration = false; // 异常也清除标记
         }
@@ -1021,7 +1024,7 @@
         refreshStatus();
         let result;
         try {
-            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), label: '离开组'});
         } finally {
             optimisticPendingMigration = false; // 异常也清除标记
         }
@@ -1086,7 +1089,8 @@
             const result = await api('/api/network/params', {
                 method: 'POST',
                 body: JSON.stringify({[param]: intVal}),
-                timeoutSec: 5
+                timeoutSec: 5,
+                label: '更新网络参数'
             });
             // if (result && result.success) {
             //     const displayVal = param === 'dropRate'
@@ -1109,7 +1113,8 @@
             const result = await api('/api/network/reliable', {
                 method: 'POST',
                 body: JSON.stringify({reliable: !enabled}),
-                timeoutSec: 5
+                timeoutSec: 5,
+                label: '切换不可靠网络'
             });
             if (!result || !result.success) {
                 throw new Error(result ? (result.error || '后端返回失败') : '后端无响应');
@@ -1140,7 +1145,8 @@
                     const result = await api('/api/network/long-reordering', {
                         method: 'POST',
                         body: JSON.stringify({on: false}),
-                        timeoutSec: 5
+                        timeoutSec: 5,
+                        label: '关闭回复乱序'
                     });
                     if (result && result.success) {
                         reorderToggle.checked = false;
@@ -1158,7 +1164,8 @@
                 const result = await api('/api/network/long-reordering', {
                     method: 'POST',
                     body: JSON.stringify({on: true}),
-                    timeoutSec: 5
+                    timeoutSec: 5,
+                    label: '恢复回复乱序'
                 });
                 if (result && result.success) {
                     reorderToggle.checked = true;
@@ -1178,7 +1185,8 @@
                         dropRate: netParams.dropRate,
                         shortDelayMs: netParams.shortDelayMs,
                         longDelayMs: netParams.longDelayMs
-                    })
+                    }),
+                    label: '同步网络参数'
                 });
                 // if (result && result.success) {
                 //     addLog(`网络参数已同步: 丢包率 = ${result.dropRate/10}% | RPC请求延迟 = 0~${result.shortDelayMs}ms | 断线超时延迟 = 0~${result.longDelayMs}ms`, 'info');
@@ -1203,7 +1211,8 @@
             const result = await api('/api/network/long-reordering', {
                 method: 'POST',
                 body: JSON.stringify({on}),
-                timeoutSec: 5
+                timeoutSec: 5,
+                label: '切换回复乱序'
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
@@ -1231,7 +1240,7 @@
         refreshStatus();
         let result;
         try {
-            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid})});
+            result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), label: '离开组'});
         } finally {
             optimisticPendingMigration = false; // 异常也清除标记
         }
@@ -1254,7 +1263,8 @@
         btn.className = 'chaos-btn loading';
         btn.textContent = '处理中...';
         try {
-            const result = await api(path, {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
+            const result = await api(path, {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5,
+                label: currentlyActive ? '停止混沌' : '启动混沌'});
             if (result.success) {
                 chaosStates[gid] = !currentlyActive;
                 if (chaosStates[gid]) {
@@ -1584,7 +1594,8 @@
             const result = await api('/api/kv/batch-put', {
                 method: 'POST',
                 body: JSON.stringify(body),
-                timeoutSec: 60
+                timeoutSec: 60,
+                label: '批量写入'
             });
 
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -1819,8 +1830,8 @@
     window.addEventListener('load', async function() {
         try {
             const [reliableRes, paramsRes] = await Promise.all([
-                api('/api/network/reliable', {method: 'GET'}),
-                api('/api/network/params', {method: 'GET'})
+                api('/api/network/reliable', {method: 'GET', label: '获取网络状态'}),
+                api('/api/network/params', {method: 'GET', label: '获取网络参数'})
             ]);
             if (paramsRes) {
                 netParams = paramsRes;
@@ -1874,7 +1885,8 @@
             const result = await api('/api/kv/cas-race', {
                 method: 'POST',
                 body: JSON.stringify({key, nClient}),
-                timeoutSec: 60
+                timeoutSec: 60,
+                label: 'CAS 竞赛'
             });
 
             if (result.success) {
