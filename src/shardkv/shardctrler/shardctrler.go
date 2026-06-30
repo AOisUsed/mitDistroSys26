@@ -244,7 +244,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 	wg.Wait()
 
 	if isSuperseded.Load() { // if shard migration fails at any stage, don't save newCfg to configStore !
-		debug.ObserveFaultPrintf("分片控制器：分片迁移中发现配置号已过期，放弃此次迁移")
+		debug.ObserveFaultPrintf("分片控制器：分片迁移中发现配置号 %v 已过期，放弃此次迁移", newCfg.Num)
 		return false
 	}
 
