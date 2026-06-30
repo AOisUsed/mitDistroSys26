@@ -128,63 +128,21 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) {
 		shard := shardcfg.Key2Shard(req.Key)
 
 		// Get 当前版本
-		type getResult struct {
-			val     string
-			version rpcapi.Tversion
-			err     rpcapi.Err
-		}
-		getCh := make(chan getResult, 1)
-		go func() {
-			v, ver, e := h.cm.Get(req.Key)
-			getCh <- getResult{v, ver, e}
-		}()
-
-		var version rpcapi.Tversion
-		select {
-		case gres := <-getCh:
-			if gres.err != rpcapi.OK && gres.err != rpcapi.ErrNoKey {
-				log.Printf("[Put] key=%q S%d Get 失败 (task=%s): %s", req.Key, shard, taskID, gres.err)
-				h.PublishTaskDone(TaskDoneEvent{
-					TaskID:  taskID,
-					Success: false,
-					Action:  "put",
-					Error:   string(gres.err),
-				})
-				return
-			}
-			version = gres.version
-		case <-time.After(12 * time.Second):
-			log.Printf("[Put] key=%q S%d Get 超时 (task=%s)", req.Key, shard, taskID)
+		_, ver, e := h.cm.Get(req.Key)
+		if e != rpcapi.OK && e != rpcapi.ErrNoKey {
+			log.Printf("[Put] key=%q S%d Get 失败 (task=%s): %s", req.Key, shard, taskID, e)
 			h.PublishTaskDone(TaskDoneEvent{
 				TaskID:  taskID,
 				Success: false,
 				Action:  "put",
-				Error:   "ErrTimeout",
-				Message: "集群无响应（可能是 Raft 组无 leader）",
+				Error:   string(e),
 			})
 			return
 		}
+		version := ver
 
 		// Put
-		putCh := make(chan rpcapi.Err, 1)
-		go func() {
-			putCh <- h.cm.Put(req.Key, req.Value, version)
-		}()
-
-		var putErr rpcapi.Err
-		select {
-		case putErr = <-putCh:
-		case <-time.After(12 * time.Second):
-			log.Printf("[Put] key=%q S%d 超时 (task=%s): PUT 无响应", req.Key, shard, taskID)
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: false,
-				Action:  "put",
-				Error:   "ErrTimeout",
-				Message: "PUT 超时（集群无响应）",
-			})
-			return
-		}
+		putErr := h.cm.Put(req.Key, req.Value, version)
 
 		if putErr == rpcapi.OK {
 			log.Printf("[Put] key=%q value=%q S%d version=%d OK (task=%s)", req.Key, req.Value, shard, version, taskID)
@@ -234,57 +192,35 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	})
 
 	go func() {
-		type getResult struct {
-			val     string
-			version rpcapi.Tversion
-			err     rpcapi.Err
-		}
-		getCh := make(chan getResult, 1)
-		go func() {
-			v, ver, e := h.cm.Get(key)
-			getCh <- getResult{v, ver, e}
-		}()
-
-		select {
-		case gres := <-getCh:
-			if gres.err == rpcapi.OK {
-				log.Printf("[Get] key=%q value=%q version=%d OK (task=%s)", key, gres.val, gres.version, taskID)
-				payload, _ := json.Marshal(map[string]any{
-					"key":     key,
-					"value":   gres.val,
-					"version": int(gres.version),
-				})
-				h.PublishTaskDone(TaskDoneEvent{
-					TaskID:  taskID,
-					Success: true,
-					Action:  "get",
-					Data:    payload,
-				})
-			} else if gres.err == rpcapi.ErrNoKey {
-				log.Printf("[Get] key=%q 失败 (task=%s, err=ErrNoKey)", key, taskID)
-				h.PublishTaskDone(TaskDoneEvent{
-					TaskID:  taskID,
-					Success: false,
-					Action:  "get",
-					Error:   "ErrNoKey",
-				})
-			} else {
-				log.Printf("[Get] key=%q 失败 (task=%s, err=%s)", key, taskID, gres.err)
-				h.PublishTaskDone(TaskDoneEvent{
-					TaskID:  taskID,
-					Success: false,
-					Action:  "get",
-					Error:   string(gres.err),
-				})
-			}
-		case <-time.After(12 * time.Second):
-			log.Printf("[Get] key=%q 超时 (task=%s): 集群无响应 (Raft 可能无 leader)", key, taskID)
+		v, ver, e := h.cm.Get(key)
+		if e == rpcapi.OK {
+			log.Printf("[Get] key=%q value=%q version=%d OK (task=%s)", key, v, ver, taskID)
+			payload, _ := json.Marshal(map[string]any{
+				"key":     key,
+				"value":   v,
+				"version": int(ver),
+			})
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: true,
+				Action:  "get",
+				Data:    payload,
+			})
+		} else if e == rpcapi.ErrNoKey {
+			log.Printf("[Get] key=%q 失败 (task=%s, err=ErrNoKey)", key, taskID)
 			h.PublishTaskDone(TaskDoneEvent{
 				TaskID:  taskID,
 				Success: false,
 				Action:  "get",
-				Error:   "ErrTimeout",
-				Message: "集群无响应（可能是 Raft 组无 leader）",
+				Error:   "ErrNoKey",
+			})
+		} else {
+			log.Printf("[Get] key=%q 失败 (task=%s, err=%s)", key, taskID, e)
+			h.PublishTaskDone(TaskDoneEvent{
+				TaskID:  taskID,
+				Success: false,
+				Action:  "get",
+				Error:   string(e),
 			})
 		}
 	}()
@@ -474,7 +410,7 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.GID == 0 {
-		log.Printf("[LeaveGroup] 组 0 (配置仓库) 是系统核心组件，拒绝离开")
+		log.Printf("[LeaveGroup] 组 0 (配置仓库) 是系统核心组件，不能离开集群")
 		writeJSON(w, map[string]any{"success": false, "action": "leave", "gid": 0, "error": "ConfigStore (组 0) 是系统配置仓库，不能离开集群", "message": "配置仓库 (组 0) 是系统核心组件，不允许离开集群"})
 		return
 	}
