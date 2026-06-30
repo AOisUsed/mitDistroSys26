@@ -19,7 +19,7 @@ import (
 
 const (
 	staleConfigTimeout = 5 * time.Second // 超过此时间未更新 config 视为缓存
-	clerkPoolSize      = 500
+	ClerkPoolSize      = 500             // Clerk 池容量 — 同时限制 CAS 并发竞赛 & 批量写入并发度
 )
 
 // ClusterManager 管理集群生命周期
@@ -420,7 +420,7 @@ func (cm *ClusterManager) NewClerk() kvtest.IKVClerk {
 // 避免每次创建临时对象并减少 configStore 的 Query() 并发压力
 func (cm *ClusterManager) GetClerkPool() *ClerkPool {
 	cm.poolOnce.Do(func() {
-		cm.clerkPool = NewClerkPool(cm, clerkPoolSize)
+		cm.clerkPool = NewClerkPool(cm, ClerkPoolSize)
 	})
 	return cm.clerkPool
 }

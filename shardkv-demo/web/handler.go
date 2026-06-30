@@ -68,6 +68,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		HasPendingMigration bool          `json:"hasPendingMigration"`
 		PendingConfigNum    shardcfg.Tnum `json:"pendingConfigNum"`
 		ConfigCached        bool          `json:"configCached"`
+		PoolSize            int           `json:"poolSize"`
 		Groups              []GroupNode   `json:"groups"`
 		Shards              []ShardNode   `json:"shards"`
 	}{
@@ -75,6 +76,7 @@ func (h *Handler) HandleStatusTree(w http.ResponseWriter, r *http.Request) {
 		HasPendingMigration: state.HasPendingMigration,
 		PendingConfigNum:    state.PendingConfigNum,
 		ConfigCached:        state.ConfigCached,
+		PoolSize:            cluster.ClerkPoolSize,
 	}
 
 	for _, gs := range state.Groups {
@@ -670,7 +672,7 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[BatchPut] 已生成 %d 个 key-value pair, 准备写入", len(pairs))
 
 	// 并发写入：通过 Clerk 池复用 Clerk（独立 clerkId，服务端按 client 分别去重）
-	// 池容量 100，每个 goroutine 借出后必须归还
+	// 池容量见 cluster.ClerkPoolSize，每个 goroutine 借出后必须归还
 	type opResult struct {
 		idx int
 		err rpcapi.Err
@@ -746,8 +748,8 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
 	}
-	if req.NClient < 1 || req.NClient > 1000 {
-		http.Error(w, "nClient must be 1~1000", http.StatusBadRequest)
+	if req.NClient < 1 || req.NClient > cluster.ClerkPoolSize {
+		http.Error(w, fmt.Sprintf("nClient must be 1~%d", cluster.ClerkPoolSize), http.StatusBadRequest)
 		return
 	}
 

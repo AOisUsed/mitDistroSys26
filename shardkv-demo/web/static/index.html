@@ -427,7 +427,7 @@
                             <div class="kv-inputs">
                                 <input type="text" id="raceKey" placeholder="键 Key">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">客户端数:</span>
-                                <input type="number" id="raceNClient" value="5" min="1" max="1000" style="flex:0 0 70px;min-width:60px;">
+                                <input type="number" id="raceNClient" value="5" min="1" style="flex:0 0 70px;min-width:60px;">
                             </div>
                             <div class="kv-actions">
                                 <button class="btn btn-primary" onclick="doCasRace()">开始</button>
@@ -1450,6 +1450,11 @@
                 }
 
                 cachedTree = tree;
+                // 同步 Clerk 池容量到前端（CAS 并发上限 & 批量写入并发度）
+                if (tree.poolSize > 0) {
+                    poolSize = tree.poolSize;
+                    document.getElementById('raceNClient').max = poolSize;
+                }
                 document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'}`;
                 renderNodeStatus(tree);
                 renderShards(tree); // tree.shards 已有完整分片数据
@@ -1526,6 +1531,7 @@
 
     // ========== 批量随机写入（含防重发限制）==========
     let batchPutBusy = false; // 前端限制：前一轮未完成时禁止下一轮
+    let poolSize = 500;           // Clerk 池容量，由 /api/status/tree 返回的 poolSize 同步更新
 
     function getBatchBtn() {
         // 查找"开始"按钮：批量随机写入面板内第一个 .btn-success
@@ -1565,7 +1571,7 @@
         if (btn) btn.disabled = true;
 
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<span class="spinner"></span> 写入中 (${count} 个 key, 最多 500 个客户端并发)...`;
+        resultDiv.innerHTML = `<span class="spinner"></span> 写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...`;
         addLog(`批量写入开始: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'}, 并发`, 'shard');
 
         const startTime = Date.now();
@@ -1853,8 +1859,8 @@
             addLog('CAS 竞赛: Key 不能为空', 'err');
             return;
         }
-        if (nClient < 1 || nClient > 1000) {
-            addLog('CAS 竞赛: 客户端数必须在 1~1000 之间', 'err');
+        if (nClient < 1 || nClient > poolSize) {
+            addLog(`CAS 竞赛: 客户端数必须在 1~${poolSize} 之间`, 'err');
             return;
         }
         document.getElementById('putKey').value = key;
