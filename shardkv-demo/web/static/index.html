@@ -787,11 +787,11 @@
         }
     }
 
-    async function api(path, options, timeoutMs, silent) {
-        timeoutMs = timeoutMs || 15000;
-
+    // 默认超时 10s，可通过 options.timeoutSec 按操作定制。
+    async function api(path, options, silent) {
+        const timeoutSec = (options && options.timeoutSec) || 10;
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
         try {
             const resp = await fetch(API + path, {
                 headers: {'Content-Type': 'application/json'},
@@ -808,7 +808,8 @@
             clearTimeout(timer);
             if (!silent) {
                 if (err.name === 'AbortError') {
-                    addLog(`请求等待超时: ${path} (超过 ${timeoutMs/1000}s 无响应，后端可能仍在处理)`, 'err');
+                    const method = (options && options.method) || 'GET';
+                    addLog(`⏳ ${method} ${path} 超时 (${timeoutSec}s) — 后端仍在处理，可稍后查看状态`, 'warn');
                 } else {
                     addLog(`API 错误: ${err.message}`, 'err');
                 }
@@ -921,7 +922,8 @@
     async function doIsolateNode(gid, srv) {
         const result = await api('/api/node/isolate', {
             method: 'POST',
-            body: JSON.stringify({gid, srv})
+            body: JSON.stringify({gid, srv}),
+            timeoutSec: 5
         });
         if (result.success) {
             addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 已隔离网络 (进程保持运行)`, 'warn');
@@ -934,7 +936,8 @@
     async function doRecoverNode(gid, srv) {
         const result = await api('/api/node/recover-node', {
             method: 'POST',
-            body: JSON.stringify({gid, srv})
+            body: JSON.stringify({gid, srv}),
+            timeoutSec: 5
         });
         if (result.success) {
             addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 网络已恢复`, 'ok');
@@ -945,13 +948,13 @@
     }
 
     async function doKillNodeById(gid, srv) {
-        await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv})});
+        await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5});
         addLog(`KillNode: server-${gid}-${srv}`, 'err');
         refreshStatus();
     }
 
     async function doStartNodeById(gid, srv) {
-        const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv})});
+        const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5});
         if (result.success) {
             addLog(`StartNode: server-${gid}-${srv} 已启动`, 'ok');
         } else {
@@ -964,7 +967,7 @@
     async function doKillGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('KillGroup: 请选择有效的组', 'err'); return; }
-        await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid})});
+        await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
         addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'err');
         refreshStatus();
     }
@@ -972,7 +975,7 @@
     async function doStartGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('StartGroup: 请选择有效的组', 'err'); return; }
-        const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid})});
+        const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
         if (result.success) {
             addLog(`StartGroup: 组 ${gid} 全部节点已启动`, 'ok');
         } else {
@@ -1082,7 +1085,8 @@
         try {
             const result = await api('/api/network/params', {
                 method: 'POST',
-                body: JSON.stringify({[param]: intVal})
+                body: JSON.stringify({[param]: intVal}),
+                timeoutSec: 5
             });
             // if (result && result.success) {
             //     const displayVal = param === 'dropRate'
@@ -1104,7 +1108,8 @@
         try {
             const result = await api('/api/network/reliable', {
                 method: 'POST',
-                body: JSON.stringify({reliable: !enabled})
+                body: JSON.stringify({reliable: !enabled}),
+                timeoutSec: 5
             });
             if (!result || !result.success) {
                 throw new Error(result ? (result.error || '后端返回失败') : '后端无响应');
@@ -1134,7 +1139,8 @@
                 try {
                     const result = await api('/api/network/long-reordering', {
                         method: 'POST',
-                        body: JSON.stringify({on: false})
+                        body: JSON.stringify({on: false}),
+                        timeoutSec: 5
                     });
                     if (result && result.success) {
                         reorderToggle.checked = false;
@@ -1151,7 +1157,8 @@
             try {
                 const result = await api('/api/network/long-reordering', {
                     method: 'POST',
-                    body: JSON.stringify({on: true})
+                    body: JSON.stringify({on: true}),
+                    timeoutSec: 5
                 });
                 if (result && result.success) {
                     reorderToggle.checked = true;
@@ -1195,7 +1202,8 @@
         try {
             const result = await api('/api/network/long-reordering', {
                 method: 'POST',
-                body: JSON.stringify({on})
+                body: JSON.stringify({on}),
+                timeoutSec: 5
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
@@ -1246,7 +1254,7 @@
         btn.className = 'chaos-btn loading';
         btn.textContent = '处理中...';
         try {
-            const result = await api(path, {method: 'POST', body: JSON.stringify({gid})});
+            const result = await api(path, {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5});
             if (result.success) {
                 chaosStates[gid] = !currentlyActive;
                 if (chaosStates[gid]) {
@@ -1263,7 +1271,7 @@
 
     async function fetchChaosStatus() {
         try {
-            const result = await api('/api/chaos/status', {method: 'GET'}, 15000, true);
+            const result = await api('/api/chaos/status', {method: 'GET'}, true);
             if (result.success && result.states) {
                 const newChaos = {};
                 for (const s of result.states) newChaos[s.gid] = s.active;
@@ -1411,7 +1419,7 @@
         // 并行请求，各自独立降级：configStore 死掉不会阻塞节点状态显示
         // 如果已在缓存/离线状态，静默处理网络错误，避免日志刷屏
         const [treeResult, chaosResult] = await Promise.all([
-            api('/api/status/tree', {method: 'GET'}, 15000, usingCache).catch(err => {
+            api('/api/status/tree', {method: 'GET'}, usingCache).catch(err => {
                 if (!usingCache) {
                     addLog('刷新节点状态失败: ' + err.message, 'err');
                 }
@@ -1569,8 +1577,9 @@
         try {
             const result = await api('/api/kv/batch-put', {
                 method: 'POST',
-                body: JSON.stringify(body)
-            }, 600000); // 10 分钟超时，因为大批量写入可能很慢
+                body: JSON.stringify(body),
+                timeoutSec: 60
+            });
 
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             if (result.success) {
@@ -1632,7 +1641,7 @@
 
     async function lightRefreshNodeStatus() {
         try {
-            const tree = await api('/api/status/tree', {method: 'GET'}, 8000, true);
+            const tree = await api('/api/status/tree', {method: 'GET'}, true);
             if (tree) {
                 usingCache = !!tree.configCached;
                 cachedTree = tree;
@@ -1858,8 +1867,9 @@
         try {
             const result = await api('/api/kv/cas-race', {
                 method: 'POST',
-                body: JSON.stringify({key, nClient})
-            }, 60000);
+                body: JSON.stringify({key, nClient}),
+                timeoutSec: 60
+            });
 
             if (result.success) {
                 addLog(`CAS 竞赛完成: 成功=${result.successCount} 冲突=${result.versionErrCount} → 最终="${result.finalValue}" 用时=${result.elapsed}s`, 'shard');
