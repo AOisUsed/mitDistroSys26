@@ -231,16 +231,18 @@ func (cm *ClusterManager) updateCachedCfg(newcfg *shardcfg.ShardConfig) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.cachedConfig.Num <= newcfg.Num {
-		cm.cachedConfig = newcfg
 		cm.lastConfigOk = time.Now()
+		if cm.cachedConfig.Num < newcfg.Num {
+			cm.cachedConfig = newcfg
+		}
 	}
 }
 
-// updateCachedCfg 更新缓存的NextConfig, 只有配置号不减小才生效
+// updateCachedCfg 更新缓存的NextConfig, 只有配置号增大才生效
 func (cm *ClusterManager) updateCachedNextCfg(newcfg *shardcfg.ShardConfig) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	if cm.cachedNextConfig.Num <= newcfg.Num {
+	if cm.cachedNextConfig.Num < newcfg.Num {
 		cm.cachedNextConfig = newcfg
 	}
 }
