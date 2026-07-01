@@ -535,6 +535,10 @@ func (cm *ClusterManager) StartServer(gid tester.Tgid, srv int) error {
 	}
 	sg.ConnectOne(srv)
 
+	// 重新应用分区状态——ConnectOne 会无条件连到所有节点，
+	// 可能破坏 IsolateNode 建立的隔离，需要在此恢复分区配置。
+	cm.reapplyIsolation(gid)
+
 	// 健康检查：等待最多 2 秒确认节点已连接
 	for i := 0; i < 20; i++ {
 		connected := sg.GetConnected()
@@ -545,6 +549,41 @@ func (cm *ClusterManager) StartServer(gid tester.Tgid, srv int) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("启动节点 %s 超时: 节点未连入网络", sg.SrvName(srv))
+}
+
+// reapplyIsolation 根据当前隔离记录重新应用分区状态。
+// ConnectOne 会无条件连接节点到所有其他节点，可能破坏已建立的分区，
+// 因此每次 ConnectOne 之后都应调用此方法恢复隔离。
+func (cm *ClusterManager) reapplyIsolation(gid tester.Tgid) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	isoMap := cm.isolated[gid]
+	if isoMap == nil || len(isoMap) == 0 {
+		return
+	}
+
+	sg := cm.infra.Group(gid)
+	if sg == nil {
+		return
+	}
+
+	connected := sg.GetConnected()
+	rest := make([]int, 0)
+	isolated := make([]int, 0)
+	for i := 0; i < sg.N(); i++ {
+		if i < len(connected) && connected[i] {
+			if isoMap[i] {
+				isolated = append(isolated, i)
+			} else {
+				rest = append(rest, i)
+			}
+		}
+	}
+
+	if len(isolated) > 0 && len(rest) > 0 {
+		sg.Partition(rest, isolated)
+	}
 }
 
 // KillGroup 停掉整个组

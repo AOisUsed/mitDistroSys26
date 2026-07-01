@@ -117,6 +117,10 @@ func (m *ChaosMonkey) restartNode(idx int, sg *tester.ServerGrp) {
 		return
 	}
 	sg.ConnectOne(idx)
+
+	// 重新应用分区状态——ConnectOne 可能破坏已建立的隔离
+	m.cm.reapplyIsolation(m.gid)
+
 	log.Printf("[ChaosMonkey] Restart: GID %d 节点 %d (%s) 已恢复", m.gid, idx, sg.SrvName(idx))
 	if m.onChange != nil {
 		m.onChange("restart", idx)
