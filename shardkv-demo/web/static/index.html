@@ -349,6 +349,21 @@
             margin: 6px 0;
         }
 
+        .shard-badge {
+            display: inline-block;
+            padding: 0 7px;
+            font-size: 10px;
+            font-weight: 500;
+            line-height: 18px;
+            border-radius: 9px;
+            background: #f5f3ff;
+            color: #7c5cf0;
+            border: 1px solid #e8e0ff;
+            margin-left: 6px;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+
         .net-toggle-row {
             display: flex; align-items: center; justify-content: space-between;
             gap: 8px;
@@ -419,12 +434,12 @@
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
                     <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
-                        CAS 竞争写入
+                        CAS 竞争写入 <span id="casShard" style="font-size:11px;font-weight:400;color:#888;"></span>
                     </div>
                     <div class="kv-panel">
                         <div class="kv-row">
                             <div class="kv-inputs">
-                                <input type="text" id="raceKey" placeholder="键 Key">
+                                <input type="text" id="raceKey" placeholder="键 Key" oninput="casShardHint()">
                                 <span style="display:flex;align-items:center;font-size:11px;color:#888;white-space:nowrap;flex-shrink:0;padding:0 2px;">客户端数:</span>
                                 <input type="number" id="raceNClient" value="5" min="1" style="flex:0 0 70px;min-width:60px;">
                             </div>
@@ -649,7 +664,12 @@
         const putKey = document.getElementById('putKey').value.trim();
         const getKey = document.getElementById('getKey').value.trim();
         const activeKey = putKey || getKey;
-        document.getElementById('kvShard').textContent = activeKey ? `-> ${shardHint(activeKey)}` : '';
+        document.getElementById('kvShard').textContent = activeKey ? `→ ${shardHint(activeKey)}` : '';
+    }
+
+    function casShardHint() {
+        const key = document.getElementById('raceKey').value.trim();
+        document.getElementById('casShard').textContent = key ? `→ ${shardHint(key)}` : '';
     }
 
 
@@ -970,7 +990,8 @@
         document.getElementById('putVal').value = val;
         document.getElementById('raceKey').value = key;
         kvShardHint();
-        addLog(`已填入随机键值对 "${key}":"${val}" -> ${target === -1 ? '任意分片' : `分片 ${target}`}`, 'info');
+        casShardHint();
+        addLog(`已填入随机键值对 "${key}":"${val}" → ${target === -1 ? '任意分片' : `分片 ${target}`}`, 'info');
     }
 
     // ========== KV 操作 ==========
