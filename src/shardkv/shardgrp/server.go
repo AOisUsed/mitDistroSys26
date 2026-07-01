@@ -8,11 +8,11 @@ import (
 	"kvstore/debug"
 	"kvstore/kvraft/rsm"
 	"kvstore/kvsrv/rpcapi"
+	"kvstore/labgob"
 	"kvstore/rpc"
 	"kvstore/shardkv/shardcfg"
 	"kvstore/shardkv/shardgrp/shardrpc"
 	"kvstore/tester"
-	"kvstore/testgob"
 )
 
 type VersionedValue struct {
@@ -325,7 +325,7 @@ func (kv *KVServer) DoOp(req any) any {
 // marshallShardState into bytes
 func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 	w := new(bytes.Buffer)
-	e := testgob.NewEncoder(w)
+	e := labgob.NewEncoder(w)
 	lastPutByClientId := make(map[uint64]*LastPut)
 	Clnts := kv.shardClients[shid] // clients that did Ops on this shard
 	for client := range Clnts {    // we only care about the lastPut of clients that worked on this shard
@@ -351,7 +351,7 @@ func (kv *KVServer) marshallShardState(shid shardcfg.Tshid) []byte {
 // need to used within Write Lock
 func (kv *KVServer) installShardState(shid shardcfg.Tshid, shardstate []byte) {
 	r := bytes.NewBuffer(shardstate)
-	d := testgob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	var shardState ShardState
 	err := d.Decode(&shardState)
 	if err != nil {
@@ -448,7 +448,7 @@ func (kv *KVServer) Snapshot() []byte {
 
 	// encode copied snapshot
 	w := new(bytes.Buffer)
-	e := testgob.NewEncoder(w)
+	e := labgob.NewEncoder(w)
 	err := e.Encode(snapshot)
 	if err != nil {
 		log.Fatalf("Fatal: %v", err)
@@ -464,7 +464,7 @@ func (kv *KVServer) Restore(data []byte) {
 
 	debug.D5APrintf("shardkvserver %v: Restore()\n", kv.me)
 	r := bytes.NewBuffer(data)
-	d := testgob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	var snapshot SnapshotData
 	err := d.Decode(&snapshot)
 	if err != nil {
@@ -560,15 +560,15 @@ func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.
 func StartServerShardGrp(servers []*rpc.ClientEnd, gid tester.Tgid, me int, persister *tester.Persister, maxraftstate int) []any {
 	// call testgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	testgob.Register(rpcapi.PutArgs{})
-	testgob.Register(rpcapi.GetArgs{})
-	testgob.Register(rpcapi.PutReply{})
-	testgob.Register(rpcapi.GetReply{})
-	testgob.Register(shardrpc.FreezeShardArgs{})
-	testgob.Register(shardrpc.InstallShardArgs{})
-	testgob.Register(shardrpc.DeleteShardArgs{})
-	testgob.Register(rsm.Op{})
-	testgob.Register(ShardState{})
+	labgob.Register(rpcapi.PutArgs{})
+	labgob.Register(rpcapi.GetArgs{})
+	labgob.Register(rpcapi.PutReply{})
+	labgob.Register(rpcapi.GetReply{})
+	labgob.Register(shardrpc.FreezeShardArgs{})
+	labgob.Register(shardrpc.InstallShardArgs{})
+	labgob.Register(shardrpc.DeleteShardArgs{})
+	labgob.Register(rsm.Op{})
+	labgob.Register(ShardState{})
 
 	// initialisations:
 

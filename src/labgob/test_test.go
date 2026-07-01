@@ -1,4 +1,4 @@
-package testgob
+package labgob
 
 import "testing"
 

@@ -45,7 +45,7 @@ package rpc
 //   pass svc to srv.AddService()
 //
 
-import "kvstore/testgob"
+import "kvstore/labgob"
 import "bytes"
 import "reflect"
 import "sync"
@@ -76,7 +76,7 @@ type replyMsg struct {
 
 func Marshall(args interface{}) []byte {
 	qb := new(bytes.Buffer)
-	qe := testgob.NewEncoder(qb)
+	qe := labgob.NewEncoder(qb)
 	if err := qe.Encode(args); err != nil {
 		log.Fatalf("Marshall fatal: encode arg err %v", err)
 	}
@@ -85,7 +85,7 @@ func Marshall(args interface{}) []byte {
 
 func Unmarshall(b []byte, repl interface{}) {
 	rb := bytes.NewBuffer(b)
-	rd := testgob.NewDecoder(rb)
+	rd := labgob.NewDecoder(rb)
 	if err := rd.Decode(repl); err != nil {
 		log.Fatalf("Unmarshall fatal: decode reply err %v", err)
 	}
@@ -685,7 +685,7 @@ func (svc *Service) dispatch(methname string, req reqMsg) replyMsg {
 
 		// encode the reply.
 		rb := new(bytes.Buffer)
-		re := testgob.NewEncoder(rb)
+		re := labgob.NewEncoder(rb)
 		re.EncodeValue(replyv)
 
 		return replyMsg{true, rb.Bytes()}

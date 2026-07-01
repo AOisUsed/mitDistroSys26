@@ -6,10 +6,10 @@ import (
 	"log"
 	"sync"
 
+	"kvstore/labgob"
 	"kvstore/raftapi"
 	"kvstore/rpc"
 	"kvstore/tester"
-	"kvstore/testgob"
 )
 
 const (
@@ -152,7 +152,7 @@ func (rs *rfsrv) applierSnap(applyCh chan raftapi.ApplyMsg) {
 
 			if (m.CommandIndex+1)%SnapShotInterval == 0 {
 				w := new(bytes.Buffer)
-				e := testgob.NewEncoder(w)
+				e := labgob.NewEncoder(w)
 				e.Encode(m.CommandIndex)
 				var xlog []any
 				for j := 0; j <= m.CommandIndex; j++ {
@@ -189,7 +189,7 @@ func (rs *rfsrv) ingestSnap(snapshot []byte, index int) string {
 		return "nil snapshot"
 	}
 	r := bytes.NewBuffer(snapshot)
-	d := testgob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	var lastIncludedIndex int
 	var xlog []any
 	if d.Decode(&lastIncludedIndex) != nil ||

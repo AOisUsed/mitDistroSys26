@@ -8,9 +8,9 @@ import (
 	"kvstore/debug"
 	"kvstore/kvraft/rsm"
 	"kvstore/kvsrv/rpcapi"
+	"kvstore/labgob"
 	"kvstore/rpc"
 	"kvstore/tester"
-	"kvstore/testgob"
 )
 
 type VersionedValue struct {
@@ -174,7 +174,7 @@ func (kv *KVServer) Snapshot() []byte {
 
 	// encode copied snapshot
 	w := new(bytes.Buffer)
-	e := testgob.NewEncoder(w)
+	e := labgob.NewEncoder(w)
 	err := e.Encode(snapshot)
 	if err != nil {
 		log.Fatal(err)
@@ -192,7 +192,7 @@ func (kv *KVServer) Restore(data []byte) {
 	//debug.D4CPrintf("server%v: Restore()\n", kv.me)
 
 	r := bytes.NewBuffer(data)
-	d := testgob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	var snapshot SnapshotData
 	err := d.Decode(&snapshot)
 	if err != nil {
@@ -253,11 +253,11 @@ func (kv *KVServer) Put(args *rpcapi.PutArgs, reply *rpcapi.PutReply) {
 func StartKVServer(servers []*rpc.ClientEnd, gid tester.Tgid, me int, persister *tester.Persister, maxraftstate int) []any {
 	// call testgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	testgob.Register(rsm.Op{})
-	testgob.Register(rpcapi.PutArgs{})
-	testgob.Register(rpcapi.PutReply{})
-	testgob.Register(rpcapi.GetArgs{})
-	testgob.Register(rpcapi.GetReply{})
+	labgob.Register(rsm.Op{})
+	labgob.Register(rpcapi.PutArgs{})
+	labgob.Register(rpcapi.PutReply{})
+	labgob.Register(rpcapi.GetArgs{})
+	labgob.Register(rpcapi.GetReply{})
 
 	kv := &KVServer{me: me}
 
