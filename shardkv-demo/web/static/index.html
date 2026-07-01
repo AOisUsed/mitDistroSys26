@@ -403,7 +403,7 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
                         <span style="font-size:12px;font-weight:600;color:#667eea;">KV 操作 <span id="kvShard" style="font-size:11px;font-weight:400;color:#888;"></span></span>
                         <div style="display:flex;gap:5px;align-items:center;flex-shrink:0;">
-                            <span style="font-size:11px;font-weight:500;color:#333;white-space:nowrap;">随机生成到</span>
+                            <span style="font-size:11px;font-weight:500;color:#333;white-space:nowrap;">随机键值:</span>
                             <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;"></select>
                             <button class="btn btn-sm" onclick="generateKeyForShard()" style="flex:0 0 auto;background:#fff;color:#64748b;border:1px solid #64748b;">生成</button>
                         </div>
@@ -429,8 +429,13 @@
 
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:3px;color:#764ba2;">
-                        CAS 竞争写入 <span id="casShard" style="font-size:11px;font-weight:400;color:#888;"></span>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                        <span style="font-size:12px;font-weight:600;color:#764ba2;">CAS 竞争写入 <span id="casShard" style="font-size:11px;font-weight:400;color:#888;"></span></span>
+                        <div style="display:flex;gap:5px;align-items:center;flex-shrink:0;">
+                            <span style="font-size:11px;font-weight:500;color:#333;white-space:nowrap;">随机键值:</span>
+                            <select id="casTargetShard" class="kv-input-sm" style="flex:0 0 auto;"></select>
+                            <button class="btn btn-sm" onclick="generateKeyForCAS()" style="flex:0 0 auto;background:#fff;color:#64748b;border:1px solid #64748b;">生成</button>
+                        </div>
                     </div>
                     <div class="kv-panel">
                         <div class="kv-row">
@@ -444,7 +449,7 @@
                             </div>
                         </div>
                     </div>
-                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;color:#aaaaaa;">未执行</div>
+                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;color:#764ba2;">未执行</div>
 
                     <!-- 批量随机写入 -->
                     <div class="sep-line"></div>
@@ -466,7 +471,7 @@
                             </div>
                         </div>
                     </div>
-                    <div id="batchResult" class="get-result" style="margin-top:4px;background:#f6ffed;border-color:#b7eb8f;color:#aaa;">未执行</div>
+                    <div id="batchResult" class="get-result" style="margin-top:4px;background:#f6ffed;border-color:#b7eb8f;color:#52c41a;">未执行</div>
                 </div>
 
                 <!-- 右列：组操作 + 网络可靠性 + 观测日志 -->
@@ -884,7 +889,6 @@
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
                         `<div style="color:#764ba2;">成功 <strong>${d.successCount}</strong> / 版本冲突 <strong>${d.versionErrCount}</strong> | 最终 "${d.finalValue}" | 用时 ${d.elapsed}</div>`;
                     addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}`, 'shard');
-                    document.getElementById('putVal').value = d.finalValue || '';
                 } else {
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
                         `<div style="color:#ff4d4f;">CAS 竞赛失败: ${task.error || '未知错误'}</div>`;
@@ -916,7 +920,7 @@
             if (!silent) {
                 if (err.name === 'AbortError') {
                     const label = (options && options.label) || path.replace(/^\/api\//, '');
-                    addLog(`⏳ ${label} 前端超时 (${timeoutSec}s) — 后端仍在处理`, 'warn');
+                    addLog(`${label} 前端超时 (${timeoutSec}s) — 后端仍在处理`, 'warn');
                 } else {
                     addLog(`API 错误: ${err.message}`, 'err');
                 }
@@ -984,10 +988,28 @@
         document.getElementById('putKey').value = key;
         document.getElementById('getKey').value = key;
         document.getElementById('putVal').value = val;
-        document.getElementById('raceKey').value = key;
         kvShardHint();
-        casShardHint();
         addLog(`已填入随机键值对 "${key}":"${val}" → ${target === -1 ? '任意分片' : `分片 ${target}`}`, 'info');
+    }
+
+    function generateKeyForCAS() {
+        if (!keyPoolReady) {
+            addLog('准备中，请稍后重试...', 'warn');
+            return;
+        }
+        const target = parseInt(document.getElementById('casTargetShard').value);
+        let pool;
+        if (target === -1) {
+            pool = Object.values(keyPool).flat();
+        } else {
+            pool = keyPool[target];
+        }
+        if (!pool || pool.length === 0) return;
+        const idx = Math.floor(Math.random() * pool.length);
+        const key = pool[idx];
+        document.getElementById('raceKey').value = key;
+        casShardHint();
+        addLog(`已填入随机 CAS 键 "${key}" → ${target === -1 ? '任意分片' : `分片 ${target}`}`, 'info');
     }
 
     // ========== KV 操作 ==========
@@ -996,7 +1018,7 @@
         const value = document.getElementById('putVal').value.trim();
         if (!key) { addLog('Put: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        addLog(`⏳ Put: key="${key}" value="${value}" (分片 ${shard}) 已提交...`, 'shard');
+        addLog(`Put: key="${key}" value="${value}" (分片 ${shard}) 已提交...`, 'shard');
         const result = await api('/api/kv/', {
             method: 'PUT',
             body: JSON.stringify({key, value}),
@@ -1012,7 +1034,7 @@
         const key = document.getElementById('getKey').value.trim();
         if (!key) { addLog('Get: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        addLog(`⏳ Get: key="${key}" (分片 ${shard}) 已提交...`, 'shard');
+        addLog(`Get: key="${key}" (分片 ${shard}) 已提交...`, 'shard');
         const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', timeoutSec: 5, label: '读取'});
         if (result.async) {
             pendingTasks[result.taskId] = { action: 'get', key, shard };
@@ -1091,7 +1113,7 @@
     }
 
     async function doJoinGroup() {
-        addLog(`⏳ JoinGroup: ── 发起新组加入操作 ──`, 'shard');
+        addLog(`JoinGroup: ── 发起新组加入操作 ──`, 'shard');
         // 乐观更新：立即显示 pending 标记，不等 POST 返回
         optimisticPendingMigration = true;
         refreshStatus();
@@ -1114,7 +1136,7 @@
         if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
         if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         leaveInFlight = true;
-        addLog(`⏳ LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
@@ -1330,7 +1352,7 @@
     // ========== 快捷 Leave（从节点状态标题调用） ==========
     async function doLeaveGroupById(gid) {
         if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
-        addLog(`⏳ LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
@@ -1612,14 +1634,17 @@
 
 
     function initShardSelect() {
-        const sel = document.getElementById('targetShard');
-        const frag = document.createDocumentFragment();
-        frag.appendChild(new Option('任意分片', '-1'));
-        for (let i = 0; i < N_SHARDS; i++) {
-            frag.appendChild(new Option(`分片 ${i}`, String(i)));
+        for (const id of ['targetShard', 'casTargetShard']) {
+            const sel = document.getElementById(id);
+            if (!sel) continue;
+            const frag = document.createDocumentFragment();
+            frag.appendChild(new Option('任意分片', '-1'));
+            for (let i = 0; i < N_SHARDS; i++) {
+                frag.appendChild(new Option(`分片 ${i}`, String(i)));
+            }
+            sel.innerHTML = '';
+            sel.appendChild(frag);
         }
-        sel.innerHTML = '';
-        sel.appendChild(frag);
     }
 
     function initBatchShardSelect() {
@@ -1674,8 +1699,8 @@
         batchPutBusy = true;
         if (btn) btn.disabled = true;
 
-        resultDiv.innerHTML = `<span class="spinner"></span> ⏳ 写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...`;
-        addLog(`⏳ 批量写入: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'} 已提交...`, 'shard');
+        resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...</span>`;
+        addLog(`批量写入: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'} 已提交...`, 'shard');
 
         const startTime = Date.now();
 
@@ -1964,12 +1989,9 @@
             addLog(`CAS 竞赛: 客户端数必须在 1~${poolSize} 之间`, 'err');
             return;
         }
-        document.getElementById('putKey').value = key;
-        document.getElementById('getKey').value = key;
-
         const resultDiv = document.getElementById('raceResult');
-        resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> ⏳ CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
-        addLog(`⏳ CAS 竞赛: ${nClient} 个客户端并发 CAS Put key="${key}" 已提交...`, 'shard');
+        resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
+        addLog(`CAS 竞赛: ${nClient} 个客户端并发 CAS Put key="${key}" 已提交...`, 'shard');
         try {
             const result = await api('/api/kv/cas-race', {
                 method: 'POST',
