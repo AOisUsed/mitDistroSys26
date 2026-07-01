@@ -10,7 +10,7 @@ import (
 
 const (
 	taskDoneCacheSize = 50
-	priorityChanSize  = 100
+	priorityChanSize  = 1000
 	normalChanSize    = 5000
 )
 
@@ -29,9 +29,11 @@ func isPriorityEvent(t string) bool {
 //
 //	priority — task-done / leader-change / cluster-change（阻塞发送，不可丢弃）
 //	normal   — observe-log（非阻塞发送，满则丢弃）
+//	done     — 在 unsubscribe 时关闭，用于 publish 检测退订的 subscriber
 type subscribePair struct {
 	priority chan sseEvent
 	normal   chan sseEvent
+	done     chan struct{}
 }
 
 // SSEBroker 事件总线，支持多个 subscriber
@@ -55,6 +57,7 @@ func (b *SSEBroker) subscribe() *subscribePair {
 	sp := &subscribePair{
 		priority: make(chan sseEvent, priorityChanSize), // 高优先事件
 		normal:   make(chan sseEvent, normalChanSize),   // 观测日志，允许丢弃
+		done:     make(chan struct{}),
 	}
 	b.subscribers[sp] = struct{}{}
 	return sp
@@ -66,20 +69,30 @@ func (b *SSEBroker) unsubscribe(sp *subscribePair) {
 	defer b.mu.Unlock()
 	if _, ok := b.subscribers[sp]; ok {
 		delete(b.subscribers, sp)
-		close(sp.priority)
-		close(sp.normal)
+		close(sp.done)
 	}
 }
 
 // publish 广播事件到所有 subscriber。
 // priority 事件（task-done / leader-change / cluster-change）阻塞发送不可丢弃；
 // normal 事件（observe-log）满则丢弃。
+//
+// 关键：先复制订阅者列表再释放锁，避免持锁时阻塞在 channel send 上导致死锁。
 func (b *SSEBroker) publish(event sseEvent) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	subs := make([]*subscribePair, 0, len(b.subscribers))
 	for sp := range b.subscribers {
+		subs = append(subs, sp)
+	}
+	b.mu.Unlock()
+
+	for _, sp := range subs {
 		if isPriorityEvent(event.Type) {
-			sp.priority <- event
+			select {
+			case sp.priority <- event:
+			case <-sp.done:
+				// subscriber 已退订，丢弃事件
+			}
 		} else {
 			select {
 			case sp.normal <- event:
@@ -234,17 +247,11 @@ func (h *Handler) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-sp.priority:
-			if !ok {
-				return
-			}
+		case ev := <-sp.priority:
 			if !writeSSEEvent(w, flusher, ev) {
 				return
 			}
-		case ev, ok := <-sp.normal:
-			if !ok {
-				return
-			}
+		case ev := <-sp.normal:
 			if !writeSSEEvent(w, flusher, ev) {
 				return
 			}
