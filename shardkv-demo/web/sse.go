@@ -8,6 +8,12 @@ import (
 	"kvstore/tester"
 )
 
+const (
+	taskDoneCacheSize = 50
+	priorityChanSize  = 100
+	normalChanSize    = 5000
+)
+
 // sseEvent 事件包络，支持多种事件类型
 type sseEvent struct {
 	Type string      // SSE event 行："leader-change" | "task-done" | "observe-log"
@@ -35,8 +41,6 @@ type SSEBroker struct {
 	recentTaskDone []sseEvent // 缓存最近 N 条 task-done 事件，供新 SSE 连接重放
 }
 
-const taskDoneCacheSize = 50
-
 // NewSSEBroker 创建 SSE 事件总线
 func NewSSEBroker() *SSEBroker {
 	return &SSEBroker{
@@ -44,20 +48,20 @@ func NewSSEBroker() *SSEBroker {
 	}
 }
 
-// Subscribe 注册一个新的 subscriber，返回双 channel pair
-func (b *SSEBroker) Subscribe() *subscribePair {
+// subscribe 注册一个新的 subscriber，返回双 channel pair
+func (b *SSEBroker) subscribe() *subscribePair {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	sp := &subscribePair{
-		priority: make(chan sseEvent, 100),  // 高优先事件
-		normal:   make(chan sseEvent, 1000), // 观测日志，允许丢弃
+		priority: make(chan sseEvent, priorityChanSize), // 高优先事件
+		normal:   make(chan sseEvent, normalChanSize),   // 观测日志，允许丢弃
 	}
 	b.subscribers[sp] = struct{}{}
 	return sp
 }
 
-// Unsubscribe 取消注册
-func (b *SSEBroker) Unsubscribe(sp *subscribePair) {
+// unsubscribe 取消注册
+func (b *SSEBroker) unsubscribe(sp *subscribePair) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, ok := b.subscribers[sp]; ok {
@@ -67,10 +71,10 @@ func (b *SSEBroker) Unsubscribe(sp *subscribePair) {
 	}
 }
 
-// Publish 广播事件到所有 subscriber。
+// publish 广播事件到所有 subscriber。
 // priority 事件（task-done / leader-change / cluster-change）阻塞发送不可丢弃；
 // normal 事件（observe-log）满则丢弃。
-func (b *SSEBroker) Publish(event sseEvent) {
+func (b *SSEBroker) publish(event sseEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for sp := range b.subscribers {
@@ -97,7 +101,7 @@ type LeaderEvent struct {
 
 // PublishLeaderChange 供外部调用，将 Leader 变更事件发布到 SSE 总线。
 func (h *Handler) PublishLeaderChange(gid tester.Tgid, sid int, isLeader bool) {
-	h.sseBroker.Publish(sseEvent{
+	h.sseBroker.publish(sseEvent{
 		Type: "leader-change",
 		Data: LeaderEvent{
 			GID:      int(gid),
@@ -127,7 +131,7 @@ func (h *Handler) PublishTaskDone(ev TaskDoneEvent) {
 		Data: ev,
 	}
 	h.sseBroker.storeTaskDone(event)
-	h.sseBroker.Publish(event)
+	h.sseBroker.publish(event)
 }
 
 // storeTaskDone 将 task-done 事件存入环形缓存，新 SSE 连接建立时重放。
@@ -163,7 +167,7 @@ type ClusterChangeEvent struct {
 
 // PublishClusterChange 推送 ChaosMonkey 操作事件到 SSE 流。
 func (h *Handler) PublishClusterChange(gid int, action string, idx int) {
-	h.sseBroker.Publish(sseEvent{
+	h.sseBroker.publish(sseEvent{
 		Type: "cluster-change",
 		Data: ClusterChangeEvent{
 			Action: action,
@@ -185,7 +189,7 @@ type ObserveLogEvent struct {
 
 // PublishObserveLog 推送观测日志到 SSE 流。
 func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64) {
-	h.sseBroker.Publish(sseEvent{
+	h.sseBroker.publish(sseEvent{
 		Type: "observe-log",
 		Data: ObserveLogEvent{
 			Tag:       tag,
@@ -212,8 +216,8 @@ func (h *Handler) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	sp := h.sseBroker.Subscribe()
-	defer h.sseBroker.Unsubscribe(sp)
+	sp := h.sseBroker.subscribe()
+	defer h.sseBroker.unsubscribe(sp)
 
 	// 新连接建立时，重放缓存的 task-done 事件，防止断开期间事件丢失
 	cached := h.sseBroker.getRecentTaskDone()
