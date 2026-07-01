@@ -30,9 +30,12 @@ type subscribePair struct {
 
 // SSEBroker 事件总线，支持多个 subscriber
 type SSEBroker struct {
-	mu          sync.Mutex
-	subscribers map[*subscribePair]struct{}
+	mu             sync.Mutex
+	subscribers    map[*subscribePair]struct{}
+	recentTaskDone []sseEvent // 缓存最近 N 条 task-done 事件，供新 SSE 连接重放
 }
+
+const taskDoneCacheSize = 50
 
 // NewSSEBroker 创建 SSE 事件总线
 func NewSSEBroker() *SSEBroker {
@@ -117,12 +120,36 @@ type TaskDoneEvent struct {
 	Data    json.RawMessage `json:"data,omitempty"` // action-specific payload
 }
 
-// PublishTaskDone 发布异步任务完成事件。
+// PublishTaskDone 发布异步任务完成事件，同时缓存以供 SSE 重连重放。
 func (h *Handler) PublishTaskDone(ev TaskDoneEvent) {
-	h.sseBroker.Publish(sseEvent{
+	event := sseEvent{
 		Type: "task-done",
 		Data: ev,
-	})
+	}
+	h.sseBroker.storeTaskDone(event)
+	h.sseBroker.Publish(event)
+}
+
+// storeTaskDone 将 task-done 事件存入环形缓存，新 SSE 连接建立时重放。
+func (b *SSEBroker) storeTaskDone(event sseEvent) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.recentTaskDone = append(b.recentTaskDone, event)
+	if len(b.recentTaskDone) > taskDoneCacheSize {
+		b.recentTaskDone = b.recentTaskDone[len(b.recentTaskDone)-taskDoneCacheSize:]
+	}
+}
+
+// getRecentTaskDone 返回缓存的 task-done 事件副本，不清除缓存（多连接安全）。
+func (b *SSEBroker) getRecentTaskDone() []sseEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.recentTaskDone) == 0 {
+		return nil
+	}
+	copied := make([]sseEvent, len(b.recentTaskDone))
+	copy(copied, b.recentTaskDone)
+	return copied
 }
 
 // ---------- 集群拓扑变更事件（ChaosMonkey kill/restart） ----------
@@ -187,6 +214,14 @@ func (h *Handler) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	sp := h.sseBroker.Subscribe()
 	defer h.sseBroker.Unsubscribe(sp)
+
+	// 新连接建立时，重放缓存的 task-done 事件，防止断开期间事件丢失
+	cached := h.sseBroker.getRecentTaskDone()
+	for _, ev := range cached {
+		if !writeSSEEvent(w, flusher, ev) {
+			return
+		}
+	}
 
 	ctx := r.Context()
 	for {

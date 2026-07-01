@@ -791,7 +791,9 @@
 
     function handleTaskDone(task) {
         const pending = pendingTasks[task.taskId];
-        if (pending) { delete pendingTasks[task.taskId]; }
+        // SSE 重连后后端会重放最近 task-done 事件，已处理的直接忽略
+        if (!pending) return;
+        delete pendingTasks[task.taskId];
         switch (task.action) {
             case 'put': {
                 const k = (pending && pending.key) || task.key || '?';
