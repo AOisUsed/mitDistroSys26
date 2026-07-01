@@ -269,6 +269,7 @@
         .get-result {
             background: #f0f5ff; border: 1px solid #d6e4ff; border-radius: 6px;
             padding: 6px 10px; font-size: 11px; font-family: monospace;
+            max-height: 80px; overflow-y: auto;
         }
 
         .kv-panel { display: flex; flex-direction: column; gap: 5px; }
@@ -287,8 +288,8 @@
             border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15);
         }
         .kv-row .kv-inputs .kv-input-sm { flex: 0 0 80px; min-width: 75px; }
-        .kv-row > .kv-input-sm { flex: 0 0 80px; min-width: 75px; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 12px; outline: none; transition: border-color 0.2s; }
-        .kv-row > .kv-input-sm:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
+        .kv-row > .kv-input-sm, select.kv-input-sm { flex: 0 0 80px; min-width: 75px; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 12px; outline: none; transition: border-color 0.2s; background: #fff; }
+        .kv-row > .kv-input-sm:focus, select.kv-input-sm:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
         .kv-row .kv-actions { flex: 0 0 auto; display: flex; gap: 5px; }
         .kv-row .kv-actions .btn { height: 100%; display: flex; align-items: center; font-size: 12px; }
         .kv-row > .btn { display: flex; align-items: center; flex: 0 0 auto; }
@@ -297,7 +298,7 @@
         .slider-container {
             border: 1px solid #e8e8e8;
             border-radius: 6px;
-            padding: 6px 8px;
+            padding: 5px 8px;
             background: white;
             transition: opacity 0.25s, border-color 0.25s, background-color 0.25s;
         }
@@ -338,6 +339,7 @@
 
         .control-row {
             display: flex; gap: 12px;
+            align-items: flex-start;
         }
         .control-col {
             flex: 1; min-width: 0;
@@ -346,22 +348,7 @@
 
         .sep-line {
             border-top: 1px solid #e8e8e8;
-            margin: 6px 0;
-        }
-
-        .shard-badge {
-            display: inline-block;
-            padding: 0 7px;
-            font-size: 10px;
-            font-weight: 500;
-            line-height: 18px;
-            border-radius: 9px;
-            background: #f5f3ff;
-            color: #7c5cf0;
-            border: 1px solid #e8e0ff;
-            margin-left: 6px;
-            vertical-align: middle;
-            white-space: nowrap;
+            margin: 7px 0;
         }
 
         .net-toggle-row {
@@ -406,7 +393,14 @@
             <div class="control-row">
                 <!-- 左列：KV 操作 -->
                 <div class="control-col">
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#667eea;">KV 操作 <span id="kvShard" style="font-size:11px;font-weight:400;color:#888;"></span></div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                        <span style="font-size:12px;font-weight:600;color:#667eea;">KV 操作 <span id="kvShard" style="font-size:11px;font-weight:400;color:#888;"></span></span>
+                        <div style="display:flex;gap:5px;align-items:center;flex-shrink:0;">
+                            <span style="font-size:11px;font-weight:500;color:#333;white-space:nowrap;">随机生成到</span>
+                            <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;"></select>
+                            <button class="btn btn-sm" onclick="generateKeyForShard()" style="flex:0 0 auto;background:#fff;color:#64748b;border:1px solid #64748b;">生成</button>
+                        </div>
+                    </div>
                     <div class="kv-panel">
                         <div class="kv-row" style="gap:8px;">
                             <!-- Put 组 -->
@@ -423,17 +417,12 @@
                                 <button class="btn btn-success" onclick="doGet()" style="flex:0 0 auto;">Get</button>
                             </div>
                         </div>
-                        <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;justify-content:flex-end;">
-                            <span style="font-size:11px;font-weight:600;color:#333;flex-shrink:0;display:flex;align-items:center;">随机生成到</span>
-                            <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;"></select>
-                            <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()" style="flex:0 0 auto;">生成</button>
-                        </div>
                     </div>
-                    <div id="kvResult" class="get-result">等待操作...</div>
+                    <div id="kvResult" class="get-result" >等待操作...</div>
 
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#764ba2;">
+                    <div style="font-size:12px;font-weight:600;margin-bottom:3px;color:#764ba2;">
                         CAS 竞争写入 <span id="casShard" style="font-size:11px;font-weight:400;color:#888;"></span>
                     </div>
                     <div class="kv-panel">
@@ -448,11 +437,11 @@
                             </div>
                         </div>
                     </div>
-                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;display:none;"></div>
+                    <div id="raceResult" class="get-result" style="margin-top:4px;background:#f9f0ff;border-color:#d3adf7;color:#aaaaaa;">未执行</div>
 
                     <!-- 批量随机写入 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#52c41a;">
+                    <div style="font-size:12px;font-weight:600;margin-bottom:3px;color:#52c41a;">
                         批量随机写入
                     </div>
                     <div class="kv-panel">
@@ -470,14 +459,14 @@
                             </div>
                         </div>
                     </div>
-                    <div id="batchResult" class="get-result" style="margin-top:4px;background:#f6ffed;border-color:#b7eb8f;display:none;"></div>
+                    <div id="batchResult" class="get-result" style="margin-top:4px;background:#f6ffed;border-color:#b7eb8f;color:#aaa;">未执行</div>
                 </div>
 
                 <!-- 右列：组操作 + 网络可靠性 + 观测日志 -->
                 <div class="control-col">
                     <!-- 组操作（含 Start/Kill/Leave 以及添加新组） -->
                     <div>
-                        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#faad14;">组操作</div>
+                        <div style="font-size:12px;font-weight:600;margin-bottom:5px;color:#faad14;">组操作</div>
                         <div style="display:flex;flex-direction:column;gap:4px;">
                             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                                 <span class="form-label" style="min-width:30px;">组:</span>
@@ -508,7 +497,7 @@
 
                         <!-- 丢包率 -->
                         <div class="slider-container">
-                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">丢包率 <span style="font-weight:400;font-size:10px;color:#999;">(RPC 请求/回复)</span></div>
+                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">丢包率 <span style="font-weight:400;font-size:10px;color:#999;">(RPC 请求/回复)</span></div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <input type="range" id="dropRateSlider" min="0" max="1000" value="100"
                                     oninput="updateNetParamLabel('dropRate', this.value)"
@@ -522,7 +511,7 @@
                         <div style="display:flex;gap:8px;">
                             <!-- RPC 请求延迟 -->
                             <div class="slider-container" style="flex:1;min-width:0;">
-                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">RPC 请求延迟</div>
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">RPC 请求延迟</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <input type="range" id="shortDelaySlider" min="0" max="500" value="27"
                                         oninput="updateNetParamLabel('shortDelayMs', this.value)"
@@ -533,8 +522,8 @@
                             </div>
 
                             <!-- RPC 回复乱序 -->
-                            <div class="slider-container" style="flex:0 1 auto;min-width:0;padding:9px 12px;">
-                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">RPC 回复乱序</div>
+                            <div class="slider-container" style="flex:0 1 auto;min-width:0;padding:5px 8px;">
+                                <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">RPC 回复乱序</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <label class="toggle-switch" style="vertical-align:middle;">
                                         <input type="checkbox" id="longReorderingToggle" onchange="toggleLongReordering()">
@@ -547,7 +536,7 @@
 
                         <!-- RPC 不可达超时 -->
                         <div class="slider-container">
-                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px;">RPC 不可达超时 <span style="font-weight:400;font-size:10px;color:#999;">(节点隔离/停机时生效)</span></div>
+                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">RPC 不可达超时 <span style="font-weight:400;font-size:10px;color:#999;">(节点隔离/停机时生效)</span></div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <input type="range" id="longDelaySlider" min="100" max="10000" value="7000"
                                     oninput="updateNetParamLabel('longDelayMs', this.value)"
@@ -559,11 +548,15 @@
 
                     <!-- 观测日志开关 -->
                     <div class="sep-line"></div>
-                    <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#13c2c2;">观测日志</div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:5px;color:#13c2c2;">观测日志</div>
                     <div style="display:flex;flex-wrap:wrap;gap:6px;">
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f0f5ff;border:1px solid #d6e4ff;">
                             <input type="checkbox" class="observe-toggle" data-scene="election" onchange="toggleObserve(this)">
                             <span style="color:#667eea;">Raft选举</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f9f0ff;border:1px solid #d3adf7;">
+                            <input type="checkbox" class="observe-toggle" data-scene="snapshot" onchange="toggleObserve(this)">
+                            <span style="color:#722ed1;">Raft快照</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f6ffed;border:1px solid #b7eb8f;">
                             <input type="checkbox" class="observe-toggle" data-scene="kvsubmit" onchange="toggleObserve(this)">
@@ -572,10 +565,6 @@
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff7e6;border:1px solid #ffd591;">
                             <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
                             <span style="color:#d48806;">分片迁移</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f9f0ff;border:1px solid #d3adf7;">
-                            <input type="checkbox" class="observe-toggle" data-scene="snapshot" onchange="toggleObserve(this)">
-                            <span style="color:#722ed1;">快照</span>
                         </label>
                     </div>
                 </div>
@@ -870,7 +859,7 @@
                 if (task.success && task.data) {
                     const d = task.data;
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
-                        `<div>成功 <strong>${d.successCount}</strong> / 失败 <strong>${d.failCount}</strong> | 用时 ${d.elapsed}</div>`;
+                        `<div style="color:#52c41a;">成功 <strong>${d.successCount}</strong> / 失败 <strong>${d.failCount}</strong> | 用时 ${d.elapsed}</div>`;
                     addLog(`批量写入完成: 成功 = ${d.successCount} 失败 = ${d.failCount} 用时 = ${d.elapsed}`, 'ok');
                 } else {
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
@@ -1678,7 +1667,6 @@
         batchPutBusy = true;
         if (btn) btn.disabled = true;
 
-        resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<span class="spinner"></span> ⏳ 写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...`;
         addLog(`⏳ 批量写入: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'} 已提交...`, 'shard');
 
@@ -1820,7 +1808,7 @@
         'Election': 'Raft选举',
         'Migration': '分片迁移',
         'KVSubmit': 'KV操作',
-        'Snapshot': '快照',
+        'Snapshot': 'Raft快照',
     };
 
     // 迁移子类型颜色：freeze/冻结=冰蓝色, delete/删除=琥珀色, install/安装=绿色
@@ -1973,7 +1961,6 @@
         document.getElementById('getKey').value = key;
 
         const resultDiv = document.getElementById('raceResult');
-        resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> ⏳ CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
         addLog(`⏳ CAS 竞赛: ${nClient} 个客户端并发 CAS Put key="${key}" 已提交...`, 'shard');
         try {
