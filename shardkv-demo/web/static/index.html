@@ -1700,8 +1700,7 @@
     }
     scheduleRefresh();
 
-    // ========== SSE Leader 变更推送 ==========
-    // Leader 变更时通过 SSE 即时通知前端，触发轻量刷新节点状态（不改"更新于"时间戳）
+    // ========== SSE 推送 ==========
     let sseReconnectTimer = null;
     function connectSSE() {
         if (sseReconnectTimer) {
@@ -1710,6 +1709,10 @@
         }
         const evtSource = new EventSource('/api/events');
         evtSource.addEventListener('leader-change', function(e) {
+            lightRefreshNodeStatus();
+        });
+        // ChaosMonkey kill/restart 即时推送，前端立刻刷新节点状态
+        evtSource.addEventListener('cluster-change', function(e) {
             lightRefreshNodeStatus();
         });
         evtSource.addEventListener('task-done', function(e) {

@@ -21,7 +21,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径（YAML）")
 	flag.Parse()
 
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	log.Printf("shardkv-demo 正在启动...")
 
 	// 加载配置

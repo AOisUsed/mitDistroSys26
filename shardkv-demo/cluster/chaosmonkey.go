@@ -25,6 +25,7 @@ type ChaosMonkey struct {
 	stop           chan struct{}
 	pendingRestart map[int]struct{} // 正在等待自动重启的节点（避免重复操作）
 	pmu            sync.Mutex
+	onChange       func(action string, idx int) // SSE 推送回调
 }
 
 // run 是 ChaosMonkey 的主循环
@@ -39,10 +40,7 @@ func (m *ChaosMonkey) run() {
 	}
 }
 
-// tick 执行一次混沌操作
-// 原则：只杀不救 — tick() 只在安全时可杀（alive > quorum），从不主动 restart
-//
-//	后续自动恢复由 killNode() 的延迟 goroutine 负责
+// tick 执行一次混沌操作：只在 quorum 满足时 kill 一个存活节点，延迟自动重启。
 func (m *ChaosMonkey) tick() {
 	sg := m.cm.infra.Group(m.gid)
 	if sg == nil {
@@ -92,6 +90,9 @@ func (m *ChaosMonkey) tick() {
 func (m *ChaosMonkey) killNode(idx int, sg *tester.ServerGrp) {
 	log.Printf("[ChaosMonkey] Kill: GID %d 节点 %d (%s)", m.gid, idx, sg.SrvName(idx))
 	sg.ShutdownServer(idx)
+	if m.onChange != nil {
+		m.onChange("kill", idx)
+	}
 
 	// 2~4 秒后自动重启
 	delay := 2 + rand.Intn(3)
@@ -117,6 +118,9 @@ func (m *ChaosMonkey) restartNode(idx int, sg *tester.ServerGrp) {
 	}
 	sg.ConnectOne(idx)
 	log.Printf("[ChaosMonkey] Restart: GID %d 节点 %d (%s) 已恢复", m.gid, idx, sg.SrvName(idx))
+	if m.onChange != nil {
+		m.onChange("restart", idx)
+	}
 
 	// 清理 pending 记录
 	m.pmu.Lock()

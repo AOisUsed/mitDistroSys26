@@ -10,51 +10,75 @@ import (
 
 // sseEvent 事件包络，支持多种事件类型
 type sseEvent struct {
-	Type string      // SSE event 行："leader-change" | "task-done"
+	Type string      // SSE event 行："leader-change" | "task-done" | "observe-log"
 	Data interface{} // 将被 JSON 序列化后写入 data: 行
+}
+
+// isPriorityEvent 判断事件是否不可丢弃。
+func isPriorityEvent(t string) bool {
+	return t == "task-done" || t == "leader-change" || t == "cluster-change"
+}
+
+// subscribePair 每个 subscriber 持有两条 channel：
+//
+//	priority — task-done / leader-change / cluster-change（阻塞发送，不可丢弃）
+//	normal   — observe-log（非阻塞发送，满则丢弃）
+type subscribePair struct {
+	priority chan sseEvent
+	normal   chan sseEvent
 }
 
 // SSEBroker 事件总线，支持多个 subscriber
 type SSEBroker struct {
 	mu          sync.Mutex
-	subscribers map[chan sseEvent]struct{}
+	subscribers map[*subscribePair]struct{}
 }
 
 // NewSSEBroker 创建 SSE 事件总线
 func NewSSEBroker() *SSEBroker {
 	return &SSEBroker{
-		subscribers: make(map[chan sseEvent]struct{}),
+		subscribers: make(map[*subscribePair]struct{}),
 	}
 }
 
-// Subscribe 注册一个新的 subscriber，返回接收事件的 channel
-func (b *SSEBroker) Subscribe() chan sseEvent {
+// Subscribe 注册一个新的 subscriber，返回双 channel pair
+func (b *SSEBroker) Subscribe() *subscribePair {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ch := make(chan sseEvent, 128)
-	b.subscribers[ch] = struct{}{}
-	return ch
+	sp := &subscribePair{
+		priority: make(chan sseEvent, 100),  // 高优先事件
+		normal:   make(chan sseEvent, 1000), // 观测日志，允许丢弃
+	}
+	b.subscribers[sp] = struct{}{}
+	return sp
 }
 
 // Unsubscribe 取消注册
-func (b *SSEBroker) Unsubscribe(ch chan sseEvent) {
+func (b *SSEBroker) Unsubscribe(sp *subscribePair) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.subscribers[ch]; ok {
-		delete(b.subscribers, ch)
-		close(ch)
+	if _, ok := b.subscribers[sp]; ok {
+		delete(b.subscribers, sp)
+		close(sp.priority)
+		close(sp.normal)
 	}
 }
 
-// publish 广播事件到所有 subscriber（非阻塞，channel 满则丢弃）
+// Publish 广播事件到所有 subscriber。
+// priority 事件（task-done / leader-change / cluster-change）阻塞发送不可丢弃；
+// normal 事件（observe-log）满则丢弃。
 func (b *SSEBroker) Publish(event sseEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for ch := range b.subscribers {
-		select {
-		case ch <- event:
-		default:
-			// channel 满，丢弃防止阻塞
+	for sp := range b.subscribers {
+		if isPriorityEvent(event.Type) {
+			sp.priority <- event
+		} else {
+			select {
+			case sp.normal <- event:
+			default:
+				// observe-log channel 满则丢弃，防止阻塞 Raft 线程
+			}
 		}
 	}
 }
@@ -101,6 +125,27 @@ func (h *Handler) PublishTaskDone(ev TaskDoneEvent) {
 	})
 }
 
+// ---------- 集群拓扑变更事件（ChaosMonkey kill/restart） ----------
+
+// ClusterChangeEvent 表示 ChaosMonkey 触发的节点状态变更。
+type ClusterChangeEvent struct {
+	Action string `json:"action"` // "kill" | "restart"
+	GID    int    `json:"gid"`
+	Index  int    `json:"index"`
+}
+
+// PublishClusterChange 推送 ChaosMonkey 操作事件到 SSE 流。
+func (h *Handler) PublishClusterChange(gid int, action string, idx int) {
+	h.sseBroker.Publish(sseEvent{
+		Type: "cluster-change",
+		Data: ClusterChangeEvent{
+			Action: action,
+			GID:    gid,
+			Index:  idx,
+		},
+	})
+}
+
 // ---------- 观测日志实时推送 ----------
 
 // ObserveLogEvent 观测日志实时推送事件。
@@ -126,7 +171,7 @@ func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64)
 
 // ---------- SSE HTTP Handler ----------
 
-// HandleSSE 提供 SSE 端点，支持 leader-change 与 task-done 两种事件。
+// HandleSSE 提供 SSE 端点，同时监听 priority（task-done/leader-change）和 normal（observe-log）双 channel。
 func (h *Handler) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -140,27 +185,43 @@ func (h *Handler) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch := h.sseBroker.Subscribe()
-	defer h.sseBroker.Unsubscribe(ch)
+	sp := h.sseBroker.Subscribe()
+	defer h.sseBroker.Unsubscribe(sp)
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-ch:
+		case ev, ok := <-sp.priority:
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(ev.Data)
-			if err != nil {
-				continue
-			}
-			_, writeErr := w.Write([]byte("event: " + ev.Type + "\ndata: " + string(data) + "\n\n"))
-			if writeErr != nil {
+			if !writeSSEEvent(w, flusher, ev) {
 				return
 			}
-			flusher.Flush()
+		case ev, ok := <-sp.normal:
+			if !ok {
+				return
+			}
+			if !writeSSEEvent(w, flusher, ev) {
+				return
+			}
 		}
 	}
+}
+
+// writeSSEEvent 将一个 sseEvent 序列化并写入 HTTP 响应流。
+// 返回 false 表示写入失败（连接断开等）。
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev sseEvent) bool {
+	data, err := json.Marshal(ev.Data)
+	if err != nil {
+		return true // JSON 序列化失败跳过，继续处理后续事件
+	}
+	_, writeErr := w.Write([]byte("event: " + ev.Type + "\ndata: " + string(data) + "\n\n"))
+	if writeErr != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
 }

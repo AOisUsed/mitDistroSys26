@@ -32,6 +32,11 @@ func NewHandler(cm *cluster.ClusterManager) *Handler {
 		h.PublishObserveLog(tag, text, id, unixMilli)
 	})
 
+	// 注册 ChaosMonkey 节点变更 SSE 推送回调
+	cm.OnChaosEvent = func(gid tester.Tgid, action string, idx int) {
+		h.PublishClusterChange(int(gid), action, idx)
+	}
+
 	return h
 }
 

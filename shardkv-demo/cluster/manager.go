@@ -48,6 +48,9 @@ type ClusterManager struct {
 	leaders               map[tester.Tgid]map[int]bool
 	leaderChangeListeners []func(gid tester.Tgid, sid int, isLeader bool)
 
+	// —— SSE 回调 ——
+	OnChaosEvent func(gid tester.Tgid, action string, idx int) // ChaosMonkey kill/restart 时推送 SSE
+
 	// —— Config 缓存（poller 写入，Status 读取）——
 	cachedConfig     *shardcfg.ShardConfig
 	cachedNextConfig *shardcfg.ShardConfig
@@ -805,6 +808,11 @@ func (cm *ClusterManager) StartChaos(gid tester.Tgid) error {
 		cm:   cm,
 		gid:  gid,
 		stop: make(chan struct{}),
+	}
+	if cm.OnChaosEvent != nil {
+		m.onChange = func(action string, idx int) {
+			cm.OnChaosEvent(gid, action, idx)
+		}
 	}
 	cm.chaosMonkeys = append(cm.chaosMonkeys, m)
 	go m.run()
