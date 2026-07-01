@@ -1,0 +1,55 @@
+package web
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+
+	"kvstore/tester"
+)
+
+// HandleChaosStart 启动指定组的混沌猴子（POST /api/chaos/start）。
+func (h *Handler) HandleChaosStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req chaosRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	err := h.cm.StartChaos(tester.Tgid(req.GID))
+	if err != nil {
+		writeJSON(w, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	log.Printf("[Chaos] GID %d 混沌已启动", req.GID)
+	writeJSON(w, map[string]any{"success": true, "action": "chaos-start", "gid": req.GID})
+}
+
+// HandleChaosStop 停止指定组的混沌猴子（POST /api/chaos/stop）。
+func (h *Handler) HandleChaosStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req chaosRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	h.cm.StopChaos(tester.Tgid(req.GID))
+	log.Printf("[Chaos] GID %d 混沌已停止", req.GID)
+	writeJSON(w, map[string]any{"success": true, "action": "chaos-stop", "gid": req.GID})
+}
+
+// HandleChaosStatus 查询所有混沌猴子状态（GET /api/chaos/status）。
+func (h *Handler) HandleChaosStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	states := h.cm.ChaosStatus()
+	writeJSON(w, map[string]any{"success": true, "states": states})
+}

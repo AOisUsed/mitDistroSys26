@@ -72,7 +72,7 @@ func main() {
 	h.RegisterRoutes(mux)
 
 	// 添加 CORS 中间件
-	handler := corsMiddleware(mux)
+	handler := web.CORSMiddleware(mux)
 
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf(":%d", *port)
@@ -91,20 +91,4 @@ func main() {
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("HTTP 服务错误: %v", err)
 	}
-}
-
-// corsMiddleware 添加 CORS 头以支持前端跨域请求
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
