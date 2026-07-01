@@ -286,9 +286,12 @@
         .kv-row .kv-inputs select:focus {
             border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15);
         }
-        .kv-row .kv-inputs .kv-input-sm { flex: 0 0 70px; min-width: 65px; }
+        .kv-row .kv-inputs .kv-input-sm { flex: 0 0 80px; min-width: 75px; }
+        .kv-row > .kv-input-sm { flex: 0 0 80px; min-width: 75px; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 12px; outline: none; transition: border-color 0.2s; }
+        .kv-row > .kv-input-sm:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
         .kv-row .kv-actions { flex: 0 0 auto; display: flex; gap: 5px; }
         .kv-row .kv-actions .btn { height: 100%; display: flex; align-items: center; font-size: 12px; }
+        .kv-row > .btn { display: flex; align-items: center; flex: 0 0 auto; }
 
         /* slider 容器统一样式，含 disabled 态 */
         .slider-container {
@@ -405,14 +408,10 @@
                                 <button class="btn btn-success" onclick="doGet()" style="flex:0 0 auto;">Get</button>
                             </div>
                         </div>
-                        <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;">
-                            <span style="font-size:11px;font-weight:600;color:#555;flex-shrink:0;display:flex;align-items:center;">随机生成键值对</span>
-                            <div class="kv-inputs" style="flex:0 0 auto;margin-left:auto;">
-                                <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;width:auto;"></select>
-                            </div>
-                            <div class="kv-actions">
-                                <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()">生成</button>
-                            </div>
+                        <div class="kv-row" style="padding-top:3px;border-top:1px dashed #e8e8e8;justify-content:flex-end;">
+                            <span style="font-size:11px;font-weight:600;color:#333;flex-shrink:0;display:flex;align-items:center;">随机生成到</span>
+                            <select id="targetShard" class="kv-input-sm" style="flex:0 0 auto;"></select>
+                            <button class="btn btn-sm btn-warning" onclick="generateKeyForShard()" style="flex:0 0 auto;">生成</button>
                         </div>
                     </div>
                     <div id="kvResult" class="get-result">等待操作...</div>
@@ -953,7 +952,13 @@
             return;
         }
         const target = parseInt(document.getElementById('targetShard').value);
-        const pool = keyPool[target];
+        let pool;
+        if (target === -1) {
+            // 任意分片：合并所有分片的 key pool 随机抽取
+            pool = Object.values(keyPool).flat();
+        } else {
+            pool = keyPool[target];
+        }
         if (!pool || pool.length === 0) return;
         const idx = Math.floor(Math.random() * pool.length);
         const key = pool[idx];
@@ -961,8 +966,9 @@
         document.getElementById('putKey').value = key;
         document.getElementById('getKey').value = key;
         document.getElementById('putVal').value = val;
+        document.getElementById('raceKey').value = key;
         kvShardHint();
-        addLog(`已填入随机键值对 "${key}":"${val}" -> 分片 ${target}`, 'info');
+        addLog(`已填入随机键值对 "${key}":"${val}" -> ${target === -1 ? '任意分片' : `分片 ${target}`}`, 'info');
     }
 
     // ========== KV 操作 ==========
@@ -1589,6 +1595,7 @@
     function initShardSelect() {
         const sel = document.getElementById('targetShard');
         const frag = document.createDocumentFragment();
+        frag.appendChild(new Option('任意分片', '-1'));
         for (let i = 0; i < N_SHARDS; i++) {
             frag.appendChild(new Option(`分片 ${i}`, String(i)));
         }
