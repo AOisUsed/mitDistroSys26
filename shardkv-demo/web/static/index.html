@@ -558,9 +558,9 @@
                             <input type="checkbox" class="observe-toggle" data-scene="migration" onchange="toggleObserve(this)">
                             <span style="color:#d48806;">分片迁移</span>
                         </label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff2f0;border:1px solid #ffccc7;">
-                            <input type="checkbox" class="observe-toggle" data-scene="fault" onchange="toggleObserve(this)">
-                            <span style="color:#ff4d4f;">故障恢复</span>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f9f0ff;border:1px solid #d3adf7;">
+                            <input type="checkbox" class="observe-toggle" data-scene="snapshot" onchange="toggleObserve(this)">
+                            <span style="color:#722ed1;">快照</span>
                         </label>
                     </div>
                 </div>
@@ -1734,7 +1734,7 @@
         evtSource.addEventListener('observe-log', function(e) {
             try {
                 const d = JSON.parse(e.data);
-                addObserveLog(d.tag, d.text, d.unixMilli);
+                addObserveLog(d.tag, d.text, d.unixMilli, d.style);
             } catch (err) {}
         });
         evtSource.onopen = function() {
@@ -1793,13 +1793,13 @@
         'Election': '#667eea',
         'Migration': '#f6d365',
         'KVSubmit': '#52c41a',
-        'Fault': '#ff4d4f',
+        'Snapshot': '#722ed1',
     };
     const OBSERVE_LOG_NAMES = {
         'Election': 'Raft选举',
         'Migration': '分片迁移',
         'KVSubmit': 'KV操作',
-        'Fault': '故障恢复',
+        'Snapshot': '快照',
     };
 
     // 迁移子类型颜色：freeze/冻结=冰蓝色, delete/删除=琥珀色, install/安装=绿色
@@ -1810,14 +1810,16 @@
         return null;
     }
 
-    function addObserveLog(tag, text, unixMilli) {
+    function addObserveLog(tag, text, unixMilli, style) {
         const area = document.getElementById('observeLogArea');
         const time = unixMilli ? new Date(unixMilli).toLocaleTimeString() : new Date().toLocaleTimeString();
         const tagColor = OBSERVE_LOG_COLORS[tag] || '#1890ff';
         const tagName = OBSERVE_LOG_NAMES[tag] || tag;
-        // 迁移日志主体按子类型（Freeze/Delete/Install）着色，标签保持原有颜色
+        // 正文颜色：fault样式→红色；迁移子类型→按操作着色；否则默认
         let textColor = '';
-        if (tag === 'Migration') {
+        if (style === 'fault') {
+            textColor = '#ff4d4f'; // 故障恢复红色
+        } else if (tag === 'Migration') {
             textColor = getMigrationColor(text) || '';
         }
         const entry = document.createElement('div');
@@ -1855,7 +1857,7 @@
                 observeLogLastId = data.nextId;
             }
             for (const line of data.lines) {
-                addObserveLog(line.tag, line.text, line.unixMilli);
+                addObserveLog(line.tag, line.text, line.unixMilli, line.style);
             }
         } catch (err) {
             // 静默失败

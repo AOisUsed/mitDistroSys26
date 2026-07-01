@@ -28,8 +28,8 @@ func NewHandler(cm *cluster.ClusterManager) *Handler {
 	h := &Handler{cm: cm, sseBroker: NewSSEBroker()}
 
 	// 注册观测日志 SSE 推送回调
-	debug.SetObserveLogCallback(func(tag, text string, id int64, unixMilli int64) {
-		h.PublishObserveLog(tag, text, id, unixMilli)
+	debug.SetObserveLogCallback(func(tag, text string, id int64, unixMilli int64, style string) {
+		h.PublishObserveLog(tag, text, id, unixMilli, style)
 	})
 
 	// 注册 ChaosMonkey 节点变更 SSE 推送回调
@@ -867,7 +867,7 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 			"election":  debug.GetObserveElection(),
 			"migration": debug.GetObserveMigration(),
 			"kvsubmit":  debug.GetObserveKVSubmit(),
-			"fault":     debug.GetObserveFaultRecovery(),
+			"snapshot":  debug.GetObserveSnapshot(),
 		})
 	case http.MethodPost:
 		// POST: 设置某个观测开关
@@ -886,8 +886,8 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 			debug.SetObserveMigration(req.On)
 		case "kvsubmit":
 			debug.SetObserveKVSubmit(req.On)
-		case "fault":
-			debug.SetObserveFaultRecovery(req.On)
+		case "snapshot":
+			debug.SetObserveSnapshot(req.On)
 		default:
 			http.Error(w, "unknown scene: "+req.Scene, http.StatusBadRequest)
 			return

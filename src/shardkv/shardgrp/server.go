@@ -443,7 +443,7 @@ func (kv *KVServer) Snapshot() []byte {
 	for shid, kv := range kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveFaultPrintf("server-%v-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("server-%v-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver :%v Snapshoted \n keyNum: %v\n", kv.me, keyNum)
 
 	// encode copied snapshot
@@ -477,7 +477,7 @@ func (kv *KVServer) Restore(data []byte) {
 	for shid, kv := range snapshot.Kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveFaultPrintf("server-%v-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("server-%v-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver %v: Restored from snapshot\n keyNum: %v\n", kv.me, keyNum)
 
 	kv.rwMu.Lock()

@@ -204,7 +204,7 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
 	if rf.state == leader {
-		//debug.ObserveFaultPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
+		debug.ObserveElectionPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
 		debug.ReportLeaderChange(rf.me, false)
 	}
 
@@ -244,7 +244,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.lastHeardTime = time.Now()
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
-			//debug.ObserveFaultPrintf("server-%v: candidate 变为 follower (旧任期 %v → 新任期 %v)", rf.me, args.Term, rf.CurrentTerm)
+			debug.ObserveElectionPrintf("server-%v: candidate 变为 follower (旧任期 %v → 新任期 %v)", rf.me, args.Term, rf.CurrentTerm)
 		}
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm

@@ -185,10 +185,11 @@ type ObserveLogEvent struct {
 	Text      string `json:"text"`
 	Id        int64  `json:"id"`
 	UnixMilli int64  `json:"unixMilli"`
+	Style     string `json:"style,omitempty"` // "fault" → 正文红色
 }
 
 // PublishObserveLog 推送观测日志到 SSE 流。
-func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64) {
+func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64, style string) {
 	h.sseBroker.publish(sseEvent{
 		Type: "observe-log",
 		Data: ObserveLogEvent{
@@ -196,6 +197,7 @@ func (h *Handler) PublishObserveLog(tag, text string, id int64, unixMilli int64)
 			Text:      text,
 			Id:        id,
 			UnixMilli: unixMilli,
+			Style:     style,
 		},
 	})
 }

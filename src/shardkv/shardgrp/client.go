@@ -77,7 +77,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
 	debug.D5APrintf("shardgrpclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
-	debug.ObserveFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
+	debug.ObserveKVRequestFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
@@ -131,7 +131,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	// it could mean:
 	//	- the group is in partition/election,
 	// 	- the group has left
-	debug.ObserveFaultPrintf("组客户端: Put(%s) 重试 %d 次耗尽 (组网络分区或已离开)", key, attempts)
+	debug.ObserveKVRequestFaultPrintf("组客户端: Put(%s) 重试 %d 次耗尽 (组网络分区或已离开)", key, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -174,7 +174,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("组客户端: 冻结分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
+	debug.ObserveKVRequestFaultPrintf("组客户端: 冻结分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
 	return nil, rpcapi.ErrRetryExhausted
 }
 
@@ -217,7 +217,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("组客户端: 安装分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
+	debug.ObserveKVRequestFaultPrintf("组客户端: 安装分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -259,6 +259,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 			time.Sleep(backoffTime)
 		}
 	}
-	debug.ObserveFaultPrintf("组客户端: 删除分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
+	debug.ObserveKVRequestFaultPrintf("组客户端: 删除分片(%v) 重试 %d 次耗尽 (组网络分区或已离开)", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }

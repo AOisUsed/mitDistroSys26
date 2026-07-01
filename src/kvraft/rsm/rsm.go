@@ -85,7 +85,7 @@ func MakeRSM(servers []*rpc.ClientEnd, me int, persister *tester.Persister, maxr
 	snapshot := persister.ReadSnapshot()
 	if snapshot != nil && len(snapshot) > 0 {
 		debug.D4CPrintf("rsm%v restores Snapshot from persister\n", rsm.me)
-		debug.ObserveFaultPrintf("rsm-%v: 从 persister 恢复 snapshot (大小=%d 字节)", rsm.me, len(snapshot))
+		debug.ObserveSnapshotPrintf("rsm-%v: 从 persister 恢复 snapshot (大小=%d 字节)", rsm.me, len(snapshot))
 		rsm.sm.Restore(snapshot)
 	}
 
@@ -118,7 +118,7 @@ func (rsm *RSM) readApply() {
 			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
 				raftstateSizeBefore := rsm.rf.PersistBytes()
 				debug.D4CPrintf("rsm%v: raftstate %v exceeds the maxraftstate%v, need to snapshot", rsm.me, raftstateSizeBefore, rsm.maxraftstate)
-				debug.ObserveFaultPrintf("rsm-%v: 触发快照 (raftstate %v >= maxraftstate %v)", rsm.me, raftstateSizeBefore, rsm.maxraftstate)
+				debug.ObserveSnapshotPrintf("rsm-%v: 触发快照 (raftstate %v >= maxraftstate %v)", rsm.me, raftstateSizeBefore, rsm.maxraftstate)
 				snapshot := rsm.sm.Snapshot()
 				rsm.rf.Snapshot(commandId, snapshot)
 				debug.D5APrintf("rsm%v: exceeded maxraftstate %v, took snapshot raftstateSize %v -> %v, reqId: %v, commandId: %v, with snapshot size: %v \n", rsm.me, rsm.maxraftstate, raftstateSizeBefore, rsm.rf.PersistBytes(), opMsg.Id, commandId, len(snapshot))
@@ -141,7 +141,7 @@ func (rsm *RSM) readApply() {
 
 		} else if applyMsg.SnapshotValid { // if it's a snapshot
 			debug.D4BPrintf("rsm%v reads snapshot from applyCh, index:%v, term:%v", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
-			debug.ObserveFaultPrintf("rsm-%v: 收到 InstallSnapshot(index=%v, term=%v), 正在恢复状态机", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
+			debug.ObserveSnapshotPrintf("rsm-%v: 收到 InstallSnapshot(index=%v, term=%v), 正在恢复状态机", rsm.me, applyMsg.SnapshotIndex, applyMsg.SnapshotTerm)
 			rsm.sm.Restore(applyMsg.Snapshot)
 
 			// when snapshot is introduced, it's no longer reliable to know that a Submit() expires based only on the log overwrite

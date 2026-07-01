@@ -13,7 +13,7 @@ import (
 // 每个场景只有几个关键日志点，避免噪音干扰。
 //
 // 使用方式（运行时动态切换）：
-//   1. Web Demo：通过前端 4 个 toggle 开关，调用 /api/observe 接口
+//   1. Web Demo：通过前端 toggle 开关，调用 /api/observe 接口
 //   2. 环境变量：启动时设置 OBSERVE_ELECTION=true 等（仅初始化生效）
 //   3. 代码调用：直接调用 debug.SetObserveElection(true)
 //
@@ -25,26 +25,30 @@ import (
 //   服务器 daemon（子进程）通过 RPC 将观测日志转发到主进程的环形缓冲区。
 //   子进程不检查 toggle 状态，始终输出终端日志 + 转发；
 //   主进程 RPC handler 根据 toggle 决定是否写入环形缓冲区。
+//
+// 日志样式：
+//   Style="":    正常 — 整行用 tag 主题色
+//   Style="fault":故障 — tag 保持主题色，正文显示红色
 // ============================================================
 
 // --- 原子开关（仅主进程有效） ---
 
 var (
-	observeElection      atomic.Bool
-	observeMigration     atomic.Bool
-	observeKVSubmit      atomic.Bool
-	observeFaultRecovery atomic.Bool
+	observeElection  atomic.Bool
+	observeMigration atomic.Bool
+	observeKVSubmit  atomic.Bool
+	observeSnapshot  atomic.Bool
 )
 
 // Set/Get 函数
-func SetObserveElection(v bool)      { observeElection.Store(v) }
-func GetObserveElection() bool       { return observeElection.Load() }
-func SetObserveMigration(v bool)     { observeMigration.Store(v) }
-func GetObserveMigration() bool      { return observeMigration.Load() }
-func SetObserveKVSubmit(v bool)      { observeKVSubmit.Store(v) }
-func GetObserveKVSubmit() bool       { return observeKVSubmit.Load() }
-func SetObserveFaultRecovery(v bool) { observeFaultRecovery.Store(v) }
-func GetObserveFaultRecovery() bool  { return observeFaultRecovery.Load() }
+func SetObserveElection(v bool)  { observeElection.Store(v) }
+func GetObserveElection() bool   { return observeElection.Load() }
+func SetObserveMigration(v bool) { observeMigration.Store(v) }
+func GetObserveMigration() bool  { return observeMigration.Load() }
+func SetObserveKVSubmit(v bool)  { observeKVSubmit.Store(v) }
+func GetObserveKVSubmit() bool   { return observeKVSubmit.Load() }
+func SetObserveSnapshot(v bool)  { observeSnapshot.Store(v) }
+func GetObserveSnapshot() bool   { return observeSnapshot.Load() }
 
 // 从环境变量初始化（init 时调用）
 func InitObserveFromEnv() {
@@ -57,7 +61,7 @@ const (
 	TagElection  = "Election"
 	TagMigration = "Migration"
 	TagKVSubmit  = "KVSubmit"
-	TagFault     = "Fault"
+	TagSnapshot  = "Snapshot"
 )
 
 // --- 环形缓冲区 ---
@@ -65,8 +69,9 @@ const (
 type ObserveLine struct {
 	Tag       string `json:"tag"`
 	Text      string `json:"text"`
-	Id        int64  `json:"id"`        // 单调递增的日志ID，用于前端游标增量获取
-	UnixMilli int64  `json:"unixMilli"` // 日志产生时的服务器时间戳（毫秒）
+	Id        int64  `json:"id"`              // 单调递增的日志ID，用于前端游标增量获取
+	UnixMilli int64  `json:"unixMilli"`       // 日志产生时的服务器时间戳（毫秒）
+	Style     string `json:"style,omitempty"` // "fault"=红色正文，空=默认
 }
 
 const observeBufSize = 500
@@ -78,21 +83,27 @@ var (
 )
 
 // observeWrite 直接写入环形缓冲区（无终端输出，供 RPC handler 使用避免重复）
-func observeWrite(tag, text string) {
+func observeWrite(tag, text, style string) {
 	idx := observeIdx.Add(1) - 1
 	unixMilli := time.Now().UnixMilli()
-	observeBuf[idx%observeBufSize] = ObserveLine{Tag: tag, Text: text, Id: idx, UnixMilli: unixMilli}
+	observeBuf[idx%observeBufSize] = ObserveLine{Tag: tag, Text: text, Id: idx, UnixMilli: unixMilli, Style: style}
 
 	// 实时推送到 SSE（非阻塞，如果回调未注册则跳过）
 	if fn := getObserveLogCallback(); fn != nil {
-		fn(tag, text, idx, unixMilli)
+		fn(tag, text, idx, unixMilli, style)
 	}
 }
 
-// observePush 格式化后写入环形缓冲区
+// observePush 格式化后写入环形缓冲区（正常样式）
 func observePush(tag, format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
-	observeWrite(tag, text)
+	observeWrite(tag, text, "")
+}
+
+// observePushFault 格式化后写入环形缓冲区（故障红色样式）
+func observePushFault(tag, format string, a ...interface{}) {
+	text := fmt.Sprintf(format, a...)
+	observeWrite(tag, text, "fault")
 }
 
 // ObservePushTagged 检查 tag 对应 toggle，开启时写入环形缓冲区（无终端输出）
@@ -101,22 +112,22 @@ func ObservePushTagged(tag, text string) {
 	switch tag {
 	case TagElection:
 		if observeElection.Load() {
-			observeWrite(tag, text)
+			observeWrite(tag, text, "")
 		}
 	case TagMigration:
 		if observeMigration.Load() {
-			observeWrite(tag, text)
+			observeWrite(tag, text, "")
 		}
 	case TagKVSubmit:
 		if observeKVSubmit.Load() {
-			observeWrite(tag, text)
+			observeWrite(tag, text, "")
 		}
-	case TagFault:
-		if observeFaultRecovery.Load() {
-			observeWrite(tag, text)
+	case TagSnapshot:
+		if observeSnapshot.Load() {
+			observeWrite(tag, text, "")
 		}
 	default:
-		observeWrite(tag, text)
+		observeWrite(tag, text, "")
 	}
 }
 
@@ -183,7 +194,7 @@ func GetObserveLinesSince(sinceId int64) (lines []ObserveLine, nextId int64) {
 // observeWrite 写入环形缓冲区时，同时调用此回调将日志实时推送到 SSE 流。
 // 由 web 包在启动时通过 SetObserveLogCallback 注册。
 
-type ObserveLogCallbackFn func(tag, text string, id int64, unixMilli int64)
+type ObserveLogCallbackFn func(tag, text string, id int64, unixMilli int64, style string)
 
 var observeLogCallback atomic.Value // stores ObserveLogCallbackFn
 
@@ -245,6 +256,18 @@ func ObserveMigrationPrintf(format string, a ...interface{}) {
 	}
 }
 
+// ObserveMigrationFaultPrintf 分片迁移过程中的故障日志（红色正文）
+func ObserveMigrationFaultPrintf(format string, a ...interface{}) {
+	text := fmt.Sprintf(format, a...)
+	if fn := getObserveForward(); fn != nil {
+		fn(TagMigration, text)
+		return
+	}
+	if observeMigration.Load() {
+		observePushFault(TagMigration, format, a...)
+	}
+}
+
 func ObserveKVRequestPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
@@ -256,14 +279,26 @@ func ObserveKVRequestPrintf(format string, a ...interface{}) {
 	}
 }
 
-func ObserveFaultPrintf(format string, a ...interface{}) {
+// ObserveKVRequestFaultPrintf KV请求过程中的故障日志（红色正文）
+func ObserveKVRequestFaultPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagFault, text)
+		fn(TagKVSubmit, text)
 		return
 	}
-	if observeFaultRecovery.Load() {
-		observePush(TagFault, format, a...)
+	if observeKVSubmit.Load() {
+		observePushFault(TagKVSubmit, format, a...)
+	}
+}
+
+func ObserveSnapshotPrintf(format string, a ...interface{}) {
+	text := fmt.Sprintf(format, a...)
+	if fn := getObserveForward(); fn != nil {
+		fn(TagSnapshot, text)
+		return
+	}
+	if observeSnapshot.Load() {
+		observePush(TagSnapshot, format, a...)
 	}
 }
 
