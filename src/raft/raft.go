@@ -204,8 +204,10 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
 	if rf.state == leader {
-		debug.ObserveElectionPrintf("server-%v: leader 降级为 follower (旧任期 %v → 新任期 %v)", rf.me, rf.CurrentTerm, term)
+		debug.ObserveElectionPrintf("server-%v: leader (任期 %v) 转变为 follower (任期 %v)", rf.me, rf.CurrentTerm, term)
 		debug.ReportLeaderChange(rf.me, false)
+	} else {
+		debug.ObserveElectionPrintf("server-%v: candidate (任期 %v) 转变为 follower (任期 %v)", rf.me, rf.CurrentTerm, term)
 	}
 
 	rf.lastHeardTime = time.Now() // when converted to follower, must update lastHeartBeat in order not to start Election immediately
@@ -244,7 +246,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.lastHeardTime = time.Now()
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
-			debug.ObserveElectionPrintf("server-%v: candidate 变为 follower (旧任期 %v → 新任期 %v)", rf.me, args.Term, rf.CurrentTerm)
+			debug.ObserveElectionPrintf("server-%v: 从 candidate (任期 %v) 变为 follower (任期 %v)", rf.me, args.Term, rf.CurrentTerm)
 		}
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm
@@ -462,18 +464,25 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// vote for this candidate:
 			rf.lastHeardTime = time.Now() // update lastHeardTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
 			debug.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("server-%v (任期 %v) 给 server-%v (任期 %v) 投票: 此 candidate 日志足够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
-			rf.lastHeardTime = time.Now()
 			rf.state = follower
+			rf.persist()
 		}
 	} else { // in other cases: don't vote for this candidate
+		if args.Term < rf.CurrentTerm {
+			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此 candidate 任期过小", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+		} else if rf.VotedFor != args.CandidateId { // under the condition: args.Term == rf.CurrentTerm
+			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此任期内已投过票 (给 server-%v)", rf.me, rf.CurrentTerm, args.CandidateId, args.Term, rf.VotedFor)
+		} else {
+			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此 candidate 日志不够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+		}
 		debug.D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 	}
-	rf.persist()
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -834,7 +843,7 @@ func (rf *Raft) startElection() {
 	rf.lastHeardTime = time.Now() // prevent the ticker from starting another election immediately
 	rf.persist()
 	debug.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
-	debug.ObserveElectionPrintf("server-%v 在任期 %v: 发起选举", rf.me, rf.CurrentTerm)
+	debug.ObserveElectionPrintf("server-%v (任期 %v): 发起选举", rf.me, rf.CurrentTerm)
 
 	args := &RequestVoteArgs{
 		Term:         rf.CurrentTerm,
