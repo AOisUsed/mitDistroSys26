@@ -35,7 +35,7 @@
         }
 
         .container {
-            display: flex; gap: 12px; padding: 12px;
+            display: flex; gap: 1px; padding: 12px;
             height: calc(100vh - 52px);
             overflow: hidden;
             min-width: 0;
@@ -47,7 +47,7 @@
             min-width: 0;
         }
         .right-panel {
-            width: 460px; min-width: 380px;
+            width: clamp(380px, 27vw, 640px); flex-shrink: 0;
             display: flex; flex-direction: column; gap: 0;
             background: #1a1a2e;
             border-radius: 10px;
@@ -136,7 +136,7 @@
         .node-grid { display: flex; gap: 10px; flex-wrap: wrap; }
         .group-card {
             background: #fafafa; border: 1px solid #eee; border-radius: 8px;
-            padding: 10px; flex: 1; min-width: 240px;
+            padding: 10px; flex: 1; min-width: 245px;
         }
         .group-header {
             display: flex; justify-content: space-between; align-items: center;
@@ -212,6 +212,33 @@
             letter-spacing: 3px;
             line-height: 1;
         }
+        /* 左右面板拖拽手柄 */
+        .panel-drag-handle {
+            width: 10px;
+            background: transparent;
+            cursor: col-resize;
+            flex-shrink: 0;
+            user-select: none;
+            transition: background 0.25s ease;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .panel-drag-handle::after {
+            content: '';
+            position: absolute;
+            width: 1px;
+            height: 98%;
+            background: #d9d9d9;
+        }
+        .panel-drag-handle:hover {
+            background: #d9d9d9;
+        }
+        .panel-drag-handle:hover::after {
+            display: none;
+        }
         .log-panel-header {
             display: flex; align-items: center; justify-content: space-between;
             padding: 8px 14px; background: #16213e; border-bottom: 1px solid #0f3460;
@@ -247,6 +274,7 @@
         .log-panel-area .log-warn { color: #d48806; }
         .log-panel-area .log-info { color: #1890ff; }
         .log-panel-area .log-shard { color: #f6d365; }
+        .log-panel-area .log-action { color: #5cdbd3; }
 
         .toggle-switch {
             position: relative; display: inline-block;
@@ -298,7 +326,7 @@
         .slider-container {
             border: 1px solid #e8e8e8;
             border-radius: 6px;
-            padding: 5px 8px;
+            padding: 11px 10px;
             background: white;
             transition: opacity 0.25s, border-color 0.25s, background-color 0.25s;
         }
@@ -359,15 +387,9 @@
         .net-toggle-row .right { display: flex; align-items: center; gap: 6px; }
 
         /* 右侧面板自适应：中等屏幕缩小右侧 */
-        @media (max-width: 1400px) {
-            .right-panel { width: 380px; min-width: 320px; }
-            .group-card { min-width: 210px; }
-        }
         @media (max-width: 1100px) {
             .control-row { flex-direction: column; }
             .control-col { min-width: 0; }
-            .right-panel { width: 320px; min-width: 280px; }
-            .group-card { min-width: 190px; }
         }
         /* 窄屏：上下堆叠 */
         @media (max-width: 800px) {
@@ -485,11 +507,11 @@
                                 <select id="groupGid" class="dropdown" style="flex:1;min-width:80px;">
                                     <option value="">选择组</option>
                                 </select>
-                                <button class="btn btn-success btn-sm" onclick="doStartGroup()">Start</button>
-                                <button class="btn btn-danger btn-sm" onclick="doKillGroup()">Kill</button>
-                                <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">Leave</button>
+                                <button class="btn btn-success btn-sm" onclick="doStartGroup()">启动</button>
+                                <button class="btn btn-danger btn-sm" onclick="doKillGroup()">终止</button>
+                                <button class="btn btn-warning btn-sm" onclick="doLeaveGroup()">移除</button>
                                 <span style="width:1px;height:18px;background:#d9d9d9;flex-shrink:0;margin:0 2px;"></span>
-                                <button class="btn btn-primary btn-sm" onclick="doJoinGroup()">+ 添加新组</button>
+                                <button class="btn btn-primary btn-sm" onclick="doJoinGroup()">+ 新组加入</button>
                             </div>
                         </div>
                     </div>
@@ -548,7 +570,7 @@
 
                         <!-- RPC 不可达超时 -->
                         <div class="slider-container">
-                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">RPC 不可达超时 <span style="font-weight:400;font-size:10px;color:#999;">(节点隔离/停机时生效)</span></div>
+                            <div class="slider-title" style="font-size:11px;font-weight:600;color:#555;margin-bottom:3px;">RPC 不可达超时 <span style="font-weight:400;font-size:10px;color:#999;">(节点隔离/终止时生效)</span></div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <input type="range" id="longDelaySlider" min="100" max="10000" value="7000"
                                     oninput="updateNetParamLabel('longDelayMs', this.value)"
@@ -588,7 +610,7 @@
             <h3>
                 <span style="display:flex;align-items:center;">
                     节点状态
-                    <button class="btn btn-primary btn-sm" style="margin-left:20px;" onclick="doJoinGroup()">+ 添加新组</button>
+                    <button class="btn btn-primary btn-sm" style="margin-left:20px;" onclick="doJoinGroup()">+ 新组加入</button>
                 </span>
                 <span id="refreshInfo" style="flex:1;text-align:center;font-weight:400;font-size:11px;color:#888;"></span>
                 <span class="actions" style="flex-shrink:0;width:150px;justify-content:flex-end;">
@@ -610,6 +632,9 @@
             </div>
         </div>
     </div>
+
+    <!-- 左右面板拖拽手柄 -->
+    <div class="panel-drag-handle" id="panelDragHandle"></div>
 
     <!-- 右侧面板：日志 -->
     <div class="right-panel">
@@ -680,7 +705,7 @@
 
     let logExpanded = true;
     let observeLogExpanded = false;
-    const INITIAL_LOG_RATIO = 0.6;
+    const INITIAL_LOG_RATIO = 0.5;
     let logRatio = INITIAL_LOG_RATIO;
     function toggleLog() {
         const area = document.getElementById('logArea');
@@ -743,7 +768,7 @@
     // ========== 拖拽分隔条 ==========
     let isDragging = false;
     let dragStartY = 0;
-    let dragStartRatio = 0.6;
+    let dragStartRatio = 0.5;
 
     function initDragHandle() {
         const handle = document.getElementById('logDragHandle');
@@ -793,10 +818,53 @@
         initDragHandle();
     }
 
+    // ── 左右面板拖拽手柄 ──
+    let isPanelDragging = false;
+    let panelDragStartX = 0;
+    let panelDragStartWidth = 460;
+
+    function initPanelDragHandle() {
+        const handle = document.getElementById('panelDragHandle');
+        if (!handle) return;
+        handle.addEventListener('mousedown', onPanelDragStart);
+    }
+
+    function onPanelDragStart(e) {
+        isPanelDragging = true;
+        panelDragStartX = e.clientX;
+        const rp = document.querySelector('.right-panel');
+        panelDragStartWidth = rp ? rp.getBoundingClientRect().width : 460;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onPanelDragMove);
+        document.addEventListener('mouseup', onPanelDragEnd);
+        e.preventDefault();
+    }
+
+    function onPanelDragMove(e) {
+        if (!isPanelDragging) return;
+        const deltaX = e.clientX - panelDragStartX;
+        // 向右拖 → 右侧变窄 → 用减法
+        let newWidth = panelDragStartWidth - deltaX;
+        newWidth = Math.max(380, Math.min(640, newWidth));
+        const rp = document.querySelector('.right-panel');
+        if (rp) rp.style.width = newWidth + 'px';
+    }
+
+    function onPanelDragEnd() {
+        isPanelDragging = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onPanelDragMove);
+        document.removeEventListener('mouseup', onPanelDragEnd);
+    }
+
+    initPanelDragHandle();
+
     function addLog(message, type) {
         const logArea = document.getElementById('logArea');
         const time = new Date().toLocaleTimeString();
-        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'warn' ? 'log-warn' : type === 'shard' ? 'log-shard' : 'log-info';
+        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'warn' ? 'log-warn' : type === 'shard' ? 'log-shard' : type === 'action' ? 'log-action' : 'log-info';
         const entry = document.createElement('div');
         entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
         logArea.appendChild(entry);
@@ -824,7 +892,7 @@
                     ? `Put: ${k} = ${v} (分片 ${sh})`
                     : `Put 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh})`;
                 if (task.success) {
-                    addLog(`Put key="${k}" value="${v}" (分片 ${sh}) ✅`, 'ok');
+                    addLog(`Put key="${k}" = "${v}" (分片 ${sh})`, 'ok');
                 } else {
                     addLog(`Put key="${k}" value="${v}" 失败 ${task.error || task.message} (分片 ${sh})`, 'err');
                 }
@@ -838,7 +906,7 @@
                 if (task.success && task.data) {
                     const d = task.data;
                     document.getElementById('kvResult').textContent = `Get: ${d.key} = "${d.value}" (分片 ${sh}, v${d.version})`;
-                    addLog(`Get key="${k}" -> "${d.value}" (分片 ${sh}, v${d.version}) ✅`, 'ok');
+                    addLog(`Get key="${k}" → "${d.value}" (分片 ${sh}, v${d.version})`, 'ok');
                 } else {
                     document.getElementById('kvResult').textContent = `Get 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh || '?'})`;
                     addLog(`Get key="${k}" 失败 ${task.error || task.message}`, 'err');
@@ -847,10 +915,10 @@
             }
             case 'join': {
                 if (task.success) {
-                    if (task.message) addLog(`JoinGroup: ${task.message}`, 'shard');
-                    addLog(`JoinGroup: ✅ 新组 ${task.gid} 已加入集群，分片迁移完成`, 'shard');
+                    if (task.message) addLog(`${task.message}`, 'info');
+                    addLog(`加入组 ${task.gid} 完成`, 'ok');
                 } else {
-                    addLog(`JoinGroup: ❌ ${task.error || '组加入失败'}`, 'err');
+                    addLog(`加入组失败: ${task.error || '未知错误'}`, 'err');
                 }
                 optimisticPendingMigration = false;
                 refreshStatus();
@@ -859,9 +927,9 @@
             case 'leave': {
                 if (pending) leaveInFlight = false;
                 if (task.success) {
-                    addLog(`LeaveGroup: ✅ 组 ${task.gid} 已离开集群，分片已迁移到其他组`, 'shard');
+                    addLog(`移除组 ${task.gid} 完成，分片已迁移到其他组`, 'ok');
                 } else {
-                    addLog(`LeaveGroup: ❌ ${task.error || '组移除失败'}`, 'err');
+                    addLog(`移除组失败: ${task.error || '未知错误'}`, 'err');
                 }
                 optimisticPendingMigration = false;
                 refreshStatus();
@@ -888,7 +956,7 @@
                     const d = task.data;
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
                         `<div style="color:#764ba2;">成功 <strong>${d.successCount}</strong> / 版本冲突 <strong>${d.versionErrCount}</strong> | 最终 "${d.finalValue}" | 用时 ${d.elapsed}</div>`;
-                    addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}`, 'shard');
+                    addLog(`CAS 竞赛完成: 成功=${d.successCount} 冲突=${d.versionErrCount} → 最终="${d.finalValue}" 用时=${d.elapsed}`, 'ok');
                 } else {
                     if (pending && pending.resultDiv) pending.resultDiv.innerHTML =
                         `<div style="color:#ff4d4f;">CAS 竞赛失败: ${task.error || '未知错误'}</div>`;
@@ -1016,9 +1084,9 @@
     async function doPut() {
         const key = document.getElementById('putKey').value.trim();
         const value = document.getElementById('putVal').value.trim();
-        if (!key) { addLog('Put: 键不能为空', 'err'); return; }
+        if (!key) { addLog('Put: Key 不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        addLog(`Put: key="${key}" value="${value}" (分片 ${shard}) 已提交...`, 'shard');
+        addLog(`Put key="${key}" → 处理中...`, 'info');
         const result = await api('/api/kv/', {
             method: 'PUT',
             body: JSON.stringify({key, value}),
@@ -1034,7 +1102,7 @@
         const key = document.getElementById('getKey').value.trim();
         if (!key) { addLog('Get: 键不能为空', 'err'); return; }
         const shard = key2Shard(key);
-        addLog(`Get: key="${key}" (分片 ${shard}) 已提交...`, 'shard');
+        addLog(`Get key="${key}" → 处理中...`, 'info');
         const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', timeoutSec: 5, label: '读取'});
         if (result.async) {
             pendingTasks[result.taskId] = { action: 'get', key, shard };
@@ -1053,9 +1121,9 @@
             label: '隔离节点'
         });
         if (result.success) {
-            addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 已隔离网络 (进程保持运行)`, 'warn');
+            addLog(`隔离节点: 组 ${gid} 节点 ${srv} 已隔离网络`, 'action');
         } else {
-            addLog(`IsolateNode: 组 ${gid} 节点 ${srv} 隔离失败 - ${result.error}`, 'err');
+            addLog(`隔离节点失败: 组 ${gid} 节点 ${srv} - ${result.error}`, 'err');
         }
         refreshStatus();
     }
@@ -1068,25 +1136,25 @@
             label: '恢复节点'
         });
         if (result.success) {
-            addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 网络已恢复`, 'ok');
+            addLog(`恢复网络: 组 ${gid} 节点 ${srv} 网络已恢复`, 'ok');
         } else {
-            addLog(`RecoverNode: 组 ${gid} 节点 ${srv} 恢复失败 - ${result.error || '未知错误'}`, 'err');
+            addLog(`恢复网络失败: 组 ${gid} 节点 ${srv} - ${result.error || '未知错误'}`, 'err');
         }
         refreshStatus();
     }
 
     async function doKillNodeById(gid, srv) {
         await api('/api/node/kill', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5, label: '终止节点'});
-        addLog(`KillNode: server-${gid}-${srv}`, 'err');
+        addLog(`终止节点: server-${gid}-${srv}`, 'action');
         refreshStatus();
     }
 
     async function doStartNodeById(gid, srv) {
         const result = await api('/api/node/start', {method: 'POST', body: JSON.stringify({gid, srv}), timeoutSec: 5, label: '启动节点'});
         if (result.success) {
-            addLog(`StartNode: server-${gid}-${srv} 已启动`, 'ok');
+            addLog(`启动节点: server-${gid}-${srv} 已启动`, 'ok');
         } else {
-            addLog(`StartNode: server-${gid}-${srv} 启动失败 - ${result.error || '未知错误'}`, 'err');
+            addLog(`启动节点失败: server-${gid}-${srv} - ${result.error || '未知错误'}`, 'err');
         }
         refreshStatus();
     }
@@ -1094,26 +1162,26 @@
     // ========== 组操作 ==========
     async function doKillGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('KillGroup: 请选择有效的组', 'err'); return; }
+        if (isNaN(gid)) { addLog('终止组: 请选择有效的组', 'err'); return; }
         await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '终止组'});
-        addLog(`KillGroup: 组 ${gid} 全部 3 个节点已停掉`, 'err');
+        addLog(`终止组: 组 ${gid} 全部节点已终止`, 'action');
         refreshStatus();
     }
 
     async function doStartGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('StartGroup: 请选择有效的组', 'err'); return; }
+        if (isNaN(gid)) { addLog('启动组: 请选择有效的组', 'err'); return; }
         const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '启动组'});
         if (result.success) {
-            addLog(`StartGroup: 组 ${gid} 全部节点已启动`, 'ok');
+            addLog(`启动组: 组 ${gid} 全部节点已启动`, 'ok');
         } else {
-            addLog(`StartGroup: 组 ${gid} 启动失败 - ${result.error || '未知错误'}`, 'err');
+            addLog(`启动组失败: 组 ${gid} - ${result.error || '未知错误'}`, 'err');
         }
         refreshStatus();
     }
 
     async function doJoinGroup() {
-        addLog(`JoinGroup: ── 发起新组加入操作 ──`, 'shard');
+        addLog('加入新组: 开始执行...', 'info');
         // 乐观更新：立即显示 pending 标记，不等 POST 返回
         optimisticPendingMigration = true;
         refreshStatus();
@@ -1131,12 +1199,12 @@
 
     let leaveInFlight = false;
     async function doLeaveGroup() {
-        if (leaveInFlight) { addLog('LeaveGroup: 上次操作未完成，请等待', 'err'); return; }
+        if (leaveInFlight) { addLog('移除组: 上次操作未完成，请等待', 'err'); return; }
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('LeaveGroup: 请选择有效的组', 'err'); return; }
-        if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
+        if (isNaN(gid)) { addLog('移除组: 请选择有效的组', 'err'); return; }
+        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
         leaveInFlight = true;
-        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        addLog(`移除组 ${gid}: 开始执行...`, 'info');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
@@ -1250,7 +1318,7 @@
         // 同步更新三个 slider 的禁用样式
         updateSliderDisabledState(enabled);
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 = ${dropPct}%, RPC请求延迟 = 0~${netParams.shortDelayMs}ms, RPC不可达超时 = 0~${netParams.longDelayMs}ms)` : '关闭'}`, enabled ? 'err' : 'ok');
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 ${dropPct}%, RPC请求延迟 0~${netParams.shortDelayMs}ms, RPC不可达超时 0~${netParams.longDelayMs}ms)` : '关闭'}`,  'action' );
 
         // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
         if (!enabled) {
@@ -1333,7 +1401,7 @@
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
-                addLog(`回复乱序: ${on ? '开启 (RPC 回复有 2/3 概率延迟 200 ~ 2200ms)' : '关闭'}`, on ? 'err' : 'info');
+                addLog(`回复乱序: ${on ? '开启 (RPC回复 2/3 概率延迟 200~2200ms)' : '关闭'}`, on ? 'action' : 'info');
                 // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
                 if (on) {
                     document.getElementById('unreliableToggle').checked = true;
@@ -1351,8 +1419,8 @@
 
     // ========== 快捷 Leave（从节点状态标题调用） ==========
     async function doLeaveGroupById(gid) {
-        if (gid === 0) { addLog('LeaveGroup: ❌ ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
-        addLog(`LeaveGroup: ── 发起组 ${gid} 离开操作 ──`, 'shard');
+        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
+        addLog(`移除组 ${gid}: 开始执行...`, 'info');
         optimisticPendingMigration = true;
         refreshStatus();
         let result;
@@ -1383,7 +1451,7 @@
             if (result.success) {
                 chaosStates[gid] = !currentlyActive;
                 if (chaosStates[gid]) {
-                    addLog(`混沌: 组 ${gid} 已启动，每 1-3s 随机kill节点，但会保证大多数节点在线`, 'err');
+                    addLog(`混沌: 组 ${gid} 已启动，每 1-3s 随机终止节点 (保证多数派)`, 'action');
                 } else {
                     addLog(`混沌: 组 ${gid} 已停止`, 'ok');
                 }
@@ -1471,7 +1539,7 @@
                         <span class="ops">
                             <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
                                     onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
-                            ${group.gid === 0 ? '' : `<button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">Leave</button>`}
+                            ${group.gid === 0 ? '' : `<button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">移除</button>`}
                         </span>
                     </div>
             `;
@@ -1488,10 +1556,10 @@
                     ? `<button class="btn btn-xs btn-recover" onclick="doRecoverNode(${group.gid}, ${srv.index})">恢复</button>`
                     : '';
                 const killBtn = srv.isAlive
-                    ? `<button class="btn btn-xs btn-danger" onclick="doKillNodeById(${group.gid}, ${srv.index})">Kill</button>`
+                    ? `<button class="btn btn-xs btn-danger" onclick="doKillNodeById(${group.gid}, ${srv.index})">终止</button>`
                     : '';
                 const startBtn = !srv.isAlive
-                    ? `<button class="btn btn-xs btn-success" onclick="doStartNodeById(${group.gid}, ${srv.index})">Start</button>`
+                    ? `<button class="btn btn-xs btn-success" onclick="doStartNodeById(${group.gid}, ${srv.index})">启动</button>`
                     : '';
                 html += `
                     <div class="server-item">
@@ -1700,7 +1768,7 @@
         if (btn) btn.disabled = true;
 
         resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...</span>`;
-        addLog(`批量写入: ${count} 个 key, ${targetShard >= 0 ? `分片 ${targetShard}` : '任意分片'} 已提交...`, 'shard');
+        addLog(`批量写入 ${count} 个 key → 处理中...`, 'info');
 
         const startTime = Date.now();
 
@@ -1916,12 +1984,22 @@
             });
             if (!resp.ok) {
                 el.checked = !on; // 回滚
+                return;
             }
-            // 展开观测日志面板
-            const observeLogToggle = document.getElementById('observeLogToggle');
-            if (on && observeLogToggle.textContent === '展开') {
-                toggleObserveLog();
-            }
+            // 展开/折叠观测日志面板
+            setTimeout(() => {
+                let anyOn = false;
+                document.querySelectorAll('.observe-toggle').forEach(cb => {
+                    if (cb.checked) anyOn = true;
+                });
+                if (!anyOn && observeLogExpanded) {
+                    // 所有 tag 都已关闭 → 折叠观测日志
+                    toggleObserveLog();
+                } else if (on && !observeLogExpanded) {
+                    // 有 tag 被打开 → 展开观测日志
+                    toggleObserveLog();
+                }
+            }, 150); // 等 toggleObserveLog 上次可能还没完成的 DOM 更新
         } catch (err) {
             el.checked = !on; // 回滚
         }
@@ -1991,7 +2069,7 @@
         }
         const resultDiv = document.getElementById('raceResult');
         resultDiv.innerHTML = `<div style="color:#764ba2;"><span class="spinner-cas"></span> CAS 竞赛进行中 (${nClient} 并发请求)...</div>`;
-        addLog(`CAS 竞赛: ${nClient} 个客户端并发 CAS Put key="${key}" 已提交...`, 'shard');
+        addLog(`CAS 竞赛 ${nClient} 客户端 → 处理中...`, 'info');
         try {
             const result = await api('/api/kv/cas-race', {
                 method: 'POST',
