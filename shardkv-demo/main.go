@@ -71,9 +71,6 @@ func main() {
 	})
 	h.RegisterRoutes(mux)
 
-	// 添加 CORS 中间件
-	handler := web.CORSMiddleware(mux)
-
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("HTTP 服务已启动: 打开浏览器访问 http://localhost%s 查看集群控制台", addr)
@@ -88,7 +85,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("HTTP 服务错误: %v", err)
 	}
 }
