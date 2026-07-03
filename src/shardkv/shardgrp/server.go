@@ -201,7 +201,7 @@ func (kv *KVServer) DoOp(req any) any {
 		if reqCfgNum > localCfgNum {
 			switch kv.shardStatuses[shid] {
 			case Serving:
-				debug.ObserveMigrationPrintf("server-%v-%v: 冻结分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
+				debug.ObserveMigrationPrintf("[G%d] server-%v: 冻结分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.shardStatuses[shid] = Frozen
 				kv.cfgNumByShid[shid] = reqCfgNum
 				reply = shardrpc.FreezeShardReply{
@@ -247,7 +247,7 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num > localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Absent:
-				debug.ObserveMigrationPrintf("server-%v-%v: 安装分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
+				debug.ObserveMigrationPrintf("[G%d] server-%v: 安装分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.installShardState(request.Shard, request.State)
 				kv.shardStatuses[request.Shard] = Serving
 				kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
@@ -286,7 +286,7 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num == localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Frozen:
-				debug.ObserveMigrationPrintf("server-%v-%v: 删除分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
+				debug.ObserveMigrationPrintf("[G%d] server-%v: 删除分片(%v), Config #%v, 原状态: %v", kv.gid, kv.me, request.Shard, request.Num, statusToString(kv.shardStatuses[request.Shard]))
 				kv.kvm[shid] = nil          // delete kv for the shard
 				kv.shardClients[shid] = nil // delete information of clients that operated on this shard,
 				// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
@@ -443,7 +443,7 @@ func (kv *KVServer) Snapshot() []byte {
 	for shid, kv := range kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveSnapshotPrintf("server-%v-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("[G%d] server-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver :%v Snapshoted \n keyNum: %v\n", kv.me, keyNum)
 
 	// encode copied snapshot
@@ -477,7 +477,7 @@ func (kv *KVServer) Restore(data []byte) {
 	for shid, kv := range snapshot.Kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveSnapshotPrintf("server-%v-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("[G%d] server-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver %v: Restored from snapshot\n keyNum: %v\n", kv.me, keyNum)
 
 	kv.rwMu.Lock()
@@ -613,7 +613,7 @@ func StartServerShardGrp(servers []*rpc.ClientEnd, gid tester.Tgid, me int, pers
 	kv.shardClients = shardClients
 
 	// initialise RSM (which may overwrite this server from its raft snapshot)
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv, tester.GroupLabel(gid))
 
 	return []any{kv, kv.rsm.Raft()}
 }

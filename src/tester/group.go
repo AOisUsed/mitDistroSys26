@@ -5,8 +5,19 @@ import (
 	"strconv"
 	"sync"
 
+	"fmt"
+
 	"kvstore/rpc"
 )
+
+// GroupLabel returns the display label for a Raft group.
+// gid==0 → "Config" (configStore), otherwise → "G%d".
+func GroupLabel(gid Tgid) string {
+	if gid == Tgid(0) {
+		return "Config"
+	}
+	return fmt.Sprintf("G%d", gid)
+}
 
 type Tgid int
 

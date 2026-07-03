@@ -60,7 +60,7 @@ func newRfsrv(ts Itester, ends []*rpc.ClientEnd, grp tester.Tgid, srv int, persi
 	}
 	applyCh := make(chan raftapi.ApplyMsg)
 	if !tester.UseRaftStateMachine {
-		s.raft = Make(ends, srv, persister, applyCh)
+		s.raft = Make(ends, srv, persister, applyCh, tester.GroupLabel(grp))
 	}
 	if snapshot {
 		if sn != nil && len(sn) > 0 {

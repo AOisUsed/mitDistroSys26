@@ -356,6 +356,16 @@
         .chaos-btn.inactive:hover { background: #d9d9d9; color: #666; }
         .chaos-btn.loading { background: #faad14; color: white; }
 
+        .observe-group-btn {
+            font-size: 10px; padding: 2px 6px; border-radius: 4px;
+            border: 1px solid transparent; cursor: pointer; font-weight: 500;
+            transition: all 0.2s; white-space: nowrap;
+        }
+        .observe-group-btn.on { background: #e6f7ff; color: #1890ff; border-color: #91d5ff; }
+        .observe-group-btn.on:hover { background: #bae7ff; }
+        .observe-group-btn.off { background: #f5f5f5; color: #ccc; border-color: #e8e8e8; }
+        .observe-group-btn.off:hover { background: #e8e8e8; color: #999; }
+
         .form-label {
             font-size: 11px; color: #888; min-width: 30px;
         }
@@ -1536,11 +1546,14 @@
             const chaosActive = (chaosStates && chaosStates[group.gid]);
             const chaosBtnClass = chaosActive ? 'chaos-btn active' : 'chaos-btn inactive';
             const chaosBtnText = chaosActive ? '混沌中' : '混沌';
+            const obsGroupOn = isObserveGroupOn(group.gid);
+            const obsBtnClass = obsGroupOn ? 'observe-group-btn on' : 'observe-group-btn off';
             html += `
                 <div class="group-card" style="border-left: 3px solid ${color};">
                     <div class="group-header">
                         <span class="gid" style="color:${color};">${group.gid === 0 ? '配置仓库' : `组 ${group.gid}`} ${group.gid === 0 ? '' : `<span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span>`}</span>
                         <span class="ops">
+                            <button class="${obsBtnClass}" onclick="toggleObserveGroup(${group.gid})" title="${obsGroupOn ? '隐藏该组日志' : '显示该组日志'}">日志</button>
                             <button class="${chaosBtnClass}" id="chaosBtn_${group.gid}"
                                     onclick="toggleChaos(${group.gid})">${chaosBtnText}</button>
                             ${group.gid === 0 ? '' : `<button class="btn btn-xs btn-warning" onclick="doLeaveGroupById(${group.gid})">移除</button>`}
@@ -1886,6 +1899,33 @@
     observeLogExpanded = false;
     let observeLogLastId = 0; // 用游标 Id 而非数组长度，避免环形缓冲区满后增量失效
 
+    // 组日志显示控制：key=groupLabel（"Config","G1","G2",...），默认全部可见
+    const visibleObserveGroups = new Map();
+
+    // groupLabelForGid 返回给定 gid 对应的 observe log group label
+    function groupLabelForGid(gid) {
+        return gid === 0 ? 'Config' : 'G' + gid;
+    }
+
+    function isObserveGroupOn(gid) {
+        const label = groupLabelForGid(gid);
+        return visibleObserveGroups.get(label) !== false;
+    }
+
+    function toggleObserveGroup(gid) {
+        const label = groupLabelForGid(gid);
+        const newVal = !isObserveGroupOn(gid);
+        visibleObserveGroups.set(label, newVal);
+        // 刷新 group card 以更新按钮样式
+        if (cachedTree) renderNodeStatus(cachedTree);
+    }
+
+    // parseGroupLabel 从 observe log 正文提取组标签（如 "[Config]", "[G1]"），没有则返回空
+    function parseGroupLabel(text) {
+        const m = text.match(/^\[(Config|G\d+)\]/);
+        return m ? m[1] : '';
+    }
+
     async function toggleObserveLog() {
         const area = document.getElementById('observeLogArea');
         const toggle = document.getElementById('observeLogToggle');
@@ -1926,6 +1966,11 @@
     }
 
     function addObserveLog(tag, text, unixMilli, style) {
+        // 检查组过滤：如果日志带有组标签且该组被隐藏，则跳过
+        const groupLabel = parseGroupLabel(text);
+        if (groupLabel && visibleObserveGroups.get(groupLabel) === false) {
+            return;
+        }
         const area = document.getElementById('observeLogArea');
         const time = unixMilli ? new Date(unixMilli).toLocaleTimeString() : new Date().toLocaleTimeString();
         const tagColor = OBSERVE_LOG_COLORS[tag] || '#1890ff';

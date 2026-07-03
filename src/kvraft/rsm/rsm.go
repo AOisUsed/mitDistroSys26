@@ -71,7 +71,7 @@ type RSM struct {
 //
 // MakeRSM() must return quickly, so it should start goroutines for
 // any long-running work.
-func MakeRSM(servers []*rpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
+func MakeRSM(servers []*rpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine, groupLabel string) *RSM {
 	rsm := &RSM{
 		me:                me,
 		maxraftstate:      maxraftstate,
@@ -90,7 +90,7 @@ func MakeRSM(servers []*rpc.ClientEnd, me int, persister *tester.Persister, maxr
 	}
 
 	if !useRaftStateMachine {
-		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
+		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh, groupLabel)
 	}
 
 	go rsm.readApply()

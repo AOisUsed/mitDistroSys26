@@ -261,7 +261,7 @@ func StartKVServer(servers []*rpc.ClientEnd, gid tester.Tgid, me int, persister 
 
 	kv := &KVServer{me: me}
 
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv, tester.GroupLabel(gid))
 	// You may need initialization code here.
 
 	// only make Kvm when it's nil because after reboot, its Kvm will be restored from raft snapshot (state machine),
