@@ -105,17 +105,19 @@ func (m *ChaosMonkey) killNode(idx int, sg *tester.ServerGrp) {
 }
 
 func (m *ChaosMonkey) restartNode(idx int, sg *tester.ServerGrp) {
-	err := sg.StartServer(idx)
-	if err != nil {
+	for {
+		err := sg.StartServer(idx)
+		if err == nil {
+			break
+		}
 		log.Printf("[ChaosMonkey] Restart GID %d 节点 %d 失败: %v — 5 秒后重试", m.gid, idx, err)
 		select {
 		case <-m.stop:
 			return
 		case <-time.After(5 * time.Second):
-			m.restartNode(idx, sg)
 		}
-		return
 	}
+
 	sg.ConnectOne(idx)
 
 	// 重新应用分区状态——ConnectOne 可能破坏已建立的隔离
