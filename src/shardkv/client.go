@@ -187,10 +187,10 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 		debug.D5APrintf("client <-Put(key: %v, value: %v, version: %v) in shard %v- group %v (Err: %v)\n", key, value, version, shardId, gid, rpcErr)
 		switch rpcErr {
 		case rpcapi.ErrWrongGroup, rpcapi.ErrRetryExhausted:
-			debug.ObserveKVRequestFaultPrintf("分片客户端: Put(%s : %s) -> %v, 重试中", key, value, rpcErr)
+			debug.ObserveKVRequestFaultPrintf("分片客户端: Put(%s : %s, 版本 %v) -> %v, 重试中", key, value, version, rpcErr)
 			ck.refreshConfig()
 		case rpcapi.OK, rpcapi.ErrVersion, rpcapi.ErrNoKey:
-			debug.ObserveKVRequestPrintf("分片客户端: Put(%s : %s) -> %s", key, value, rpcErr)
+			debug.ObserveKVRequestPrintf("分片客户端: Put(%s : %s, 版本 %v) -> %s", key, value, version, rpcErr)
 			return rpcErr
 		default:
 			log.Fatalf("undefined rpc Err: %v", rpcErr)
