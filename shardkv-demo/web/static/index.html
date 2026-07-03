@@ -67,13 +67,6 @@
             display: flex; gap: 6px; align-items: center;
         }
 
-        .form-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
-        .form-row input, .form-row select {
-            flex: 1; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px;
-            font-size: 12px; outline: none; transition: border-color 0.2s;
-        }
-        .form-row input:focus { border-color: #667eea; box-shadow: 0 0 0 2px rgba(102,126,234,0.15); }
-
         select.dropdown {
             padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 6px;
             font-size: 12px; outline: none; background: white;
@@ -91,7 +84,6 @@
         .btn-danger:hover { background: #e04345; }
         .btn-success { background: #52c41a; color: white; }
         .btn-success:hover { background: #49b018; }
-        .btn-success:disabled { background: #a0d878; cursor: not-allowed; opacity: 0.7; }
 
         /* 加载动画（写入中指示器） */
         .spinner {
@@ -134,7 +126,6 @@
             margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #e8e8e8;
         }
         .group-header .gid { font-weight: 600; font-size: 13px; }
-        .group-header .shard-count { font-size: 11px; color: #888; }
         .group-header .ops { display: flex; gap: 4px; align-items: center; }
         .server-item {
             display: flex; align-items: center; gap: 6px; padding: 3px 0;
@@ -285,8 +276,8 @@
 
         .get-result {
             background: #f0f5ff; border: 1px solid #d6e4ff; border-radius: 6px;
-            padding: 6px 10px; font-size: 11px; font-family: monospace;
-            max-height: 80px; overflow-y: auto;
+            padding: 4px 10px; font-size: 11px; font-family: monospace;
+            line-height: 16px; max-height: 80px; overflow-y: auto;
         }
 
         .kv-panel { display: flex; flex-direction: column; gap: 5px; }
@@ -315,7 +306,7 @@
         .slider-container {
             border: 1px solid #e8e8e8;
             border-radius: 6px;
-            padding: 11px 10px;
+            padding: 10px 10px;
             background: white;
             transition: opacity 0.25s, border-color 0.25s, background-color 0.25s;
         }
@@ -378,13 +369,6 @@
             margin: 7px 0;
         }
 
-        .net-toggle-row {
-            display: flex; align-items: center; justify-content: space-between;
-            gap: 8px;
-        }
-        .net-toggle-row .left { display: flex; align-items: center; gap: 6px; flex: 1; }
-        .net-toggle-row .right { display: flex; align-items: center; gap: 6px; }
-
         /* 右侧面板自适应：中等屏幕缩小右侧 */
         @media (max-width: 1100px) {
             .control-row { flex-direction: column; }
@@ -406,7 +390,7 @@
     </div>
     <div class="status-badge">
         <span class="badge-dot"></span>
-        <span id="clusterStatus">运行中</span>
+        <span>运行中</span>
         <span id="configNum" style="margin-left:8px;opacity:0.7;"></span>
     </div>
 </div>
@@ -446,7 +430,7 @@
                             </div>
                         </div>
                     </div>
-                    <div id="kvResult" class="get-result" >等待操作...</div>
+                    <div id="kvResult" class="get-result" style="margin-top:4px;color:#1890ff;">未执行</div>
 
                     <!-- CAS 并发竞赛 -->
                     <div class="sep-line"></div>
@@ -671,7 +655,6 @@
 
 <script>
     const API = '';
-    let logCount = 0;
     const N_SHARDS = 12;
     let cachedTree = null;
     let chaosStates = {};
@@ -876,7 +859,6 @@
         entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
         logArea.appendChild(entry);
         logArea.scrollTop = logArea.scrollHeight;
-        logCount++;
         while (logArea.children.length > 200) {
             logArea.removeChild(logArea.firstChild);
         }
@@ -896,12 +878,12 @@
                 const v = (pending && pending.value) || '?';
                 const sh = (pending && pending.shard) || key2Shard(k);
                 document.getElementById('kvResult').textContent = task.success
-                    ? `Put: ${k} = ${v} (分片 ${sh})`
-                    : `Put 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh})`;
+                    ? `Put: ${k} = ${v}`
+                    : `Put 失败: ${task.error || task.message || 'unknown error'}`;
                 if (task.success) {
-                    addLog(`Put key="${k}" = "${v}" (分片 ${sh})`, 'ok');
+                    addLog(`Put key="${k}" = "${v}"`, 'ok');
                 } else {
-                    addLog(`Put key="${k}" value="${v}" 失败 ${task.error || task.message} (分片 ${sh})`, 'err');
+                    addLog(`Put key="${k}" value="${v}" 失败 ${task.error || task.message}`, 'err');
                 }
                 document.getElementById('putVal').value = randomChars(3);
                 refreshStatus();
@@ -912,10 +894,10 @@
                 const sh = (pending && pending.shard);
                 if (task.success && task.data) {
                     const d = task.data;
-                    document.getElementById('kvResult').textContent = `Get: ${d.key} = "${d.value}" (分片 ${sh}, v${d.version})`;
-                    addLog(`Get key="${k}" → "${d.value}" (分片 ${sh}, v${d.version})`, 'ok');
+                    document.getElementById('kvResult').textContent = `Get: ${d.key} = "${d.value}"`;
+                    addLog(`Get key="${k}" → "${d.value}"`, 'ok');
                 } else {
-                    document.getElementById('kvResult').textContent = `Get 失败: ${task.error || task.message || 'unknown error'} (分片 ${sh || '?'})`;
+                    document.getElementById('kvResult').textContent = `Get 失败: ${task.error || task.message || 'unknown error'}`;
                     addLog(`Get key="${k}" 失败 ${task.error || task.message}`, 'err');
                 }
                 break;
@@ -1282,12 +1264,6 @@
                 timeoutSec: 5,
                 label: '更新网络参数'
             });
-            // if (result && result.success) {
-            //     const displayVal = param === 'dropRate'
-            //         ? (intVal / 10).toFixed(1) + '%'
-            //         : String(intVal) + 'ms';
-            //      addLog(`网络参数已设置: ${param} = ${displayVal}`, 'info');
-            // }
         } catch (err) {}
     }
 
@@ -1378,9 +1354,6 @@
                     }),
                     label: '同步网络参数'
                 });
-                // if (result && result.success) {
-                //     addLog(`网络参数已同步: 丢包率 = ${result.dropRate/10}% | RPC请求延迟 = 0~${result.shortDelayMs}ms | 断线超时延迟 = 0~${result.longDelayMs}ms`, 'info');
-                // }
             } catch (err) {}
         }
     }
