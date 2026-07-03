@@ -698,16 +698,7 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	}
 	cm.mu.Unlock()
 
-	// 2. 检查是否正在 JoinGroup（本地有记录但 config store 配置中没有）
-	//    此时 JoinGroup 的 ChangeConfigTo 可能正在进行，不应中断
-	if cm.groups[gid] {
-		cfg := cm.ctl.Query()
-		if _, ok := cfg.Groups[gid]; !ok {
-			return false, fmt.Sprintf("组 %d 正在加入集群中，请勿移除", gid)
-		}
-	}
-
-	// 3. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
+	// 2. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
 		newcfg := cm.ctl.Query()
@@ -737,7 +728,7 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		}
 	}
 
-	// 4. 清理本地记录和进程
+	// 3. 清理本地记录和进程
 	cm.mu.Lock()
 	delete(cm.groups, gid)
 	cm.infra.ExitGroup(gid)
