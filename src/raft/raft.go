@@ -206,7 +206,7 @@ func (rf *Raft) becomeFollowerWithTerm(term int) {
 	if rf.state == leader {
 		debug.ObserveElectionPrintf("server-%v: leader (任期 %v) 转变为 follower (任期 %v)", rf.me, rf.CurrentTerm, term)
 		debug.ReportLeaderChange(rf.me, false)
-	} else {
+	} else if rf.state == candidate {
 		debug.ObserveElectionPrintf("server-%v: candidate (任期 %v) 转变为 follower (任期 %v)", rf.me, rf.CurrentTerm, term)
 	}
 
