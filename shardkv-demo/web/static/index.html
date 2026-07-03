@@ -264,8 +264,6 @@
         .log-panel-area .log-err { color: #ff4d4f; }
         .log-panel-area .log-warn { color: #d48806; }
         .log-panel-area .log-info { color: #1890ff; }
-        .log-panel-area .log-shard { color: #f6d365; }
-        .log-panel-area .log-action { color: #5cdbd3; }
 
         .toggle-switch {
             position: relative; display: inline-block;
@@ -873,7 +871,7 @@
     function addLog(message, type) {
         const logArea = document.getElementById('logArea');
         const time = new Date().toLocaleTimeString();
-        const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'warn' ? 'log-warn' : type === 'shard' ? 'log-shard' : type === 'action' ? 'log-action' : 'log-info';
+        const cls = type === 'ok' ? 'log-ok' : type === 'err' || type === 'action' ? 'log-err' : type === 'warn' ? 'log-warn' : 'log-info';
         const entry = document.createElement('div');
         entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
         logArea.appendChild(entry);
@@ -1091,7 +1089,7 @@
     async function doPut() {
         const key = document.getElementById('putKey').value.trim();
         const value = document.getElementById('putVal').value.trim();
-        if (!key) { addLog('Put: Key 不能为空', 'err'); return; }
+        if (!key) { addLog('Put: Key 不能为空', 'warn'); return; }
         const shard = key2Shard(key);
         addLog(`Put key="${key}" → 处理中...`, 'info');
         const result = await api('/api/kv/', {
@@ -1107,7 +1105,7 @@
 
     async function doGet() {
         const key = document.getElementById('getKey').value.trim();
-        if (!key) { addLog('Get: 键不能为空', 'err'); return; }
+        if (!key) { addLog('Get: 键不能为空', 'warn'); return; }
         const shard = key2Shard(key);
         addLog(`Get key="${key}" → 处理中...`, 'info');
         const result = await api('/api/kv/' + encodeURIComponent(key), {method: 'GET', timeoutSec: 5, label: '读取'});
@@ -1169,7 +1167,7 @@
     // ========== 组操作 ==========
     async function doKillGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('终止组: 请选择有效的组', 'err'); return; }
+        if (isNaN(gid)) { addLog('终止组: 请选择有效的组', 'warn'); return; }
         await api('/api/group/kill', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '终止组'});
         addLog(`终止组: 组 ${gid} 全部节点已终止`, 'action');
         refreshStatus();
@@ -1177,7 +1175,7 @@
 
     async function doStartGroup() {
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('启动组: 请选择有效的组', 'err'); return; }
+        if (isNaN(gid)) { addLog('启动组: 请选择有效的组', 'warn'); return; }
         const result = await api('/api/group/start', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '启动组'});
         if (result.success) {
             addLog(`启动组: 组 ${gid} 全部节点已启动`, 'ok');
@@ -1206,10 +1204,10 @@
 
     let leaveInFlight = false;
     async function doLeaveGroup() {
-        if (leaveInFlight) { addLog('移除组: 上次操作未完成，请等待', 'err'); return; }
+        if (leaveInFlight) { addLog('移除组: 上次操作未完成，请等待', 'warn'); return; }
         const gid = parseInt(document.getElementById('groupGid').value);
-        if (isNaN(gid)) { addLog('移除组: 请选择有效的组', 'err'); return; }
-        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
+        if (isNaN(gid)) { addLog('移除组: 请选择有效的组', 'warn'); return; }
+        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'warn'); return; }
         leaveInFlight = true;
         addLog(`移除组 ${gid}: 开始执行...`, 'info');
         optimisticPendingMigration = true;
@@ -1325,7 +1323,7 @@
         // 同步更新三个 slider 的禁用样式
         updateSliderDisabledState(enabled);
         const dropPct = (netParams.dropRate / 10).toFixed(0);
-        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 ${dropPct}%, RPC请求延迟 0~${netParams.shortDelayMs}ms, 断连延迟 0~${netParams.longDelayMs}ms)` : '关闭，断连延迟 0～99ms'}`,  'action' );
+        addLog(`不可靠网络: ${enabled ? `开启 (丢包率 ${dropPct}%, RPC请求延迟 0~${netParams.shortDelayMs}ms, 断连延迟 0~${netParams.longDelayMs}ms)` : '关闭，断连延迟 0～99ms'}`,  enabled ? 'action' : 'ok' );
 
         // 关闭不可靠网络时：保存回复乱序状态，并一并关闭
         if (!enabled) {
@@ -1408,7 +1406,7 @@
             });
             if (result.success) {
                 label.textContent = on ? '开启' : '关闭';
-                addLog(`回复乱序: ${on ? '开启 (RPC回复 2/3 概率延迟 200~2200ms)' : '关闭'}`, on ? 'action' : 'info');
+                addLog(`回复乱序: ${on ? '开启 (RPC回复 2/3 概率延迟 200~2200ms)' : '关闭'}`, on ? 'action' : 'ok');
                 // 开启回复乱序时会自动开启不可靠网络 + 长延迟，所以同时更新不可靠 toggle 状态
                 if (on) {
                     document.getElementById('unreliableToggle').checked = true;
@@ -1426,7 +1424,7 @@
 
     // ========== 快捷 Leave（从节点状态标题调用） ==========
     async function doLeaveGroupById(gid) {
-        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'err'); return; }
+        if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'warn'); return; }
         addLog(`移除组 ${gid}: 开始执行...`, 'info');
         optimisticPendingMigration = true;
         refreshStatus();
@@ -1849,7 +1847,7 @@
         const resultDiv = document.getElementById('batchResult');
 
         if (count < 1 || count > 10000) {
-            addLog('批量写入: 数量必须在 1~10000 之间', 'err');
+            addLog('批量写入: 数量必须在 1~10000 之间', 'warn');
             return;
         }
 
@@ -2194,11 +2192,11 @@
         const key = document.getElementById('raceKey').value.trim();
         const nClient = parseInt(document.getElementById('raceNClient').value) || 5;
         if (!key) {
-            addLog('CAS 竞赛: Key 不能为空', 'err');
+            addLog('CAS 竞赛: Key 不能为空', 'warn');
             return;
         }
         if (nClient < 1 || nClient > poolSize) {
-            addLog(`CAS 竞赛: 客户端数必须在 1~${poolSize} 之间`, 'err');
+            addLog(`CAS 竞赛: 客户端数必须在 1~${poolSize} 之间`, 'warn');
             return;
         }
         const resultDiv = document.getElementById('raceResult');
