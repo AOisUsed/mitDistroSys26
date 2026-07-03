@@ -588,6 +588,10 @@
                             <input type="checkbox" class="observe-toggle" data-scene="election" onchange="toggleObserve(this)">
                             <span style="color:#667eea;">Raft选举</span>
                         </label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#fff0f6;border:1px solid #ffadd2;">
+                            <input type="checkbox" class="observe-toggle" data-scene="replication" onchange="toggleObserve(this)">
+                            <span style="color:#eb2f96;">Raft状态复制</span>
+                        </label>
                         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:4px;background:#f9f0ff;border:1px solid #d3adf7;">
                             <input type="checkbox" class="observe-toggle" data-scene="snapshot" onchange="toggleObserve(this)">
                             <span style="color:#722ed1;">Raft快照</span>
@@ -1903,12 +1907,14 @@
         'Migration': '#f6d365',
         'KVSubmit': '#52c41a',
         'Snapshot': '#722ed1',
+        'Replication': '#eb2f96',
     };
     const OBSERVE_LOG_NAMES = {
         'Election': 'Raft选举',
         'Migration': '分片迁移',
         'KVSubmit': 'KV操作',
         'Snapshot': 'Raft快照',
+        'Replication': 'Raft状态复制',
     };
 
     // 迁移子类型颜色：freeze/冻结=冰蓝色, delete/删除=琥珀色, install/安装=绿色

@@ -464,7 +464,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// vote for this candidate:
 			rf.lastHeardTime = time.Now() // update lastHeardTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
 			debug.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
-			debug.ObserveElectionPrintf("server-%v (任期 %v) 给 server-%v (任期 %v) 投票: 此 candidate 日志足够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("server-%v (任期 %v): 给 server-%v (任期 %v) 投票 —— 此 candidate 日志足够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
@@ -473,11 +473,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	} else { // in other cases: don't vote for this candidate
 		if args.Term < rf.CurrentTerm {
-			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此 candidate 任期过小", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此 candidate 任期过时", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
 		} else if rf.VotedFor != args.CandidateId { // under the condition: args.Term == rf.CurrentTerm
-			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此任期内已投过票 (给 server-%v)", rf.me, rf.CurrentTerm, args.CandidateId, args.Term, rf.VotedFor)
+			debug.ObserveElectionPrintf("server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此任期内已投过票给 server-%v", rf.me, rf.CurrentTerm, args.CandidateId, args.Term, rf.VotedFor)
 		} else {
-			debug.ObserveElectionPrintf("server-%v (任期 %v) 拒绝给 server-%v (任期 %v) 投票: 此 candidate 日志不够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此 candidate 日志不够新", rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
 		}
 		debug.D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 		reply.Term = rf.CurrentTerm
@@ -678,6 +678,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	if rf.LastIncludedIndex >= rf.nextIndex[i] {
 		debug.D3DPrintf("%v-InstallSnapshot,lastIncluded:%v->%v", rf.me, rf.LastIncludedIndex, i)
 		args := rf.newInstallSnapshotArgs()
+		debug.ObserveReplicationPrintf("server-%v (任期 %v) 发送快照给 server-%v —— 最大包含索引=%v", rf.me, rf.CurrentTerm, i, args.LastIncludedIndex)
 		rf.mu.Unlock()
 		reply := &InstallSnapshotReply{}
 		ok := rf.sendInstallSnapshot(i, args, reply)
@@ -703,6 +704,9 @@ func (rf *Raft) replicateToFollower(i int) {
 
 	// case where the leader has the log to send to the follower, send AppendEntries
 	args := rf.newAppendEntriesArgsFor(i)
+	if len(args.Entries) > 0 { // so that heartbeat without log will be ignored
+		debug.ObserveReplicationPrintf("server-%v (任期 %v) 发送日志给 server-%v —— 包含索引 %v～%v", rf.me, rf.CurrentTerm, i, args.PrevLogIndex+1, len(args.Entries)+args.PrevLogIndex)
+	}
 	rf.mu.Unlock()
 	reply := &AppendEntriesReply{}
 	ok := rf.sendAppendEntries(i, args, reply)

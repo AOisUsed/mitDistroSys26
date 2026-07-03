@@ -14,10 +14,11 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, map[string]any{
-			"election":  debug.GetObserveElection(),
-			"migration": debug.GetObserveMigration(),
-			"kvsubmit":  debug.GetObserveKVSubmit(),
-			"snapshot":  debug.GetObserveSnapshot(),
+			"election":    debug.GetObserveElection(),
+			"migration":   debug.GetObserveMigration(),
+			"kvsubmit":    debug.GetObserveKVSubmit(),
+			"snapshot":    debug.GetObserveSnapshot(),
+			"replication": debug.GetObserveReplication(),
 		})
 	case http.MethodPost:
 		var req observeSetRequest
@@ -34,6 +35,8 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 			debug.SetObserveKVSubmit(req.On)
 		case "snapshot":
 			debug.SetObserveSnapshot(req.On)
+		case "replication":
+			debug.SetObserveReplication(req.On)
 		default:
 			http.Error(w, "unknown scene: "+req.Scene, http.StatusBadRequest)
 			return

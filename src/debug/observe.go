@@ -34,21 +34,24 @@ import (
 // --- 原子开关（仅主进程有效） ---
 
 var (
-	observeElection  atomic.Bool
-	observeMigration atomic.Bool
-	observeKVSubmit  atomic.Bool
-	observeSnapshot  atomic.Bool
+	observeElection    atomic.Bool
+	observeMigration   atomic.Bool
+	observeKVSubmit    atomic.Bool
+	observeSnapshot    atomic.Bool
+	observeReplication atomic.Bool
 )
 
 // Set/Get 函数
-func SetObserveElection(v bool)  { observeElection.Store(v) }
-func GetObserveElection() bool   { return observeElection.Load() }
-func SetObserveMigration(v bool) { observeMigration.Store(v) }
-func GetObserveMigration() bool  { return observeMigration.Load() }
-func SetObserveKVSubmit(v bool)  { observeKVSubmit.Store(v) }
-func GetObserveKVSubmit() bool   { return observeKVSubmit.Load() }
-func SetObserveSnapshot(v bool)  { observeSnapshot.Store(v) }
-func GetObserveSnapshot() bool   { return observeSnapshot.Load() }
+func SetObserveElection(v bool)    { observeElection.Store(v) }
+func GetObserveElection() bool     { return observeElection.Load() }
+func SetObserveMigration(v bool)   { observeMigration.Store(v) }
+func GetObserveMigration() bool    { return observeMigration.Load() }
+func SetObserveKVSubmit(v bool)    { observeKVSubmit.Store(v) }
+func GetObserveKVSubmit() bool     { return observeKVSubmit.Load() }
+func SetObserveSnapshot(v bool)    { observeSnapshot.Store(v) }
+func GetObserveSnapshot() bool     { return observeSnapshot.Load() }
+func SetObserveReplication(v bool) { observeReplication.Store(v) }
+func GetObserveReplication() bool  { return observeReplication.Load() }
 
 // 从环境变量初始化（init 时调用）
 func InitObserveFromEnv() {
@@ -58,10 +61,11 @@ func InitObserveFromEnv() {
 
 // --- 场景标签 ---
 const (
-	TagElection  = "Election"
-	TagMigration = "Migration"
-	TagKVSubmit  = "KVSubmit"
-	TagSnapshot  = "Snapshot"
+	TagElection    = "Election"
+	TagMigration   = "Migration"
+	TagKVSubmit    = "KVSubmit"
+	TagSnapshot    = "Snapshot"
+	TagReplication = "Replication"
 )
 
 // --- 环形缓冲区 ---
@@ -124,6 +128,10 @@ func ObservePushTagged(tag, text string) {
 		}
 	case TagSnapshot:
 		if observeSnapshot.Load() {
+			observeWrite(tag, text, "")
+		}
+	case TagReplication:
+		if observeReplication.Load() {
 			observeWrite(tag, text, "")
 		}
 	default:
@@ -299,6 +307,17 @@ func ObserveSnapshotPrintf(format string, a ...interface{}) {
 	}
 	if observeSnapshot.Load() {
 		observePush(TagSnapshot, format, a...)
+	}
+}
+
+func ObserveReplicationPrintf(format string, a ...interface{}) {
+	text := fmt.Sprintf(format, a...)
+	if fn := getObserveForward(); fn != nil {
+		fn(TagReplication, text)
+		return
+	}
+	if observeReplication.Load() {
+		observePush(TagReplication, format, a...)
 	}
 }
 
