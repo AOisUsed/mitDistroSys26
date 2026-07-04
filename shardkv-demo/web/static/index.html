@@ -315,6 +315,9 @@
             border-color: #e0e0e0;
             background: #fafafa;
         }
+        .slider-container input[type="range"] {
+            accent-color: #ff8080;
+        }
         .slider-container.disabled input[type="range"] {
             accent-color: #ccc;
         }
@@ -1294,7 +1297,7 @@
             return;
         }
         // 成功后才更新标签
-        label.textContent = enabled ? '开启 (丢包+延迟)' : '关闭';
+        label.textContent = enabled ? '开启' : '关闭';
         label.style.color = enabled ? '#ff4d4f' : '#999';
         // 同步更新三个 slider 的禁用样式
         updateSliderDisabledState(enabled);
