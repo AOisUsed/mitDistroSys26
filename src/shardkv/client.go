@@ -188,7 +188,7 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 			log.Fatal("group doesn't exist")
 		}
 
-		// check if the clerk communicating to certain group has been cached
+		// check if the clerk communicating to a certain group has been cached
 		ck.mu.RLock()
 		clerk, exists := ck.rcks[gid]
 		ck.mu.RUnlock()
