@@ -1480,8 +1480,13 @@
         return '在线';
     }
 
+    let lastGroupSelectSignature = '';
     function populateGroupSelect(groups) {
         const sel = document.getElementById('groupGid');
+        // 签名检查：组列表没变就跳过重建，避免 ChaosMonkey 高频刷新时打断用户选择
+        const sig = groups.map(g => `${g.gid}:${g.nShards}`).join(',');
+        if (sig === lastGroupSelectSignature) return;
+        lastGroupSelectSignature = sig;
         const currentVal = sel.value;
         const frag = document.createDocumentFragment();
         frag.appendChild(new Option('选择组', ''));
@@ -1549,7 +1554,7 @@
         let html = `
                 <div class="group-card" data-gid="${group.gid}" style="border-left: 3px solid ${color};">
                     <div class="group-header">
-                        <span class="gid" style="color:${color};">${group.gid === 0 ? '配置仓库' : `组 ${group.gid}`} ${group.gid === 0 ? '' : `<span style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span>`}</span>
+                        <span class="gid" style="color:${color};">${group.gid === 0 ? '配置仓库' : `组 ${group.gid}`} ${group.gid === 0 ? '' : `<span class="nshards-label" data-nshards="${group.nShards}" style="font-weight:400;font-size:11px;color:#888;">(${group.nShards} 分片)</span>`}</span>
                         <span class="ops">
                             <button class="${obsBtnClass}" onclick="toggleObserveGroup(${group.gid})" title="${obsGroupOn ? '隐藏该组日志' : '显示该组日志'}">日志</button>
                             <span style="width:1px;height:18px;background:#d9d9d9;flex-shrink:0;margin:0 2px;"></span>
@@ -1611,6 +1616,15 @@
 
     // updateGroupHeaderInPlace 原地更新组头部（混沌按钮、日志按钮状态）
     function updateGroupHeaderInPlace(card, group) {
+        // 更新分片数
+        if (group.gid !== 0) {
+            const shardsLabel = card.querySelector('.nshards-label');
+            if (shardsLabel && String(group.nShards) !== shardsLabel.dataset.nshards) {
+                shardsLabel.dataset.nshards = group.nShards;
+                shardsLabel.textContent = `(${group.nShards} 分片)`;
+            }
+        }
+
         const chaosActive = (chaosStates && chaosStates[group.gid]);
         const chaosBtn = card.querySelector(`#chaosBtn_${group.gid}`);
         if (chaosBtn) {
@@ -1827,7 +1841,7 @@
             return;
         }
 
-        resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...</span>`;
+        resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">条件更新写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...</span>`;
         addLog(`批量写入 ${count} 个 key → 处理中...`, 'info');
 
         const startTime = Date.now();
@@ -1926,6 +1940,12 @@
                 renderShards(tree);
                 if (tree.groups && tree.groups.length > 0) {
                     populateGroupSelect([...tree.groups].sort((a, b) => a.gid - b.gid));
+                }
+                // 同步 configNum 和 pendingMigrationBadge（SSE 触发时也需要更新）
+                document.getElementById('configNum').textContent = `Config #${tree.configNum || '?'}${tree.configCached ? ' (缓存)' : ''}`;
+                const pendingBadge = document.getElementById('pendingMigrationBadge');
+                if (pendingBadge) {
+                    pendingBadge.style.visibility = (tree.hasPendingMigration || optimisticPendingMigration) ? 'visible' : 'hidden';
                 }
                 // 不改变 refreshInfo.textContent，保留现有"更新于"时间戳
             }
