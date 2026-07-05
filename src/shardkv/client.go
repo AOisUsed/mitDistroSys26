@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"kvstore/debug"
 	"kvstore/shardkv/shardcfg"
@@ -23,6 +24,16 @@ import (
 	"kvstore/shardkv/shardctrler"
 	"kvstore/tester"
 )
+
+// backoffWithJitter provides exponential backoff with jitter to break thundering herd.
+// range between [backoff/2, backoff], where backoff = 2^retry * ck.backoffTime
+func (ck *Clerk) backoffWithJitter(retry int) {
+	retry = min(retry, 5)
+	backoff := ck.backoffTime << retry // this may overflow (if backoffTime is EXTREMELY huge)
+	backoff = min(2*time.Second, backoff)
+	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+	time.Sleep(backoff/2 + jitter)
+}
 
 // Clerk shardkv.Clerk is directly used by client to execute PUT, GET
 type Clerk struct {
@@ -37,6 +48,7 @@ type Clerk struct {
 	fetchingDone chan struct{} // channel used to notify that the fetching is done
 	mu           sync.RWMutex
 	putMutex     sync.Mutex
+	backoffTime  time.Duration
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -52,6 +64,7 @@ func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk 
 	ck.clerkId = rand.Uint64()
 	ck.fetching = false
 	ck.fetchingDone = make(chan struct{})
+	ck.backoffTime = 50 * time.Millisecond
 	return ck
 }
 
@@ -118,6 +131,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
 
+	retry := 0
 	for {
 		cachedConfig := ck.getConfig()
 		// consult the config to know the shard group responsible for the key
@@ -144,6 +158,8 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		if rpcErr == rpcapi.ErrWrongGroup || rpcErr == rpcapi.ErrRetryExhausted {
 			debug.ObserveKVRequestFaultPrintf("分片客户端: Get(%s) -> %v, 重试中", key, rpcErr)
 			ck.refreshConfig()
+			ck.backoffWithJitter(retry)
+			retry++
 		} else {
 			debug.ObserveKVRequestPrintf("分片客户端: Get(%s) -> OK (值=%s, 版本=%d)", key, val, version)
 			return val, version, rpcErr
@@ -163,6 +179,7 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 	reqId := ck.nextReqId()
 	// use key to get the shardId
 	shardId := shardcfg.Key2Shard(key)
+	retry := 0
 	for {
 		config := ck.getConfig()
 		// consult the config to know the shard group responsible for the key
@@ -189,6 +206,8 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 		case rpcapi.ErrWrongGroup, rpcapi.ErrRetryExhausted:
 			debug.ObserveKVRequestFaultPrintf("分片客户端: Put(%s : %s, 版本 %v) -> %v, 重试中", key, value, version, rpcErr)
 			ck.refreshConfig()
+			ck.backoffWithJitter(retry)
+			retry++
 		case rpcapi.OK, rpcapi.ErrVersion, rpcapi.ErrNoKey:
 			debug.ObserveKVRequestPrintf("分片客户端: Put(%s : %s, 版本 %v) -> %s", key, value, version, rpcErr)
 			return rpcErr

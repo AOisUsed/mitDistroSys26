@@ -178,7 +178,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 						isSuperseded.Store(true)
 						return
 					}
-					time.Sleep(100 * time.Millisecond) // back off a few as it may be in election
+					time.Sleep(time.Duration(100+rand.Int63n(50)) * time.Millisecond) // back off 100~150ms with jitter (group may be in election)
 				}
 			}
 			debug.ObserveMigrationPrintf("分片控制器: 冻结分片(%v), Config #%v -> 组 %v, 错误码：%v", shid, newCfg.Num, newGid, err)
@@ -195,7 +195,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 						isSuperseded.Store(true)
 						return
 					}
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(time.Duration(100+rand.Int63n(50)) * time.Millisecond)
 				}
 			}
 			debug.ObserveMigrationPrintf("分片控制器: 安装分片(%v), Config #%v -> 组 %v, 错误码: %v", shid, newCfg.Num, newGid, err)
@@ -228,7 +228,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 						isSuperseded.Store(true)
 						return
 					}
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(time.Duration(100+rand.Int63n(50)) * time.Millisecond)
 				}
 				attempts++
 				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left

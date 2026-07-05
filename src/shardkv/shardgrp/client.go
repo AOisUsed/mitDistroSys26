@@ -2,6 +2,7 @@ package shardgrp
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -29,13 +30,23 @@ func MakeClerk(clnt *tester.Clnt, servers []string, clientId uint64) *Clerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	ck.leader = 0
 	ck.clientId = clientId
-	ck.maxAttempts = len(ck.servers) * 2 //  try one round + one time
+	ck.maxAttempts = len(ck.servers) * 2 //  try 2 round + one time
 	ck.backoffTime = 200 * time.Millisecond
 	return ck
 }
 
 func (ck *Clerk) Leader() int {
 	return ck.leader
+}
+
+// backoffWithJitter provides exponential backoff with jitter.
+// range between [backoff/2, backoff], where backoff = 2^round * ck.backoffTime
+func (ck *Clerk) backoffWithJitter(round int) {
+	round = min(round, 5)
+	backoff := time.Duration(ck.backoffTime<<round) * time.Millisecond // this may overflow (if backoffTime is EXTREMELY huge)
+	backoff = min(3*time.Second, backoff)
+	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+	time.Sleep(backoff/2 + jitter)
 }
 
 // Get return OK, ErrNoKey, ErrWrongGroup as rpcapi.Err
@@ -48,7 +59,6 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	leader := ck.leader
 	maxAttempt := ck.maxAttempts
 	serverNum := len(ck.servers)
-	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
 	attempts := 0
@@ -71,8 +81,8 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
-		if attempts%serverNum == 0 { // backoff
-			time.Sleep(backoffTime)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
@@ -97,7 +107,6 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	leader := ck.leader
 	maxAttempt := ck.maxAttempts
 	serverNum := len(ck.servers)
-	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
 	attempts := 0
@@ -122,8 +131,8 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
-		if attempts%serverNum == 0 { // backoff
-			time.Sleep(backoffTime)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
 	// Retries exhausted usually means we failed to discover a reachable/working
@@ -146,7 +155,6 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 	leader := ck.leader
 	maxAttempt := ck.maxAttempts
 	serverNum := len(ck.servers)
-	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
 	attempts := 0
@@ -170,8 +178,8 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
-		if attempts%serverNum == 0 { // backoff
-			time.Sleep(backoffTime)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
 	debug.ObserveMigrationFaultPrintf("组客户端: 冻结分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
@@ -189,7 +197,6 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	leader := ck.leader
 	maxAttempt := ck.maxAttempts
 	serverNum := len(ck.servers)
-	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
 	attempts := 0
@@ -213,8 +220,8 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
-		if attempts%serverNum == 0 { // backoff
-			time.Sleep(backoffTime)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
 	debug.ObserveMigrationFaultPrintf("组客户端: 安装分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
@@ -231,7 +238,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 	leader := ck.leader
 	maxAttempt := ck.maxAttempts
 	serverNum := len(ck.servers)
-	backoffTime := ck.backoffTime
 	ck.mu.Unlock()
 
 	attempts := 0
@@ -255,8 +261,8 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 			}
 		}
 		leader = (leader + 1) % len(ck.servers)
-		if attempts%serverNum == 0 { // backoff
-			time.Sleep(backoffTime)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
 	debug.ObserveMigrationFaultPrintf("组客户端: 删除分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
