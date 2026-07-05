@@ -691,7 +691,6 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	cm.mu.Lock()
 	sg := cm.infra.Group(gid)
 	if sg == nil {
-		delete(cm.groups, gid)
 		cm.mu.Unlock()
 		log.Printf("[Cluster] LeaveGroup: 组 %d 已离开", gid)
 		return true, ""
@@ -705,9 +704,6 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 
 		if _, ok := newcfg.Groups[gid]; !ok {
 			// 别的请求已经移除了这个组，幂等返回
-			cm.mu.Lock()
-			delete(cm.groups, gid)
-			cm.mu.Unlock()
 			log.Printf("[Cluster] LeaveGroup: 组 %d 已不存在于配置中", gid)
 			return true, ""
 		}
