@@ -1,16 +1,16 @@
 # shardkv-demo 集群启动配置
 
-# --- Raft State 大小阈值（字节），超过此值时触发快照---
+# --- Raft State 大小阈值（字节），超过此值时触发快照 ---
 # 0 或负值表示禁用快照。默认 5000 Byte。
 maxRaftState: 5000
 
 # --- 每组默认节点数 ---
 nsrv: 3
 
-# 是否是可靠网络 (true / false)
+# --- 是否以可靠网络启动 (可在运行中动态修改) ---
 reliable: true
 
-# --- Clerk 池容量（同时限制 CAS 并发竞赛 & 批量写入并发度）---
+# --- 客户端池容量（同时限制 CAS 并发竞赛 & 批量写入并发度）---
 # 默认 500
 clerkPoolSize: 500
 
@@ -32,4 +32,3 @@ clerkPoolSize: 500
 groups:
   - gid: 1
     servers: 3
-

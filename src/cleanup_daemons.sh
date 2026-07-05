@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cleanup_daemons.sh — 清理残留的 daemon 进程和 UNIX socket 文件
 #
-# 当测试被 Ctrl+C 等信号中断时，daemon 子进程和 socket 文件可能未被正常清理。
+# 当测试/demo 异常中断时，daemon 子进程和 socket 文件可能未被正常清理。
 # 此脚本查找并杀掉所有残留进程，删除残留的 socket 文件。
 set -euo pipefail
 

@@ -1,14 +1,44 @@
-pkg/
-*-handin.tar.gz
-.idea
-.github
+# =====================
+# 操作系统
+# =====================
 .DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# 忽略编译产物
+# =====================
+# IDE / 编辑器
+# =====================
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+
+# =====================
+# GitHub Actions
+# =====================
+.github/
+
+# =====================
+# Go 编译产物
+# =====================
 src/main/kvsrv
 src/main/kvraft
 src/main/shardgrp
 src/main/raft
-
-# shardkv-demo 本身的二进制
 shardkv-demo/shardkv-demo
+
+# =====================
+# 测试 / 临时产物
+# =====================
+pkg/
+*-handin.tar.gz
+*.test
+*.out
+*.prof
