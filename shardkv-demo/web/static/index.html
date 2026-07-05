@@ -616,7 +616,13 @@
 
         <!-- 分片分布 -->
         <div class="card">
-            <h3>分片分布 <span id="shardInfo" style="font-weight:400;font-size:11px;color:#888;"></span></h3>
+            <h3>
+                <span style="display:flex;align-items:center;">
+                    分片分布
+                    <button id="shardSortToggle" class="btn btn-sm" style="margin-left:20px;min-width:80px;background:#fff;color:#64748b;border:1px solid #64748b;" onclick="toggleShardSort()">按组排序</button>
+                </span>
+                <span id="shardInfo" style="font-weight:400;font-size:11px;color:#888;"></span>
+            </h3>
             <div id="shardGrid" class="shard-grid">
                 <div style="color:#888;text-align:center;width:100%;padding:10px;">正在加载...</div>
             </div>
@@ -663,6 +669,7 @@
     let chaosStates = {};
     // 前端乐观 pending 标记：点击 Join/Leave 后立即显示 pending，不等后端响应
     let optimisticPendingMigration = false;
+    let shardSortByGroup = false; // false = 按分片序号排序, true = 按组排序
 
     function key2Shard(key) {
         let hash = 0x811c9dc5 >>> 0;
@@ -1449,9 +1456,21 @@
 
     // ========== 渲染 ==========
     const COLORS = [
-        '#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe',
-        '#43e97b', '#fa709a', '#f6d365', '#a18cd1', '#fbc2eb',
-        '#84fab0', '#8fd3f4', '#a6c1ee', '#fccb90', '#d57eeb',
+        '#06d6a0',
+        '#ba5151',
+        '#52b788',
+        '#9d4edd',
+        '#2ec4b6',
+        '#f72585',
+        '#8ac926',
+        '#4b8da9',
+        '#f77f00',
+        '#4895ef',
+        '#ea07e6',
+        '#e8881b',
+        '#5e60ce',
+        '#4f252e',
+        '#a24b79',
     ];
 
     function getGroupColor(gid) {
@@ -1673,6 +1692,23 @@
         statusPanel.innerHTML = html;
     }
 
+    function toggleShardSort() {
+        shardSortByGroup = !shardSortByGroup;
+        const btn = document.getElementById('shardSortToggle');
+        if (shardSortByGroup) {
+            btn.textContent = '按分片排序';
+            btn.style.background = '#64748b';
+            btn.style.color = '#fff';
+            btn.style.borderColor = '#64748b';
+        } else {
+            btn.textContent = '按组排序';
+            btn.style.background = '#fff';
+            btn.style.color = '#64748b';
+            btn.style.borderColor = '#64748b';
+        }
+        if (cachedTree) renderShards(cachedTree);
+    }
+
     function renderShards(tree) {
         const grid = document.getElementById('shardGrid');
 
@@ -1683,8 +1719,15 @@
             return;
         }
         info.textContent = `共 ${tree.shards.length} 个分片 · Config #${tree.configNum}`;
+
+        let shardList = [...tree.shards];
+        if (shardSortByGroup) {
+            // 按组编号排序，每组内按分片号从小到大
+            shardList.sort((a, b) => a.gid - b.gid || a.shard - b.shard);
+        }
+
         let html = '';
-        for (const shard of tree.shards) {
+        for (const shard of shardList) {
             const color = getGroupColor(shard.gid);
             html += `<div class="shard-item" style="background:${color}22; color:${color}; border:1px solid ${color}44;">
                 分片${shard.shard}<br><small>组${shard.gid}</small>
