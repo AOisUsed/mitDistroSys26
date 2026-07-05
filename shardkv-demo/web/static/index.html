@@ -917,7 +917,6 @@
                 break;
             }
             case 'leave': {
-                if (pending) leaveInFlight = false;
                 if (task.success) {
                     addLog(`移除组 ${task.gid} 完成，分片已迁移到其他组`, 'ok');
                 } else {
@@ -1187,13 +1186,10 @@
         }
     }
 
-    let leaveInFlight = false;
     async function doLeaveGroup() {
-        if (leaveInFlight) { addLog('移除组: 上次操作未完成，请等待', 'warn'); return; }
         const gid = parseInt(document.getElementById('groupGid').value);
         if (isNaN(gid)) { addLog('移除组: 请选择有效的组', 'warn'); return; }
         if (gid === 0) { addLog('移除组: ConfigStore (组 0) 是系统核心组件，不允许离开集群', 'warn'); return; }
-        leaveInFlight = true;
         addLog(`移除组 ${gid}: 开始执行...`, 'info');
         optimisticPendingMigration = true;
         refreshStatus();
@@ -1202,7 +1198,6 @@
             result = await api('/api/group/leave', {method: 'POST', body: JSON.stringify({gid}), timeoutSec: 5, label: '离开组'});
         } catch (err) {
             optimisticPendingMigration = false;
-            leaveInFlight = false;
             return;
         }
         if (result.async) {
@@ -1210,7 +1205,6 @@
         } else {
             // 同步失败（如 gid=0 拒绝）
             optimisticPendingMigration = false;
-            leaveInFlight = false;
         }
     }
 
