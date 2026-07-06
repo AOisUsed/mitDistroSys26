@@ -11,22 +11,30 @@
             background: #f0f2f5;
             color: #333;
             min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
         }
 
         .header {
-            background: linear-gradient(135deg, #5cbdf5 0%, #852cef 100%);
-            color: white;
+            background: #fff;
+            color: #333;
             padding: 12px 24px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            border-bottom: 3px solid #000000;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            flex-shrink: 0;
+            z-index: 100;
         }
         .header h1 { font-size: 18px; font-weight: 600; }
-        .header .subtitle { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+        .header .subtitle { font-size: 12px; opacity: 1; color: #999; margin-top: 2px; }
         .header .status-badge {
             display: inline-flex; align-items: center; gap: 6px;
-            background: rgba(255,255,255,0.2);
+            background: #f0f2f5;
+            color: #333;
             padding: 4px 12px; border-radius: 20px; font-size: 12px;
         }
         .badge-dot {
@@ -36,7 +44,8 @@
 
         .container {
             display: flex; gap: 1px; padding: 12px;
-            height: calc(100vh - 52px);
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
             min-width: 0;
         }
@@ -119,7 +128,7 @@
         .node-grid { display: flex; gap: 10px; flex-wrap: wrap; }
         .group-card {
             background: #fafafa; border: 1px solid #eee; border-radius: 8px;
-            padding: 10px; flex: 1; min-width: 245px;
+            padding: 10px; flex: 1; min-width: 250px;
         }
         .group-header {
             display: flex; justify-content: space-between; align-items: center;
@@ -389,7 +398,7 @@
 <div class="header">
     <div>
         <h1>ShardKV 集群控制台</h1>
-        <div class="subtitle">分布式键值存储系统 · 实时监控与运维</div>
+        <div class="subtitle">分布式键值存储系统 · 实时操作与观察</div>
     </div>
     <div class="status-badge">
         <span class="badge-dot"></span>
