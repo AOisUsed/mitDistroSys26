@@ -20,10 +20,10 @@ make kvraft
 # 运行ShardKV测试
 make shardkv
 
-# 运行单个或多个名称匹配的测试用例，如
-make RUN="-run 3A" raft 
+# 运行单个或多个(部分)名称匹配的测试用例，如
+make RUN="-run 3A" raft  # 运行 raft 测试套组中所有带有“3A”的测试
 ```
-**注意**： 当测试被 `Ctrl+C` 等信号中断时，测试框架启动的 daemon 子进程和 UNIX socket 文件可能不会被正常清理。运行以下命令清理：
+**注意**： 当测试异常中断时，测试框架启动的 daemon 子进程和 UNIX socket 文件可能不会被正常清理。运行以下命令清理：
 ```bash
 # 一键清理所有残留 daemon 进程和 socket 文件
 cd ../src
