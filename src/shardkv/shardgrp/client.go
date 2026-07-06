@@ -31,7 +31,7 @@ func MakeClerk(clnt *tester.Clnt, servers []string, clientId uint64) *Clerk {
 	ck.leader = 0
 	ck.clientId = clientId
 	ck.maxAttempts = len(ck.servers) * 2 //  try 2 round + one time
-	ck.backoffTime = 200 * time.Millisecond
+	ck.backoffTime = 100 * time.Millisecond
 	return ck
 }
 
@@ -40,11 +40,11 @@ func (ck *Clerk) Leader() int {
 }
 
 // backoffWithJitter provides exponential backoff with jitter.
-// range between [backoff/2, backoff], where backoff = 2^round * ck.backoffTime
+// range between [backoff/2, backoff], where backoff = 2^round * ck.backoffTime (with a max of 1s)
 func (ck *Clerk) backoffWithJitter(round int) {
 	round = min(round, 5)
-	backoff := ck.backoffTime << round // this may overflow (if backoffTime is EXTREMELY huge)
-	backoff = min(3*time.Second, backoff)
+	backoff := ck.backoffTime << round // !! caution: this may overflow (if backoffTime is EXTREMELY huge)
+	backoff = min(1*time.Second, backoff)
 	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
 	time.Sleep(backoff/2 + jitter)
 }

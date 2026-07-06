@@ -26,7 +26,7 @@ import (
 )
 
 // backoffWithJitter provides exponential backoff with jitter to break thundering herd.
-// range between [backoff/2, backoff], where backoff = 2^retry * ck.backoffTime
+// range between [backoff/2, backoff], where backoff = 2^retry * ck.backoffTime (with a max of 2s)
 func (ck *Clerk) backoffWithJitter(retry int) {
 	retry = min(retry, 5)
 	backoff := ck.backoffTime << retry // this may overflow (if backoffTime is EXTREMELY huge)
