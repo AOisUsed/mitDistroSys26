@@ -919,7 +919,10 @@
                 } else {
                     addLog(`加入组失败: ${task.error || '未知错误'}`, 'err');
                 }
-                optimisticPendingMigration = false;
+                // 仅当所有 join/leave 任务都完成时才清除标记
+                optimisticPendingMigration = Object.values(pendingTasks).some(
+                    t => t.action === 'join' || t.action === 'leave'
+                );
                 refreshStatus();
                 break;
             }
@@ -929,7 +932,9 @@
                 } else {
                     addLog(`移除组失败: ${task.error || '未知错误'}`, 'err');
                 }
-                optimisticPendingMigration = false;
+                optimisticPendingMigration = Object.values(pendingTasks).some(
+                    t => t.action === 'join' || t.action === 'leave'
+                );
                 refreshStatus();
                 break;
             }
