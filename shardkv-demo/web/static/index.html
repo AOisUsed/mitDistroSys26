@@ -25,7 +25,6 @@
             align-items: center;
             justify-content: space-between;
             border-bottom: 3px solid #000000;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
             flex-shrink: 0;
             z-index: 100;
         }
@@ -43,7 +42,7 @@
         }
 
         .container {
-            display: flex; gap: 1px; padding: 12px;
+            display: flex; gap: 1px; padding: 8px;
             flex: 1;
             min-height: 0;
             overflow: hidden;
@@ -58,9 +57,8 @@
         .right-panel {
             width: clamp(380px, 27vw, 640px); flex-shrink: 0;
             display: flex; flex-direction: column; gap: 0;
-            background: #1a1a2e;
-            border-radius: 10px;
-            overflow: hidden;
+            background: transparent;
+            border-radius: 0;
         }
 
         .card {
@@ -165,25 +163,17 @@
 
         .log-panel {
             background: #1a1a2e; color: #e0e0e0;
-            border-radius: 0;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
             font-family: 'SF Mono', Monaco, monospace; font-size: 11px;
             overflow: hidden;
             display: flex;
             flex-direction: column;
             flex: 1;
         }
-        .right-panel > .log-panel:first-child {
-            border-radius: 10px 10px 0 0;
-        }
-        .right-panel > .log-panel:last-child {
-            border-radius: 0 0 10px 10px;
-        }
-        .right-panel > .log-panel:only-child {
-            border-radius: 10px;
-        }
         .log-drag-handle {
             height: 6px;
-            background: #2a2a4a;
+            background: transparent;
             cursor: row-resize;
             flex-shrink: 0;
             user-select: none;
@@ -192,16 +182,32 @@
             justify-content: center;
             transition: background 0.15s;
             position: relative;
+            margin: 0 1px;
         }
         .log-drag-handle:hover {
-            background: #3a3a5a;
+            background: transparent;
+        }
+        .log-drag-handle:hover::after {
+            display: none;
+        }
+        .log-drag-handle:hover::before {
+            content: '';
+            position: absolute;
+            left: 9px;   /* = .log-panel 圆角(10px) - 手柄内缩(1px)，使胶囊两端正好停在圆角结束处 */
+            right: 9px;
+            top: 1px;
+            bottom: 1px;
+            background: #a1a1a1;
+            border-radius: 3px;
         }
         .log-drag-handle::after {
             content: '···';
-            color: #66779a;
+            color: #000;
             font-size: 10px;
             letter-spacing: 3px;
             line-height: 1;
+            position: relative;
+            z-index: 1;
         }
         /* 左右面板拖拽手柄 */
         .panel-drag-handle {
@@ -225,7 +231,17 @@
             background: #d9d9d9;
         }
         .panel-drag-handle:hover {
-            background: #d9d9d9;
+            background: transparent;
+        }
+        .panel-drag-handle:hover::before {
+            content: '';
+            position: absolute;
+            top: 10px;    /* 对齐相邻面板(.card/.log-panel) 10px 圆角结束处 */
+            bottom: 10px;
+            left: 2px;    /* 居中：手柄宽10px → 胶囊宽6px，每侧留2px，叠加容器gap不贴边 */
+            right: 2px;
+            background: #a1a1a1;
+            border-radius: 3px;
         }
         .panel-drag-handle:hover::after {
             display: none;
@@ -1472,18 +1488,18 @@
     const COLORS = [
         '#06d6a0',
         '#ba5151',
-        '#52b788',
+        '#5e60ce',
+        '#f77f00',
         '#9d4edd',
         '#2ec4b6',
         '#f72585',
         '#8ac926',
         '#4b8da9',
-        '#f77f00',
         '#4895ef',
         '#ea07e6',
         '#e8881b',
-        '#5e60ce',
         '#4f252e',
+        '#52b788',
         '#a24b79',
     ];
 
