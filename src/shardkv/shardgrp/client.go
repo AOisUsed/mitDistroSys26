@@ -87,7 +87,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
 	debug.D5APrintf("shardgrpclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
-	debug.ObserveKVRequestFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
+	debug.ObserveKVSubmitFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
@@ -140,7 +140,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	// it could mean:
 	//	- the group is in partition/election,
 	// 	- the group has left
-	debug.ObserveKVRequestFaultPrintf("组客户端: Put(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
+	debug.ObserveKVSubmitFaultPrintf("组客户端: Put(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 

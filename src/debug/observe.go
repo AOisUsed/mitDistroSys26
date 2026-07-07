@@ -248,7 +248,7 @@ func ObserveMigrationFaultPrintf(format string, a ...interface{}) {
 	}
 }
 
-func ObserveKVRequestPrintf(format string, a ...interface{}) {
+func ObserveKVSubmitPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
 		fn(TagKVSubmit, text)
@@ -259,8 +259,8 @@ func ObserveKVRequestPrintf(format string, a ...interface{}) {
 	}
 }
 
-// ObserveKVRequestFaultPrintf KV请求过程中的故障日志（红色正文）
-func ObserveKVRequestFaultPrintf(format string, a ...interface{}) {
+// ObserveKVSubmitFaultPrintf KV提交过程中的故障日志（红色正文）
+func ObserveKVSubmitFaultPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
 		fn(TagKVSubmit, text)
