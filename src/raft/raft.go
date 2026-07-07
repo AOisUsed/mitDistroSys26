@@ -681,7 +681,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	if rf.LastIncludedIndex >= rf.nextIndex[i] {
 		debug.D3DPrintf("%v-InstallSnapshot,lastIncluded:%v->%v", rf.me, rf.LastIncludedIndex, i)
 		args := rf.newInstallSnapshotArgs()
-		debug.ObserveReplicationPrintf("[%s] server-%v (任期 %v) 发送快照给 server-%v —— 最大包含索引=%v", rf.GroupLabel, rf.me, rf.CurrentTerm, i, args.LastIncludedIndex)
+		debug.ObserveReplicationPrintf("[%s] srv%v(T%v) -快照-> srv%v [最大包含日志 %v]", rf.GroupLabel, rf.me, rf.CurrentTerm, i, args.LastIncludedIndex)
 		rf.mu.Unlock()
 		reply := &InstallSnapshotReply{}
 		ok := rf.sendInstallSnapshot(i, args, reply)
@@ -708,7 +708,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	// case where the leader has the log to send to the follower, send AppendEntries
 	args := rf.newAppendEntriesArgsFor(i)
 	if len(args.Entries) > 0 { // so that heartbeat without log will be ignored
-		debug.ObserveReplicationPrintf("[%s] server-%v (任期 %v) 发送日志给 server-%v —— 包含索引 %v～%v", rf.GroupLabel, rf.me, rf.CurrentTerm, i, args.PrevLogIndex+1, len(args.Entries)+args.PrevLogIndex)
+		debug.ObserveReplicationPrintf("[%s] srv%v(T%v) -日志-> srv%v [包含日志范围 %v~%v]", rf.GroupLabel, rf.me, rf.CurrentTerm, i, args.PrevLogIndex+1, len(args.Entries)+args.PrevLogIndex)
 	}
 	rf.mu.Unlock()
 	reply := &AppendEntriesReply{}
