@@ -73,7 +73,7 @@ type Raft struct {
 	replicateReadyChs []chan struct{}
 	snapshotPending   bool
 
-	// Observe log —— group label (e.g., "Config", "G1", "G2")
+	// Observe log —— group label (e.g., "CS", "G1", "G2")
 	GroupLabel string
 }
 

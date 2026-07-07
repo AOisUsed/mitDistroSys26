@@ -2009,13 +2009,13 @@
     observeLogExpanded = false;
     let observeLogLastId = 0; // 用游标 Id 而非数组长度，避免环形缓冲区满后增量失效
 
-    // 组日志显示控制：key=groupLabel（"Config","G1","G2",...），configStore 默认关闭，其余默认开启
+    // 组日志显示控制：key=groupLabel（"CS","G1","G2",...），configStore 默认关闭，其余默认开启
     const visibleObserveGroups = new Map();
-    visibleObserveGroups.set('Config', false); // configStore 默认关闭
+    visibleObserveGroups.set('CS', false); // configStore 默认关闭
 
     // groupLabelForGid 返回给定 gid 对应的 observe log group label
     function groupLabelForGid(gid) {
-        return gid === 0 ? 'Config' : 'G' + gid;
+        return gid === 0 ? 'CS' : 'G' + gid;
     }
 
     function isObserveGroupOn(gid) {
@@ -2043,7 +2043,7 @@
 
     // parseGroupLabel 从 observe log 正文提取组标签（如 "[Config]", "[G1]"），没有则返回空
     function parseGroupLabel(text) {
-        const m = text.match(/^\[(Config|G\d+)\]/);
+        const m = text.match(/^\[(CS|G\d+)\]/);
         return m ? m[1] : '';
     }
 
