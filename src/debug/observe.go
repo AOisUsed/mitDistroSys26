@@ -139,34 +139,6 @@ func ObservePushTagged(tag, text string) {
 	}
 }
 
-// GetObserveLines 获取最近 N 条观测日志（最多 bufSize 条）
-// 返回结果按时间正序排列（最早的在前）
-func GetObserveLines(n int) []ObserveLine {
-	if n <= 0 || n > observeBufSize {
-		n = observeBufSize
-	}
-
-	observeMu.Lock()
-	defer observeMu.Unlock()
-
-	current := observeIdx.Load()
-	if current == 0 {
-		return nil
-	}
-
-	start := current - int64(n)
-	if start < 0 {
-		start = 0
-	}
-
-	count := int(current - start)
-	lines := make([]ObserveLine, 0, count)
-	for i := start; i < current; i++ {
-		lines = append(lines, observeBuf[i%observeBufSize])
-	}
-	return lines
-}
-
 // GetObserveLinesSince 获取所有 Id >= sinceId 的观测日志（最多 bufSize 条）
 // 返回结果按时间正序排列。sinceId=0 时返回最近 observeBufSize 条。
 // 返回当前最新的 observeIdx 作为 nextId，供前端做游标增量获取。
