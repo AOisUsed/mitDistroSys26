@@ -207,10 +207,10 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) becomeFollowerWithTerm(term int) {
 	if rf.state == leader {
-		debug.ObserveElectionPrintf("[%s] server-%v: leader (任期 %v) 转变为 follower (任期 %v)", rf.GroupLabel, rf.me, rf.CurrentTerm, term)
+		debug.ObserveElectionPrintf("[%s] srv%v(T%v): 领导者身份变为跟随者(T%v)", rf.GroupLabel, rf.me, rf.CurrentTerm, term)
 		debug.ReportLeaderChange(rf.me, false)
 	} else if rf.state == candidate {
-		debug.ObserveElectionPrintf("[%s] server-%v: candidate (任期 %v) 转变为 follower (任期 %v)", rf.GroupLabel, rf.me, rf.CurrentTerm, term)
+		debug.ObserveElectionPrintf("[%s] srv%v(T%v): 候选人身份变为跟随者(T%v)", rf.GroupLabel, rf.me, rf.CurrentTerm, term)
 	}
 
 	rf.lastHeardTime = time.Now() // when converted to follower, must update lastHeartBeat in order not to start Election immediately
@@ -249,7 +249,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.lastHeardTime = time.Now()
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
-			debug.ObserveElectionPrintf("[%s] server-%v: 从 candidate (任期 %v) 变为 follower (任期 %v)", rf.GroupLabel, rf.me, args.Term, rf.CurrentTerm)
+			debug.ObserveElectionPrintf("[%s] srv%v(T%v): 候选人身份变为跟随者(T%v)", rf.GroupLabel, rf.me, args.Term, rf.CurrentTerm)
 		}
 	} else { // case when CurrentTerm is greater than rpc's term
 		reply.Term = rf.CurrentTerm
@@ -467,7 +467,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// vote for this candidate:
 			rf.lastHeardTime = time.Now() // update lastHeardTime when this raft decides to vote for the candidate, so that it won't trigger another round of election too quickly
 			debug.D3APrintf("%v at %v, VotedFor%v -vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
-			debug.ObserveElectionPrintf("[%s] server-%v (任期 %v): 给 server-%v (任期 %v) 投票 —— 此 candidate 日志足够新", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("[%s] srv%v(T%v): -投票-> srv%v [候选人日志够新]", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId)
 			reply.Term = rf.CurrentTerm
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
@@ -476,11 +476,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	} else { // in other cases: don't vote for this candidate
 		if args.Term < rf.CurrentTerm {
-			debug.ObserveElectionPrintf("[%s] server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此 candidate 任期过时", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("[%s] srv%v(T%v): -反对-> srv%v [候选人任期过时]", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId)
 		} else if rf.VotedFor != args.CandidateId { // under the condition: args.Term == rf.CurrentTerm
-			debug.ObserveElectionPrintf("[%s] server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此任期内已投过票给 server-%v", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId, args.Term, rf.VotedFor)
+			debug.ObserveElectionPrintf("[%s] srv%v(T%v): -反对-> srv%v [此任期内已投票给srv%v]", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId, rf.VotedFor)
 		} else {
-			debug.ObserveElectionPrintf("[%s] server-%v (任期 %v)：拒绝给 server-%v (任期 %v) 投票 —— 此 candidate 日志不够新", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId, args.Term)
+			debug.ObserveElectionPrintf("[%s] srv%v(T%v): -反对-> srv%v [候选人日志不够新]", rf.GroupLabel, rf.me, rf.CurrentTerm, args.CandidateId)
 		}
 		debug.D3APrintf("%v at %v,VotedFor %v -NO vote-> %v at %v", rf.me, rf.CurrentTerm, rf.VotedFor, args.CandidateId, args.Term)
 		reply.Term = rf.CurrentTerm
@@ -850,8 +850,7 @@ func (rf *Raft) startElection() {
 	rf.lastHeardTime = time.Now() // prevent the ticker from starting another election immediately
 	rf.persist()
 	debug.D3APrintf("%v at %v: startElection", rf.me, rf.CurrentTerm)
-	debug.ObserveElectionPrintf("[%s] server-%v (任期 %v): 发起选举", rf.GroupLabel, rf.me, rf.CurrentTerm)
-
+	debug.ObserveElectionPrintf("[%s] srv%v(T%v): 发起选举", rf.GroupLabel, rf.me, rf.CurrentTerm)
 	args := &RequestVoteArgs{
 		Term:         rf.CurrentTerm,
 		CandidateId:  rf.me,
@@ -895,7 +894,7 @@ func (rf *Raft) startElection() {
 				if voteCount > len(rf.peers)/2 && !won {
 					won = true
 					debug.D3APrintf("%v at %v wins ", rf.me, rf.CurrentTerm)
-					debug.ObserveElectionPrintf("[%s] server-%v 在任期 %v 赢得选举 -> leader", rf.GroupLabel, rf.me, rf.CurrentTerm)
+					debug.ObserveElectionPrintf("[%s] srv%v(T%v): 赢得选举", rf.GroupLabel, rf.me, rf.CurrentTerm)
 					rf.state = leader
 					debug.ReportLeaderChange(rf.me, true)
 					//reinitialise volatile state on leaders
@@ -987,7 +986,7 @@ func Make(peers []*rpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())
-	debug.ObserveElectionPrintf("[%s] server-%v 以 follower 身份启动，任期 %v", rf.GroupLabel, rf.me, rf.CurrentTerm)
+	debug.ObserveElectionPrintf("[%s] srv%v(T%v): 以跟随者身份启动", rf.GroupLabel, rf.me, rf.CurrentTerm)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
