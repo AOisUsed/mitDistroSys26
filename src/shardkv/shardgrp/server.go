@@ -151,6 +151,9 @@ func (kv *KVServer) DoOp(req any) any {
 					debug.D4BPrintf("server%v:client %v sent new PUT request  id: %v) before receiving previous result!\n", kv.me, request.ClientId, request.RequestId)
 				}
 				debug.D4BPrintf("server%v:client %v sent duplicated request:%v\n", kv.me, request.ClientId, request.RequestId)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveKVSubmitFTPrintf("[G%d] srv%v: Put(\"%v\":\"%v\", 版本%v) --> %v [重复请求，返回缓存结果]", kv.gid, kv.me, request.Key, request.Value, request.Version, lastPut.Reply.Err)
+				}
 				return lastPut.Reply // if client bugs (i.e. sending request of the id smaller than lastPut), server is not responsible for sending the correct reply, and will just send reply of lastPut (which doesn't reflect the truth).
 			}
 		}
@@ -213,7 +216,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Absent, Frozen: // illegal operation on this state
 				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
-					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+					debug.ObserveMigrationFTPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
 				}
 				reply = shardrpc.FreezeShardReply{
 					State: nil,
@@ -234,7 +237,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Serving:
 				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
-					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+					debug.ObserveMigrationFTPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
 				}
 				reply = shardrpc.FreezeShardReply{ // illegal operation on this state
 					State: nil,
@@ -272,7 +275,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Frozen, Serving:
 				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
-					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+					debug.ObserveMigrationFTPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
 				}
 				reply = shardrpc.InstallShardReply{ // illegal operation on this state
 					Err: rpcapi.ErrIllegalOperation,
@@ -333,7 +336,7 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			case Serving:
 				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
-					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+					debug.ObserveMigrationFTPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
 				}
 				reply = shardrpc.DeleteShardReply{
 					Err: rpcapi.ErrIllegalOperation,
@@ -341,7 +344,7 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		} else if request.Num > localCfgNum {
 			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				debug.ObserveMigrationFTPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
 			}
 			reply = shardrpc.DeleteShardReply{ // illegal operation
 				Err: rpcapi.ErrIllegalOperation,
@@ -482,7 +485,7 @@ func (kv *KVServer) Snapshot() []byte {
 	for shid, kv := range kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveSnapshotPrintf("[G%d] server-%v: 生成快照, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("[G%d] srv%v: 生成快照, 各分片key数 —— %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver :%v Snapshoted \n keyNum: %v\n", kv.me, keyNum)
 
 	// encode copied snapshot
@@ -516,7 +519,7 @@ func (kv *KVServer) Restore(data []byte) {
 	for shid, kv := range snapshot.Kvm {
 		keyNum[shid] = len(kv)
 	}
-	debug.ObserveSnapshotPrintf("[G%d] server-%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
+	debug.ObserveSnapshotPrintf("[G%d] srv%v: 从快照恢复, 各分片key数: %v", kv.gid, kv.me, keyNum)
 	debug.D5APrintf("shardkvserver %v: Restored from snapshot\n keyNum: %v\n", kv.me, keyNum)
 
 	kv.rwMu.Lock()

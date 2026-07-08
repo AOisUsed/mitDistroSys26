@@ -87,7 +87,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	}
 	// if exceeds maxAttempts, return ErrWrongLeader, so that the client will pull latest config from configStore
 	debug.D5APrintf("shardgrpclerk %v: Get %s retry exhausted after %d attempts\n", ck.clientId, key, attempts)
-	debug.ObserveKVSubmitFaultPrintf("组客户端: Get(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
+	debug.ObserveKVSubmitFTPrintf("组客户端: Get(\"%s\") 耗尽%d次重试 [组不可达或无领导者]", key, attempts)
 	return "", 0, rpcapi.ErrRetryExhausted
 }
 
@@ -140,7 +140,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	// it could mean:
 	//	- the group is in partition/election,
 	// 	- the group has left
-	debug.ObserveKVSubmitFaultPrintf("组客户端: Put(%s) 重试 %d 次耗尽 (无 server 可达或无 leader)", key, attempts)
+	debug.ObserveKVSubmitFTPrintf("组客户端: Put(\"%s\":\"%s\", 版本%v) 耗尽%d次重试 [组不可达或无领导者]", key, value, version, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -182,7 +182,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
-	debug.ObserveMigrationFaultPrintf("组客户端: 冻结分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
+	debug.ObserveMigrationFTPrintf("组客户端: 冻结分片(%v) 耗尽%d次重试 [组不可达或无领导者]", s, attempts)
 	return nil, rpcapi.ErrRetryExhausted
 }
 
@@ -224,7 +224,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
-	debug.ObserveMigrationFaultPrintf("组客户端: 安装分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
+	debug.ObserveMigrationFTPrintf("组客户端: 安装分片(%v) 耗尽%d次重试 [组不可达或无领导者]", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }
 
@@ -265,6 +265,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 			ck.backoffWithJitter(attempts / serverNum)
 		}
 	}
-	debug.ObserveMigrationFaultPrintf("组客户端: 删除分片(%v) 重试 %d 次耗尽 (无 server 可达或无 leader)", s, attempts)
+	debug.ObserveMigrationFTPrintf("组客户端: 删除分片(%v) 耗尽%d次重试 [组不可达或无领导者]", s, attempts)
 	return rpcapi.ErrRetryExhausted
 }

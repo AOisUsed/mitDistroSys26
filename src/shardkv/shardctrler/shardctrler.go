@@ -71,7 +71,7 @@ func (sck *ShardCtrler) InitController() {
 
 	// if currentConfig has smaller Num, it means that previous shard reconfiguration wasn't completed, therefore redo it.
 	if currentConfig.Num < nextConfig.Num {
-		debug.ObserveMigrationFaultPrintf("分片控制器: 发现有未完成的分片迁移，即将恢复...")
+		debug.ObserveMigrationFTPrintf("分片控制器: 发现有未完成的分片迁移，即将恢复...")
 		sck.migrateShards(currentConfig, ver, nextConfig, true)
 	}
 }
@@ -143,7 +143,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) bool {
 		return false
 	}
 
-	debug.ObserveMigrationPrintf("分片控制器: 发起分片配置变更 %v -> %v\n%23s#%v: %v\n%23s#%v: %v", oldCfg.Num, newCfg.Num, "配置", oldCfg.Num, oldCfg.Shards, "配置", newCfg.Num, newCfg.Shards)
+	debug.ObserveMigrationPrintf("分片控制器: 发起分片配置变更 %v --> %v\n%23s#%v: %v\n%23s#%v: %v", oldCfg.Num, newCfg.Num, "配置", oldCfg.Num, oldCfg.Shards, "配置", newCfg.Num, newCfg.Shards)
 	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
 	return sck.migrateShards(oldCfg, ver, newCfg, false)
 }
@@ -185,7 +185,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				data, err = oldGrpClerk.FreezeShard(shid, newCfg.Num)
 				debug.D5APrintf("controller %v -FreezeShard(shard: %v, Num: %v)-> %v, Err: %v\n", sck.controllerId, shid, newCfg.Num, oldGid, err)
 				if err == rpcapi.ErrRetryExhausted {
-					debug.ObserveMigrationFaultPrintf("分片控制器: -配置#%v·冻结分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+					debug.ObserveMigrationFTPrintf("分片控制器: --配置#%v·冻结分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)
 						return
@@ -193,7 +193,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 					sck.backoffWithJitter()
 				}
 			}
-			debug.ObserveMigrationPrintf("分片控制器: -配置#%v·冻结分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+			debug.ObserveMigrationPrintf("分片控制器: --配置#%v·冻结分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 
 			// 2. install the shard to the newGid: newGrp.Install(shid, newCfg.Num)
 			newGrpClerk := sck.clerk(newCfg, newGid)
@@ -202,7 +202,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				err = newGrpClerk.InstallShard(shid, data, newCfg.Num)
 				debug.D5APrintf("controller %v -InstallShard(shard: %v, stateSize: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, len(data), newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
-					debug.ObserveMigrationFaultPrintf("分片控制器: -配置#%v·安装分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+					debug.ObserveMigrationFTPrintf("分片控制器: --配置#%v·安装分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)
 						return
@@ -210,7 +210,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 					sck.backoffWithJitter()
 				}
 			}
-			debug.ObserveMigrationPrintf("分片控制器: -配置#%v·安装分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+			debug.ObserveMigrationPrintf("分片控制器: --配置#%v·安装分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
 
@@ -235,7 +235,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
 				debug.D5APrintf("controller %v -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
-					debug.ObserveMigrationFaultPrintf("分片控制器: -配置#%v·删除分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+					debug.ObserveMigrationFTPrintf("分片控制器: --配置#%v·删除分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 					if sck.isSuperseded(newCfg) {
 						isSuperseded.Store(true)
 						return
@@ -244,11 +244,11 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				}
 				attempts++
 				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left
-					debug.ObserveMigrationFaultPrintf("分片控制器: -配置#%v·删除分片(%v)-> G%-2v [重试%v次仍无响应，组应已被移除，放弃流程]", newCfg.Num, shid, newGid, attempts)
+					debug.ObserveMigrationFTPrintf("分片控制器: --配置#%v·删除分片(%v)--> G%-2v [重试%v次仍无响应，组应已被移除，放弃流程]", newCfg.Num, shid, newGid, attempts)
 					return
 				}
 			}
-			debug.ObserveMigrationPrintf("分片控制器: -配置#%v·删除分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)
+			debug.ObserveMigrationPrintf("分片控制器: --配置#%v·删除分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 			// check if the group is removed from the new
 
 		}(shardcfg.Tshid(shid), oldGid, newGid)
@@ -256,7 +256,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 	wg.Wait()
 
 	if isSuperseded.Load() { // if shard migration fails at any stage, don't save newCfg to configStore !
-		debug.ObserveMigrationFaultPrintf("分片控制器：分片迁移中发现配置#%v已过期，放弃流程", newCfg.Num)
+		debug.ObserveMigrationFTPrintf("分片控制器：分片迁移中发现配置#%v已被覆盖，放弃流程", newCfg.Num)
 		return false
 	}
 
