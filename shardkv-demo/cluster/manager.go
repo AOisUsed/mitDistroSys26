@@ -670,7 +670,7 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 	// 4. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
-		newcfg := cm.ctl.Query()
+		newcfg := cm.ctl.Query().Copy()
 		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs}); !ok {
 			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
 			return false, fmt.Sprintf("组 %d 已存在", gid)
@@ -700,7 +700,7 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 	// 2. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
-		newcfg := cm.ctl.Query()
+		newcfg := cm.ctl.Query().Copy()
 
 		if _, ok := newcfg.Groups[gid]; !ok {
 			// 别的请求已经移除了这个组，幂等返回

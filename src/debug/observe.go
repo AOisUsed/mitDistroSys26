@@ -112,30 +112,30 @@ func observePushFault(tag, format string, a ...interface{}) {
 
 // ObservePushTagged 检查 tag 对应 toggle，开启时写入环形缓冲区（无终端输出）
 // 供主进程 TesterRPC.PostObserveLog handler 调用，避免子进程转发时的重复日志
-func ObservePushTagged(tag, text string) {
+func ObservePushTagged(tag, text, style string) {
 	switch tag {
 	case TagElection:
 		if observeElection.Load() {
-			observeWrite(tag, text, "")
+			observeWrite(tag, text, style)
 		}
 	case TagMigration:
 		if observeMigration.Load() {
-			observeWrite(tag, text, "")
+			observeWrite(tag, text, style)
 		}
 	case TagKVSubmit:
 		if observeKVSubmit.Load() {
-			observeWrite(tag, text, "")
+			observeWrite(tag, text, style)
 		}
 	case TagSnapshot:
 		if observeSnapshot.Load() {
-			observeWrite(tag, text, "")
+			observeWrite(tag, text, style)
 		}
 	case TagReplication:
 		if observeReplication.Load() {
-			observeWrite(tag, text, "")
+			observeWrite(tag, text, style)
 		}
 	default:
-		observeWrite(tag, text, "")
+		observeWrite(tag, text, style)
 	}
 }
 
@@ -192,7 +192,7 @@ func getObserveLogCallback() ObserveLogCallbackFn {
 // --- 转发回调（子进程模式） ---
 
 // ObserveForwardFn 是子进程向主进程转发观测日志的回调函数类型
-type ObserveForwardFn func(tag, text string)
+type ObserveForwardFn func(tag, text, style string)
 
 var observeForward atomic.Value // stores ObserveForwardFn
 
@@ -216,7 +216,7 @@ func getObserveForward() ObserveForwardFn {
 func ObserveElectionPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagElection, text) // 子进程模式：转发到主进程
+		fn(TagElection, text, "") // 子进程模式：转发到主进程
 		return
 	}
 	// 主进程模式
@@ -228,7 +228,7 @@ func ObserveElectionPrintf(format string, a ...interface{}) {
 func ObserveMigrationPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagMigration, text)
+		fn(TagMigration, text, "")
 		return
 	}
 	if observeMigration.Load() {
@@ -240,7 +240,7 @@ func ObserveMigrationPrintf(format string, a ...interface{}) {
 func ObserveMigrationFaultPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagMigration, text)
+		fn(TagMigration, text, "fault")
 		return
 	}
 	if observeMigration.Load() {
@@ -251,7 +251,7 @@ func ObserveMigrationFaultPrintf(format string, a ...interface{}) {
 func ObserveKVSubmitPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagKVSubmit, text)
+		fn(TagKVSubmit, text, "")
 		return
 	}
 	if observeKVSubmit.Load() {
@@ -263,7 +263,7 @@ func ObserveKVSubmitPrintf(format string, a ...interface{}) {
 func ObserveKVSubmitFaultPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagKVSubmit, text)
+		fn(TagKVSubmit, text, "fault")
 		return
 	}
 	if observeKVSubmit.Load() {
@@ -274,7 +274,7 @@ func ObserveKVSubmitFaultPrintf(format string, a ...interface{}) {
 func ObserveSnapshotPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagSnapshot, text)
+		fn(TagSnapshot, text, "")
 		return
 	}
 	if observeSnapshot.Load() {
@@ -285,7 +285,7 @@ func ObserveSnapshotPrintf(format string, a ...interface{}) {
 func ObserveReplicationPrintf(format string, a ...interface{}) {
 	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagReplication, text)
+		fn(TagReplication, text, "")
 		return
 	}
 	if observeReplication.Load() {

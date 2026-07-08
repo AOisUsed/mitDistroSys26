@@ -50,15 +50,16 @@ func (trpc *TesterRPC) Forward(args *ForwardArgs, reply *ForwardReply) {
 // ----- 观测日志转发（子进程 → 主进程）-----
 
 type PostObserveLogArgs struct {
-	Tag  string
-	Text string
+	Tag   string
+	Text  string
+	Style string // "fault"=红色正文；空串=默认
 }
 
 type PostObserveLogReply struct{}
 
 // PostObserveLog 接收子进程转发过来的观测日志，由主进程根据 toggle 决定是否写入环形缓冲区
 func (trpc *TesterRPC) PostObserveLog(args *PostObserveLogArgs, reply *PostObserveLogReply) {
-	debug.ObservePushTagged(args.Tag, args.Text)
+	debug.ObservePushTagged(args.Tag, args.Text, args.Style)
 }
 
 // ----- Leader 身份变更通知（子进程 → 主进程）-----

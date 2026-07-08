@@ -143,6 +143,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) bool {
 		return false
 	}
 
+	debug.ObserveMigrationPrintf("分片控制器: 发起分片配置变更 %v -> %v\n%23s#%v: %v\n%23s#%v: %v", oldCfg.Num, newCfg.Num, "配置", oldCfg.Num, oldCfg.Shards, "配置", newCfg.Num, newCfg.Shards)
 	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
 	return sck.migrateShards(oldCfg, ver, newCfg, false)
 }
@@ -244,7 +245,7 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 				attempts++
 				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left
 					debug.ObserveMigrationFaultPrintf("分片控制器: -配置#%v·删除分片(%v)-> G%-2v [重试%v次仍无响应，组应已被移除，放弃流程]", newCfg.Num, shid, newGid, attempts)
-					break
+					return
 				}
 			}
 			debug.ObserveMigrationPrintf("分片控制器: -配置#%v·删除分片(%v)-> G%-2v [%v]", newCfg.Num, shid, newGid, err)

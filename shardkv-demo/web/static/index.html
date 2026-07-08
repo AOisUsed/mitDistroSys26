@@ -55,7 +55,7 @@
             min-width: 0;
         }
         .right-panel {
-            width: clamp(380px, 27vw, 640px); flex-shrink: 0;
+            width: clamp(550px, 27vw, 640px); flex-shrink: 0;
             display: flex; flex-direction: column; gap: 0;
             background: transparent;
             border-radius: 0;
@@ -261,6 +261,7 @@
             scrollbar-gutter: stable;
             line-height: 1.6;
             min-height: 60px;
+            word-break: break-word;
         }
         .log-panel-area::-webkit-scrollbar {
             width: 8px;
@@ -280,6 +281,7 @@
         .log-panel-area .log-err { color: #ff4d4f; }
         .log-panel-area .log-warn { color: #d48806; }
         .log-panel-area .log-info { color: #1890ff; }
+        .log-panel-area span { white-space: pre-wrap; }
 
         .toggle-switch {
             position: relative; display: inline-block;
@@ -664,9 +666,7 @@
                 <span class="title">操作日志</span>
                 <span class="toggle" id="logToggle">收起</span>
             </div>
-            <div id="logArea" class="log-panel-area">
-                <div class="log-info">系统就绪，等待操作...</div>
-            </div>
+            <div id="logArea" class="log-panel-area"><div class="log-info">系统就绪，等待操作...</div></div>
         </div>
         <div class="log-drag-handle" id="logDragHandle"></div>
         <!-- 观测日志面板 -->
@@ -679,10 +679,7 @@
                     <span class="toggle" id="observeLogToggle" onclick="toggleObserveLog()" style="cursor:pointer;padding:4px 0 4px 10px;">展开</span>
                 </span>
             </div>
-            <div id="observeLogArea" class="log-panel-area" style="display:none;">
-                <!-- 初始收起，对应的 toggle 文本要和 observeLogExpanded=false 一致 -->
-                <div class="log-info" style="color:#888;">开启观测开关后，日志将在此显示...</div>
-            </div>
+            <div id="observeLogArea" class="log-panel-area" style="display:none;"><!-- 初始收起，对应的 toggle 文本要和 observeLogExpanded=false 一致 --><div class="log-info" style="color:#888;">开启观测开关后，日志将在此显示...</div></div>
         </div>
     </div>
 </div>
@@ -1482,25 +1479,23 @@
             }
         } catch (err) {}
     }
-
-
     // ========== 渲染 ==========
     const COLORS = [
-        '#06d6a0',
-        '#ba5151',
-        '#5e60ce',
+        '#264653',
+        '#4895ef',
+        '#8ac926',
         '#f77f00',
         '#9d4edd',
-        '#2ec4b6',
+        '#06d6a0',
         '#f72585',
-        '#8ac926',
+        '#fdca00',
+        '#5e60ce',
+        '#2a9d8f',
+        '#e12d5b',
+        '#cdb4db',
         '#4b8da9',
-        '#4895ef',
-        '#ea07e6',
-        '#e8881b',
-        '#4f252e',
-        '#52b788',
-        '#a24b79',
+        '#e9c46a',
+        '#e63946',
     ];
 
     function getGroupColor(gid) {

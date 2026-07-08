@@ -201,7 +201,9 @@ func (kv *KVServer) DoOp(req any) any {
 		if reqCfgNum > localCfgNum {
 			switch kv.shardStatuses[shid] {
 			case Serving:
-				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				kv.shardStatuses[shid] = Frozen
 				kv.cfgNumByShid[shid] = reqCfgNum
 				reply = shardrpc.FreezeShardReply{
@@ -210,7 +212,9 @@ func (kv *KVServer) DoOp(req any) any {
 					Err:   rpcapi.OK,
 				}
 			case Absent, Frozen: // illegal operation on this state
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				reply = shardrpc.FreezeShardReply{
 					State: nil,
 					Num:   localCfgNum,
@@ -220,14 +224,18 @@ func (kv *KVServer) DoOp(req any) any {
 		} else if reqCfgNum == localCfgNum {
 			switch kv.shardStatuses[shid] {
 			case Frozen, Absent:
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				reply = shardrpc.FreezeShardReply{
 					State: kv.marshallShardState(shid), // 注意， Absent状态时，说明此分片已经在此group中被删除了，此处是空。由于DeleteShard前提是分片接受者已经完成了install， 所以在controller尝试把此空的分片数据装到分片接受者处时，接受者会幂等操作（拒绝），因而不影响正确性
 					Num:   reqCfgNum,
 					Err:   rpcapi.OK,
 				}
 			case Serving:
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				reply = shardrpc.FreezeShardReply{ // illegal operation on this state
 					State: nil,
 					Num:   reqCfgNum,
@@ -235,7 +243,9 @@ func (kv *KVServer) DoOp(req any) any {
 				}
 			}
 		} else { // reqCfgNum < localCfgNum
-			debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·冻结分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			}
 			reply = shardrpc.FreezeShardReply{
 				State: nil,
 				Num:   localCfgNum,
@@ -251,7 +261,9 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num > localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Absent:
-				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				kv.installShardState(request.Shard, request.State)
 				kv.shardStatuses[request.Shard] = Serving
 				kv.cfgNumByShid[request.Shard] = request.Num // increment local config num
@@ -259,7 +271,9 @@ func (kv *KVServer) DoOp(req any) any {
 					Err: rpcapi.OK,
 				}
 			case Frozen, Serving:
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				reply = shardrpc.InstallShardReply{ // illegal operation on this state
 					Err: rpcapi.ErrIllegalOperation,
 				}
@@ -275,12 +289,16 @@ func (kv *KVServer) DoOp(req any) any {
 					Err: rpcapi.ErrIllegalOperation,
 				}
 			}
-			debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			}
 		} else { // reqCfgNum < localCfgNum
 			reply = shardrpc.InstallShardReply{
 				Err: rpcapi.OK,
 			}
-			debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·安装分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			}
 		}
 		return reply
 
@@ -293,7 +311,9 @@ func (kv *KVServer) DoOp(req any) any {
 		if request.Num == localCfgNum {
 			switch kv.shardStatuses[request.Shard] {
 			case Frozen:
-				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [合法请求，接受]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				kv.kvm[shid] = nil          // delete kv for the shard
 				kv.shardClients[shid] = nil // delete information of clients that operated on this shard,
 				// note that for current design, don't change lastPutByClient because we don't know whether the lastPut of a certain client recorded is the record of the deleted shard.
@@ -304,24 +324,32 @@ func (kv *KVServer) DoOp(req any) any {
 					Err: rpcapi.OK,
 				}
 			case Absent:
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				// duplicated request
 				reply = shardrpc.DeleteShardReply{
 					Err: rpcapi.OK,
 				}
 			case Serving:
-				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+					debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+				}
 				reply = shardrpc.DeleteShardReply{
 					Err: rpcapi.ErrIllegalOperation,
 				}
 			}
 		} else if request.Num > localCfgNum {
-			debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+				debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [非法请求，拒绝]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			}
 			reply = shardrpc.DeleteShardReply{ // illegal operation
 				Err: rpcapi.ErrIllegalOperation,
 			}
 		} else { // request.Num < localCfgNum
-			debug.ObserveMigrationFaultPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			if _, isLeader := kv.rsm.Raft().GetState(); isLeader {
+				debug.ObserveMigrationPrintf("[G%d] srv%v(%v): 配置#%v·删除分片(%v) [过期请求，幂等返回成功]", kv.gid, kv.me, statusToString(kv.shardStatuses[request.Shard]), request.Num, request.Shard)
+			}
 			reply = shardrpc.DeleteShardReply{
 				Err: rpcapi.OK,
 			}
