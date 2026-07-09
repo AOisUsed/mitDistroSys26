@@ -72,7 +72,7 @@ func (sck *ShardCtrler) InitController() {
 	// if currentConfig has smaller Num, it means that previous shard reconfiguration wasn't completed, therefore redo it.
 	if currentConfig.Num < nextConfig.Num {
 		debug.ObserveMigrationFTPrintf("分片控制器: 发现有未完成的分片迁移，即将恢复...")
-		sck.migrateShards(currentConfig, ver, nextConfig, true)
+		sck.migrateShards(currentConfig, ver, nextConfig)
 	}
 }
 
@@ -145,7 +145,7 @@ func (sck *ShardCtrler) ChangeConfigTo(newCfg *shardcfg.ShardConfig) bool {
 
 	debug.ObserveMigrationPrintf("分片控制器: 发起分片配置变更 %v --> %v\n%23s#%v: %v\n%23s#%v: %v", oldCfg.Num, newCfg.Num, "配置", oldCfg.Num, oldCfg.Shards, "配置", newCfg.Num, newCfg.Shards)
 	debug.D5APrintf("controller %v: ChangeConfigTo():\n OldConfig: Num: %v, Shards: %v\n NewConfig: Num: %v, Shards: %v\n", sck.controllerId, oldCfg.Num, oldCfg.Shards, newCfg.Num, newCfg.Shards)
-	return sck.migrateShards(oldCfg, ver, newCfg, false)
+	return sck.migrateShards(oldCfg, ver, newCfg)
 }
 
 // check if the config has been superseded by a newer config ,
@@ -158,7 +158,7 @@ func (sck *ShardCtrler) isSuperseded(newCfg *shardcfg.ShardConfig) bool {
 // migrateShards is called in ChangeConfigTo and InitController. ver is the version of currentConfig value, for CAS Put.
 // fromRecovery says whether this function is invoked from recovery (InitController) or a brand-new ChangeConfigTo(),
 // if it's from ChangeConfigTo(). it should retry indefinitely. But if it's from recovery, it should exit delete when reaching max retry (reasons explained below)
-func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.Tversion, newCfg *shardcfg.ShardConfig, fromRecovery bool) bool {
+func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.Tversion, newCfg *shardcfg.ShardConfig) bool {
 	var wg sync.WaitGroup
 	var isSuperseded atomic.Bool
 
@@ -213,25 +213,8 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 			debug.ObserveMigrationPrintf("分片控制器: --配置#%v·安装分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
 
 			// 3. delete the frozen shard in oldGid: oldGrp.delete(shid, newCfg.Num)
-
-			// there is a corner case to consider if the parameter fromRecovery is true (meaning that this function isn't invoked in ChangeConfigTo() but in controller initialisation)
-			//
-			// t0: controller A migrates shards, but crashes soon at the last step - Put "currentConfig" to configStore,
-			//     meaning that the shard migration was completed but the currentConfig wasn't updated in the configStore. currentConfig < nextConfig
-			// t1: some groups leave because after all shards of them have been removed.
-			// t2: controller B picks up the work undone from InitConfig().
-			//	   but since some groups have already left, it gets ErrRetryExhausted indefinitely.
-			//
-			// therefore we need a maximum of retry numbers, if the maximum is reached, it's likely that the group left.
-			// because kv server is fault-tolerant with raft, the case that the majority is dead isn't likely to happen.
-			// and even if this happens (old group shard lost majority during migration and get recovered later),
-			// the only impact is that the shard didn't get removed. but the consistency isn't broken because frozen shard doesn't accept Put/Get
-
 			err = rpcapi.ErrRetryExhausted // set to ErrRetryExhausted to trigger action
-			maxAttempts := 5
-			attempts := 0
 			for err == rpcapi.ErrRetryExhausted {
-
 				err = oldGrpClerk.DeleteShard(shid, newCfg.Num)
 				debug.D5APrintf("controller %v -DeleteShard(shard: %v, Num: %v)-> %v Err: %v\n", sck.controllerId, shid, newCfg.Num, newGid, err)
 				if err == rpcapi.ErrRetryExhausted {
@@ -242,15 +225,8 @@ func (sck *ShardCtrler) migrateShards(oldCfg *shardcfg.ShardConfig, ver rpcapi.T
 					}
 					sck.backoffWithJitter()
 				}
-				attempts++
-				if attempts >= maxAttempts && fromRecovery { // if this is from recovery, only try maxAttempts times. and if all fails, we can (almost safely) conclude that the group left
-					debug.ObserveMigrationFTPrintf("分片控制器: --配置#%v·删除分片(%v)--> G%-2v [重试%v次仍无响应，组应已被移除，放弃流程]", newCfg.Num, shid, newGid, attempts)
-					return
-				}
 			}
 			debug.ObserveMigrationPrintf("分片控制器: --配置#%v·删除分片(%v)--> G%-2v [%v]", newCfg.Num, shid, newGid, err)
-			// check if the group is removed from the new
-
 		}(shardcfg.Tshid(shid), oldGid, newGid)
 	}
 	wg.Wait()
