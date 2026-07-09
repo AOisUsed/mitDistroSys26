@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	mrand "math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"kvstore/debug"
 	"kvstore/kvsrv/rpcapi"
@@ -32,6 +34,18 @@ type Clerk struct {
 	requestId uint64 // this should increase monotonically. if the client is to reuse the clientId, it must persist requestId.
 	mu        sync.Mutex
 	putMutex  sync.Mutex
+
+	backoffTime time.Duration
+}
+
+// backoffWithJitter provides exponential backoff with jitter to break thundering herd.
+// range between [backoff/2, backoff], where backoff = 2^retry * ck.backoffTime (with a max of 2s)
+func (ck *Clerk) backoffWithJitter(retry int) {
+	retry = min(retry, 5)
+	backoff := ck.backoffTime << retry // this may overflow (if backoffTime is EXTREMELY huge)
+	backoff = min(2*time.Second, backoff)
+	jitter := time.Duration(mrand.Int63n(int64(backoff / 2)))
+	time.Sleep(backoff/2 + jitter)
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
@@ -40,6 +54,7 @@ func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 	ck.leader = 0
 	ck.clientId = nrand()
 	ck.requestId = 0
+	ck.backoffTime = 100 * time.Millisecond
 	return ck
 }
 
@@ -68,12 +83,15 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 
 	ck.mu.Lock()
 	leader := ck.leader
+	serverNum := len(ck.servers)
 	ck.mu.Unlock()
+	attempts := 0
 	for {
 		debug.D4BPrintf("clerk%v -> %v: Get %s\n", ck.clientId, ck.servers[leader], key)
 
 		reply := rpcapi.GetReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Get", &args, &reply)
+		attempts++
 		if ok {
 			debug.D4BPrintf("clerk%v <- %v: Get %s, reply:%v \n", ck.clientId, ck.servers[leader], key, reply)
 
@@ -84,8 +102,6 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 				ck.mu.Unlock()
 				return reply.Value, reply.Version, reply.Err
 			case rpcapi.ErrWrongLeader:
-				leader = (leader + 1) % len(ck.servers)
-				continue
 			default:
 				panic(fmt.Sprintf("undefined error: %v", reply.Err))
 			}
@@ -94,6 +110,9 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		// if rpc fails, we're not sure whether the server is the leader,
 		// so we could try other servers first ?
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts)
+		}
 	}
 }
 
@@ -130,15 +149,17 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 
 	ck.mu.Lock()
 	leader := ck.leader
+	serverNum := len(ck.servers)
 	ck.mu.Unlock()
 
+	attempts := 0
 	for {
 		//debug.D4BPrintf("clerk -> %v: Put %s:%s \n", ck.servers[leader], key, value)
 		debug.D4BPrintf("clerk%v -> %v: reqId:%5v, Put %s:%s \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 
 		reply := rpcapi.PutReply{}
 		ok := ck.clnt.Call(ck.servers[leader], "KVServer.Put", &args, &reply)
-
+		attempts++
 		if ok {
 			//debug.D4BPrintf("clerk <- %v: Put %s:%s, reply:%v \n", ck.servers[leader], key, value, reply)
 			debug.D4BPrintf("clerk%v <- %v: reqId:%5v, Put %s:%s, reply:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value, reply)
@@ -160,5 +181,8 @@ func (ck *Clerk) Put(key string, value string, version rpcapi.Tversion) rpcapi.E
 		// firstTry need to be set to false. Because leadership can quickly change and
 		// the Command propagates between the servers.
 		leader = (leader + 1) % len(ck.servers)
+		if attempts%serverNum == 0 {
+			ck.backoffWithJitter(attempts)
+		}
 	}
 }
