@@ -1304,7 +1304,7 @@
         // 记录 checkbox 变化前的原始状态，用于失败时回滚
         const origChecked = !toggle.checked;
         const enabled = toggle.checked;
-        const origLabelText = origChecked ? '开启 (丢包 + 延迟)' : '关闭';
+        const origLabelText = origChecked ? '开启' : '关闭';
         const origLabelColor = origChecked ? '#ff4d4f' : '#999';
         try {
             const result = await api('/api/network/reliable', {

@@ -156,12 +156,12 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 		val, version, rpcErr := clerk.Get(key)
 		debug.D5APrintf("client <-Get(key: %v) in shard %v- group %v (key: %v, version: %v, Err: %v)\n", key, shardId, gid, val, version, rpcErr)
 		if rpcErr == rpcapi.ErrWrongGroup || rpcErr == rpcapi.ErrRetryExhausted {
-			debug.ObserveKVSubmitFTPrintf("分片客户端: Get(\"%s\") -> %v [即将重试]", key, rpcErr)
+			debug.ObserveKVSubmitFTPrintf("分片客户端: Get(\"%s\") -> \"%v\" [即将重试]", key, rpcErr)
 			ck.refreshConfig()
 			ck.backoffWithJitter(retry)
 			retry++
 		} else {
-			debug.ObserveKVSubmitPrintf("分片客户端: Get(\"%s\") -> %s, 版本%d", key, val, version)
+			debug.ObserveKVSubmitPrintf("分片客户端: Get(\"%s\") -> \"%s\", 版本%d", key, val, version)
 			return val, version, rpcErr
 		}
 	}
