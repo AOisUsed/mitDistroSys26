@@ -136,7 +136,7 @@ func TestCapital(t *testing.T) {
 // RPC but the target into which we're decoding holds a non-default
 // value, which GOB seems not to overwrite as you'd expect.
 //
-// testgob does not print a warning.
+// labgob does not print a warning.
 func TestDefault(t *testing.T) {
 	e0 := errorCount
 

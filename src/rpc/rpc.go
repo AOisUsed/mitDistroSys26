@@ -8,7 +8,7 @@ package rpc
 //
 // adapted from Go net/rpc/server.go.
 //
-// sends testgob-encoded values to ensure that RPCs
+// sends labgob-encoded values to ensure that RPCs
 // don't include references to program objects.
 //
 // net := MakeNetwork() -- holds network, clients, servers.

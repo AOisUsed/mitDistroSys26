@@ -600,7 +600,7 @@ func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.
 // StartShardServerGrp() and MakeRSM() must return quickly, so they should
 // start goroutines for any long-running work.
 func StartServerShardGrp(servers []*rpc.ClientEnd, gid tester.Tgid, me int, persister *tester.Persister, maxraftstate int) []any {
-	// call testgob.Register on structures you want
+	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(rpcapi.PutArgs{})
 	labgob.Register(rpcapi.GetArgs{})
