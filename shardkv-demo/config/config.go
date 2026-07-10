@@ -28,7 +28,7 @@ type DemoConfig struct {
 // DefaultConfig 返回默认配置
 func DefaultConfig() DemoConfig {
 	var cfg DemoConfig
-	cfg.MaxRaftState = 5000
+	cfg.MaxRaftState = 100000
 	cfg.Nsrv = 3
 	cfg.Reliable = true
 	cfg.ClerkPoolSize = 500
