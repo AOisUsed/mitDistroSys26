@@ -253,6 +253,15 @@ func (sg *ServerGrp) SnapshotSize() int {
 
 // If restart servers, first call shutdownserver
 func (sg *ServerGrp) StartServer(i int) error {
+	// 幂等守卫：若本节点的 daemon 仍在运行（dc != nil），说明它已经启动，
+	// 直接返回，避免重复 exec 拉起同身份进程导致双主 / 不停选举。
+	sg.mu.Lock()
+	alive := sg.srvs[i].dc != nil
+	sg.mu.Unlock()
+	if alive {
+		return nil
+	}
+
 	srv := sg.srvs[i].startServer(sg.gid)
 	sg.srvs[i] = srv
 
