@@ -9,26 +9,25 @@ import (
 
 // ============================================================
 // 观测日志 (Observe Logs)
-// 按 walkthrough 观测场景分类，与底层模块日志(D3/D4/D5)互相独立。
-// 每个场景只有几个关键日志点，避免噪音干扰。
+// 开关方式（运行时动态切换）：
+//   Web Demo：前端 toggle 调用 /api/observe 接口设置对应场景开关
 //
-// 使用方式（运行时动态切换）：
-//   1. Web Demo：通过前端 toggle 开关，调用 /api/observe 接口
-//   2. 环境变量：启动时设置 OBSERVE_ELECTION=true 等（仅初始化生效）
-//   3. 代码调用：直接调用 debug.SetObserveElection(true)
+// 输出目标（本文件无终端输出，全部走内存）：
+//   - RingBuffer: 写入内存环形缓冲区，供前端 /api/observe/logs 增量轮询
+//   - SSE:        web 包通过 SetObserveLogCallback 注册回调，实时推送到前端
 //
-// 输出目标：
-//   - Terminal: log.Printf 输出到控制台
-//   - RingBuffer: 存入内存环形缓冲区，供 Web Demo 前端轮询
-//
-// 跨进程支持：
-//   服务器 daemon（子进程）通过 RPC 将观测日志转发到主进程的环形缓冲区。
-//   子进程不检查 toggle 状态，始终输出终端日志 + 转发；
-//   主进程 RPC handler 根据 toggle 决定是否写入环形缓冲区。
+// 转发回调（ObserveForwardFn）：所有 ObserveXxxPrintf 的唯一出口。
+//   - daemon 子进程（跑 raft / shardkv 的 server 逻辑，以及 server 当 client
+//     访问别组时的 client 逻辑）：仅在 OBSERVE_FORWARD 环境变量为 "true"
+//     （即 demo 运行）时通过 SetObserveForward 注册转发回调，将日志经 RPC 转发给主进程；
+//   - 主进程（demo，跑 shardkv 的 client / Clnt 逻辑）：在
+//     shardkv-demo/main.go 启动时也注册一个转发回调，直接指向本进程的
+//     ObservePushTagged（按 toggle 写本地环形缓冲区 + 推送 SSE）。
+//   两条路径最终都汇聚到主进程的 ObservePushTagged。
 //
 // 日志样式：
 //   Style="":    正常 — 整行用 tag 主题色
-//   Style="fault":故障 — tag 保持主题色，正文显示红色
+//   Style="fault":故障/容错 — tag 保持主题色，正文显示红色
 // ============================================================
 
 // --- 原子开关（仅主进程有效） ---
@@ -52,12 +51,6 @@ func SetObserveSnapshot(v bool)    { observeSnapshot.Store(v) }
 func GetObserveSnapshot() bool     { return observeSnapshot.Load() }
 func SetObserveReplication(v bool) { observeReplication.Store(v) }
 func GetObserveReplication() bool  { return observeReplication.Load() }
-
-// 从环境变量初始化（init 时调用）
-func InitObserveFromEnv() {
-	// 只在环境变量显式为 "true" 时开启
-	// 不需要 import os, 留待 main 中调用
-}
 
 // --- 场景标签 ---
 const (
@@ -98,20 +91,7 @@ func observeWrite(tag, text, style string) {
 	}
 }
 
-// observePush 格式化后写入环形缓冲区（正常样式）
-func observePush(tag, format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
-	observeWrite(tag, text, "")
-}
-
-// observePushFault 格式化后写入环形缓冲区（故障红色样式）
-func observePushFault(tag, format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
-	observeWrite(tag, text, "fault")
-}
-
 // ObservePushTagged 检查 tag 对应 toggle，开启时写入环形缓冲区（无终端输出）
-// 供主进程 TesterRPC.PostObserveLog handler 调用，避免子进程转发时的重复日志
 func ObservePushTagged(tag, text, style string) {
 	switch tag {
 	case TagElection:
@@ -209,87 +189,54 @@ func getObserveForward() ObserveForwardFn {
 
 // --- 打印函数 ---
 //
-// 两种模式：
-//   - 主进程模式（无转发回调）：检查 toggle，开启时写入环形缓冲区 + 终端
-//   - 子进程模式（有转发回调）：输出到终端 + 转发到主进程，toggle 由主进程控制
+// 统一出口：唯一分支是「是否存在转发回调 fn」。
+//   - fn != nil（demo 下 daemon 与主进程都已注册）：
+//       日志经 fn 送出——daemon 走 RPC 转发、主进程走本地 ObservePushTagged，
+//       最终都汇聚到主进程的 ObservePushTagged 按 toggle 落盘 + 推送 SSE。
+//   - fn == nil（go test，两进程都不注册）：
+//       函数直接返回。
 
 func ObserveElectionPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagElection, text, "") // 子进程模式：转发到主进程
-		return
-	}
-	// 主进程模式
-	if observeElection.Load() {
-		observePush(TagElection, format, a...)
+		fn(TagElection, fmt.Sprintf(format, a...), "")
 	}
 }
 
 func ObserveMigrationPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagMigration, text, "")
-		return
-	}
-	if observeMigration.Load() {
-		observePush(TagMigration, format, a...)
+		fn(TagMigration, fmt.Sprintf(format, a...), "")
 	}
 }
 
 // ObserveMigrationFTPrintf 分片迁移过程中的故障日志（红色正文）
 func ObserveMigrationFTPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagMigration, text, "fault")
-		return
-	}
-	if observeMigration.Load() {
-		observePushFault(TagMigration, format, a...)
+		fn(TagMigration, fmt.Sprintf(format, a...), "fault")
 	}
 }
 
 func ObserveKVSubmitPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagKVSubmit, text, "")
-		return
-	}
-	if observeKVSubmit.Load() {
-		observePush(TagKVSubmit, format, a...)
+		fn(TagKVSubmit, fmt.Sprintf(format, a...), "")
 	}
 }
 
 // ObserveKVSubmitFTPrintf KV提交过程中的故障日志（红色正文）
 func ObserveKVSubmitFTPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagKVSubmit, text, "fault")
-		return
-	}
-	if observeKVSubmit.Load() {
-		observePushFault(TagKVSubmit, format, a...)
+		fn(TagKVSubmit, fmt.Sprintf(format, a...), "fault")
 	}
 }
 
 func ObserveSnapshotPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagSnapshot, text, "")
-		return
-	}
-	if observeSnapshot.Load() {
-		observePush(TagSnapshot, format, a...)
+		fn(TagSnapshot, fmt.Sprintf(format, a...), "")
 	}
 }
 
 func ObserveReplicationPrintf(format string, a ...interface{}) {
-	text := fmt.Sprintf(format, a...)
 	if fn := getObserveForward(); fn != nil {
-		fn(TagReplication, text, "")
-		return
-	}
-	if observeReplication.Load() {
-		observePush(TagReplication, format, a...)
+		fn(TagReplication, fmt.Sprintf(format, a...), "")
 	}
 }
 

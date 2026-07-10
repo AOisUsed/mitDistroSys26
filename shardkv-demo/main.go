@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"kvstore/debug"
 	"kvstore/tester"
 	"log"
 	"net/http"
@@ -20,6 +21,12 @@ func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
 	configPath := flag.String("config", "config.yaml", "配置文件路径（YAML）")
 	flag.Parse()
+
+	// 修改环境变量，以触发日志转发
+	os.Setenv("OBSERVE_FORWARD", "true")
+	debug.SetObserveForward(func(tag, text, style string) {
+		debug.ObservePushTagged(tag, text, style)
+	})
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	log.Printf("shardkv-demo 正在启动...")
@@ -48,9 +55,6 @@ func main() {
 		log.Fatalf("切换工作目录到 %s 失败: %v", srcDir, err)
 	}
 	log.Printf("工作目录切换到: %s", srcDir)
-
-	// 设置 OBSERVE_FORWARD=true，使子进程（shardgrp daemon）将观测日志转发到主进程
-	os.Setenv("OBSERVE_FORWARD", "true")
 
 	// 创建集群管理器（传入配置）
 	cm := cluster.NewClusterManager(cfg)

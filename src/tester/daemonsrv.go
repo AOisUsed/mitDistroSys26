@@ -104,20 +104,23 @@ func InitDaemon(args []string, mks FstartServer) error {
 	// set the global for user-level annotation (`rpcc` is defined in `annotator.go`)
 	rpcc = ds.rpcc
 
-	// 设置观测日志转发回调：子进程的 ObserveXxxPrintf 通过此回调将日志
-	// 转发到主进程 TesterRPC.PostObserveLog handler，由主进程根据 toggle 决定
-	// 是否写入环形缓冲区。避免子进程直接访问共享内存中的 toggle 状态。
-	debug.SetObserveForward(func(tag, text, style string) {
-		args := &PostObserveLogArgs{Tag: tag, Text: text, Style: style}
-		var reply PostObserveLogReply
-		ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
-	})
+	// 检查环境变量以判断是否注册转发方法（demo需要，自动化测试不需要）
+	if os.Getenv("OBSERVE_FORWARD") == "true" {
+		// 观测日志转发：子进程的 ObserveXxxPrintf 将日志经 RPC 转发到主进程
+		// TesterRPC.PostObserveLog handler，由主进程按 toggle 决定是否写入环形缓冲区。
+		debug.SetObserveForward(func(tag, text, style string) {
+			args := &PostObserveLogArgs{Tag: tag, Text: text, Style: style}
+			var reply PostObserveLogReply
+			ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
+		})
 
-	// 设置 leader 身份变更转发回调：Raft 层通过 debug.ReportLeaderChange 调用此回调，
-	// 将 (gid, sid, isLeader) 通过 sockrpc 转发到主进程 TesterRPC.LeaderChange handler。
-	debug.SetLeaderChangeForward(func(serverIndex int, isLeader bool) {
-		ds.ReportLeaderChange(isLeader)
-	})
+		// Leader 身份变更转发：Raft 层通过 debug.ReportLeaderChange 调用此回调，
+		// 将 (gid, sid, isLeader) 经 RPC 转发到主进程 TesterRPC.LeaderChange handler，
+		// 由 demo 的 leaderChangeCb 更新 Web UI 的 Leader 高亮。
+		debug.SetLeaderChangeForward(func(serverIndex int, isLeader bool) {
+			ds.ReportLeaderChange(isLeader)
+		})
+	}
 
 	// for ctl RPCS to this daemon (e.g., Start)
 

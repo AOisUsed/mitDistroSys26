@@ -1903,7 +1903,7 @@
             return;
         }
 
-        resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">条件更新写入中 (${count} 个 key, 最多 ${poolSize} 个客户端并发)...</span>`;
+        resultDiv.innerHTML = `<span class="spinner"></span> <span style="color:#52c41a;">正在读写中 (${count} 个 key , 最多 ${poolSize} 个客户端并发)...</span>`;
         addLog(`批量写入 ${count} 个 key → 处理中...`, 'info');
 
         const startTime = Date.now();
