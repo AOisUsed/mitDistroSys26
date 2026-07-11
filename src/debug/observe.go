@@ -119,6 +119,48 @@ func ObservePushTagged(tag, text, style string) {
 	}
 }
 
+// --- 异步处理 RPC ---
+// 主进程侧缓冲：PostObserveLog handler 只做 O(1) 入队即返回，重活由 observeSinkDrain 串行处理，
+// 避免拖慢 daemon 共享的 ds.rpcc。到达率已被 daemon 侧 fwdCh 限速。
+
+const observeSinkSize = 1000
+
+type observeItem struct {
+	tag   string
+	text  string
+	style string
+}
+
+var (
+	observeSinkCh   = make(chan observeItem, observeSinkSize)
+	observeSinkOnce sync.Once
+)
+
+// observeSinkDrain 是 observeSinkCh 的唯一消费者：持续取出日志并交给
+// ObservePushTagged 按 toggle 写入环形缓冲区 + 推送 SSE。由主进程启动时
+func observeSinkDrain() {
+	for it := range observeSinkCh {
+		ObservePushTagged(it.tag, it.text, it.style)
+	}
+}
+
+// StartObserveSink 启动 observeSinkCh 的消费者 goroutine（幂等，重复调用安全）。
+// 在主进程初始化时显式调用一次（shardkv-demo/main.go
+func StartObserveSink() {
+	observeSinkOnce.Do(func() {
+		go observeSinkDrain()
+	})
+}
+
+// EnqueueObserve 将一条观测日志放入有界缓冲，立即返回（不阻塞 RPC handler）。
+// 缓冲满则丢弃,消费由 StartObserveSink 启动的 observeSinkDrain 负责。
+func EnqueueObserve(tag, text, style string) {
+	select {
+	case observeSinkCh <- observeItem{tag: tag, text: text, style: style}:
+	default:
+	}
+}
+
 // GetObserveLinesSince 获取所有 Id >= sinceId 的观测日志（最多 bufSize 条）
 // 返回结果按时间正序排列。sinceId=0 时返回最近 observeBufSize 条。
 // 返回当前最新的 observeIdx 作为 nextId，供前端做游标增量获取。

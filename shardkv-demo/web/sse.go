@@ -10,8 +10,8 @@ import (
 
 const (
 	taskDoneCacheSize = 50   // SSE重连期间，最大可积压的 task-done 事件数量
-	priorityChanSize  = 1000 // magic number, leader变动+用户请求结果返回+节点状态, 1000 足够
-	normalChanSize    = 5000 // magic number, normal event（观测日志）比较多，设大一点
+	priorityChanSize  = 500  // 高优先事件（leader变动/请求结果/节点状态）：不可丢，但数目较少，500 足够
+	normalChanSize    = 3000 // 观测日志：可丢弃
 )
 
 // sseEvent 事件包络，支持多种事件类型

@@ -57,9 +57,11 @@ type PostObserveLogArgs struct {
 
 type PostObserveLogReply struct{}
 
-// PostObserveLog 接收子进程转发过来的观测日志，由主进程根据 toggle 决定是否写入环形缓冲区
+// PostObserveLog 接收子进程转发过来的观测日志。
+// 这里只入队,
+// SSE 推送由 debug.EnqueueObserve 后台worker来完成 —— 避免锁内 ObserveXXXPrintf 阻塞 Raft
 func (trpc *TesterRPC) PostObserveLog(args *PostObserveLogArgs, reply *PostObserveLogReply) {
-	debug.ObservePushTagged(args.Tag, args.Text, args.Style)
+	debug.EnqueueObserve(args.Tag, args.Text, args.Style)
 }
 
 // ----- Leader 身份变更通知（子进程 → 主进程）-----

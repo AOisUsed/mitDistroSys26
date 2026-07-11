@@ -27,6 +27,8 @@ func main() {
 	debug.SetObserveForward(func(tag, text, style string) {
 		debug.ObservePushTagged(tag, text, style)
 	})
+	// 主进程侧观测日志消费者：显式启动（与 daemon 侧 InitDaemon 对称），
+	debug.StartObserveSink()
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	log.Printf("shardkv-demo 正在启动...")

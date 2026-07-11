@@ -106,19 +106,50 @@ func InitDaemon(args []string, mks FstartServer) error {
 
 	// 检查环境变量以判断是否注册转发方法（demo需要，自动化测试不需要）
 	if os.Getenv("OBSERVE_FORWARD") == "true" {
-		// 观测日志转发：子进程的 ObserveXxxPrintf 将日志经 RPC 转发到主进程
+		type fwdFn func()
+		// 观测日志转发队列容量。实测批量 Put 时 daemon 侧转发峰值 ~740 条/s，
+		// 满则非阻塞丢弃
+		const observeFwdChanSize = 500
+		fwdCh := make(chan fwdFn, observeFwdChanSize)
+		const leaderFwdChanSize = 50 // 领导变更较罕见，缓冲只决定多久触发一次 goroutine 兜底，无需过大
+		leaderCh := make(chan fwdFn, leaderFwdChanSize)
+		go func() {
+			for {
+				select {
+				case fn := <-leaderCh:
+					fn()
+				case fn := <-fwdCh:
+					fn()
+				}
+			}
+		}()
+
+		// 观测日志转发：子进程的 ObservePrintf 将日志经 RPC 转发到主进程
 		// TesterRPC.PostObserveLog handler，由主进程按 toggle 决定是否写入环形缓冲区。
 		debug.SetObserveForward(func(tag, text, style string) {
 			args := &PostObserveLogArgs{Tag: tag, Text: text, Style: style}
-			var reply PostObserveLogReply
-			ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
+			select {
+			case fwdCh <- func() {
+				var reply PostObserveLogReply
+				ds.rpcc.RPCMarshall("TesterRPC.PostObserveLog", args, &reply)
+			}:
+			default:
+			}
 		})
 
-		// Leader 身份变更转发：Raft 层通过 debug.ReportLeaderChange 调用此回调，
-		// 将 (gid, sid, isLeader) 经 RPC 转发到主进程 TesterRPC.LeaderChange handler，
-		// 由 demo 的 leaderChangeCb 更新 Web UI 的 Leader 高亮。
+		// Leader 身份变更转发：Raft 层通过 debug.ReportLeaderChange 在 rf.mu 锁内
+		// 调用此回调，故必须非阻塞；且事件不可丢（下游 SSE priority 通道）。
+		// 先尝试非阻塞入队：缓冲有空位时零开销、回调立即返回（锁内安全）。
+		// 当缓冲满的时候，创建一个goroutine尝试写入，不走default路径丢LeaderChange信息
+		// 缓冲一般情况下够用，因此基本不会创建 goroutine
 		debug.SetLeaderChangeForward(func(serverIndex int, isLeader bool) {
-			ds.ReportLeaderChange(isLeader)
+			select {
+			case leaderCh <- func() { ds.ReportLeaderChange(isLeader) }:
+			default:
+				go func(il bool) {
+					leaderCh <- func() { ds.ReportLeaderChange(il) }
+				}(isLeader)
+			}
 		})
 	}
 
