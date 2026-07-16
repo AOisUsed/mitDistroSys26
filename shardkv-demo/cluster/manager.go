@@ -34,11 +34,12 @@ type ClusterManager struct {
 	clnt  *tester.Clnt             // controller 的 RPC 客户端
 
 	// —— 同步 ——
-	mu sync.Mutex // 保护以下所有可变字段
+	mu sync.Mutex // 保护所有可变字段
 
 	// —— 集群成员状态 ——
-	nextGid tester.Tgid          // 下一个可分配的 GID
-	groups  map[tester.Tgid]bool // 活跃的组
+	nextGid tester.Tgid                 // 下一个可分配的 GID
+	groups  map[tester.Tgid]bool        // 活跃的组
+	groupMu map[tester.Tgid]*sync.Mutex // 单 group 操作互斥锁 (串行化同一个组并发 Join/Leave)
 
 	// —— 故障注入状态 ——
 	isolated     map[tester.Tgid]map[int]bool // 网络隔离节点
@@ -71,6 +72,7 @@ func NewClusterManager(dcfg config.DemoConfig) *ClusterManager {
 		dcfg:         dcfg,
 		nextGid:      shardcfg.Gid1 + 1, // Gid1(1) 已被 Init 使用
 		groups:       make(map[tester.Tgid]bool),
+		groupMu:      make(map[tester.Tgid]*sync.Mutex),
 		isolated:     make(map[tester.Tgid]map[int]bool),
 		leaders:      make(map[tester.Tgid]map[int]bool),
 		maxRaftState: dcfg.MaxRaftState,
@@ -93,6 +95,28 @@ func (cm *ClusterManager) serverArgs() []string {
 		return []string{fmt.Sprintf("--max-raft-state=%d", cm.maxRaftState)}
 	}
 	return []string{}
+}
+
+// lockGroup 获取 group 操作锁并锁定。
+func (cm *ClusterManager) lockGroup(gid tester.Tgid) {
+	cm.mu.Lock()
+	op, ok := cm.groupMu[gid]
+	if !ok {
+		op = new(sync.Mutex)
+		cm.groupMu[gid] = op
+	}
+	cm.mu.Unlock()
+	op.Lock()
+}
+
+// unlockGroup 解锁 group 操作锁
+func (cm *ClusterManager) unlockGroup(gid tester.Tgid) {
+	cm.mu.Lock()
+	op, ok := cm.groupMu[gid]
+	cm.mu.Unlock()
+	if ok {
+		op.Unlock()
+	}
 }
 
 // Init 初始化集群，包括 config store（kvraft Raft 组）和初始 shard group
@@ -218,7 +242,30 @@ func (cm *ClusterManager) Init() error {
 	}
 
 	return nil
+}
 
+// Stop 关闭所有服务器、停止混沌猴子，并通知后台 goroutine 退出
+func (cm *ClusterManager) Stop() {
+	// 先通知后台 goroutine 退出，不持锁，避免 poller 因等待 cm.mu 而延迟感知 done
+	cm.stopOnce.Do(func() {
+		close(cm.done)
+	})
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	for _, m := range cm.chaosMonkeys {
+		close(m.stop)
+	}
+	cm.chaosMonkeys = nil
+
+	// 关闭所有组
+	log.Printf("[Cluster] 正在关闭所有组...")
+	for _, gid := range cm.infra.Groups.Gids() {
+		log.Printf("[Cluster] Stop: 关闭组 %d", gid)
+		cm.infra.ExitGroup(gid)
+	}
+	log.Printf("[Cluster] 所有组已关闭")
 }
 
 // Group 返回指定 GID 的 ServerGrp
@@ -240,7 +287,7 @@ func (cm *ClusterManager) updateCachedCfg(newcfg *shardcfg.ShardConfig) {
 	}
 }
 
-// updateCachedCfg 更新缓存的NextConfig, 只有配置号增大才生效
+// updateCachedNextCfg 更新缓存的NextConfig, 只有配置号增大才生效
 func (cm *ClusterManager) updateCachedNextCfg(newcfg *shardcfg.ShardConfig) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -378,40 +425,6 @@ func (cm *ClusterManager) Status() *ClusterState {
 		state.Groups = append(state.Groups, gs)
 	}
 	return state
-}
-
-// Stop 关闭所有服务器、停止混沌猴子，并通知后台 goroutine 退出
-func (cm *ClusterManager) Stop() {
-	// 先通知后台 goroutine 退出，不持锁，避免 poller 因等待 cm.mu 而延迟感知 done
-	cm.stopOnce.Do(func() {
-		close(cm.done)
-	})
-
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	for _, m := range cm.chaosMonkeys {
-		close(m.stop)
-	}
-	cm.chaosMonkeys = nil
-
-	log.Printf("[Cluster] 正在关闭所有组...")
-	for gid := range cm.groups {
-		sg := cm.infra.Group(gid)
-		if sg != nil {
-			sg.Shutdown()
-		}
-	}
-	log.Printf("[Cluster] 所有组已关闭")
-
-	// 清理本地未追踪但 tester 中仍存活的残留组
-	for _, gid := range cm.infra.Groups.Gids() {
-		if cm.groups[gid] {
-			continue
-		}
-		log.Printf("[Cluster] Stop: 清理残留组 %d", gid)
-		cm.infra.ExitGroup(gid)
-	}
 }
 
 // NewClerk 创建一个新的独立 Clerk
@@ -586,7 +599,7 @@ func (cm *ClusterManager) reapplyIsolation(gid tester.Tgid) {
 	}
 }
 
-// KillGroup 停掉整个组
+// KillGroup 终止整个组
 func (cm *ClusterManager) KillGroup(gid tester.Tgid) {
 	sg := cm.infra.Group(gid)
 	if sg == nil {
@@ -633,50 +646,29 @@ func (cm *ClusterManager) initJoinGroup(servers map[tester.Tgid][]string) {
 
 // JoinGroup 加入新组
 func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
-	// 1. 锁内检查，避免重复创建进程
-	cm.mu.Lock()
-	if cm.groups[gid] {
+	cm.lockGroup(gid) // 使用锁串行化对某个 gid 组的join/leave操作，防止进程创建/删除冲突
+	defer cm.unlockGroup(gid)
+
+	//1. 启动进程
+	if cm.infra.Group(gid) == nil { // 检查本地是否有组进程，如果没有，先启动以保证能正常进行
+		nsrv := cm.dcfg.Nsrv
+		cm.infra.MakeGroupStart("shardgrp", cm.serverArgs(), gid, nsrv)
+		cm.mu.Lock()
+		cm.groups[gid] = true
 		cm.mu.Unlock()
-		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
-		return false, fmt.Sprintf("组 %d 已存在", gid)
 	}
-	cm.mu.Unlock()
+	srvNames := cm.infra.Group(gid).SrvNames()
 
-	// 2. 锁外启动子进程
-	nsrv := cm.dcfg.Nsrv
-	if nsrv <= 0 {
-		nsrv = 3
-	}
-	args := cm.serverArgs()
-	cm.infra.MakeGroupStart("shardgrp", args, gid, nsrv)
-
-	// 3. 加锁注册元数据（二次检查处理并发）
-	cm.mu.Lock()
-	if cm.groups[gid] {
-		cm.mu.Unlock()
-		// 并发场景下另一调用者已抢先注册，回滚本调用创建的进程
-		sg := cm.infra.Group(gid)
-		if sg != nil {
-			sg.Shutdown()
-		}
-		cm.infra.ExitGroup(gid)
-		log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（并发重复）", gid)
-		return false, fmt.Sprintf("组 %d 已存在", gid)
-	}
-	srvs := cm.infra.Group(gid).SrvNames() // 记录名字后面日志输出用
-	cm.groups[gid] = true
-	cm.mu.Unlock()
-
-	// 4. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
+	// 2. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
 		newcfg := cm.ctl.Query().Copy()
-		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvs}); !ok {
-			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（已存在）", gid)
+		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvNames}); !ok {
+			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（JoinBalance 拒绝）", gid)
 			return false, fmt.Sprintf("组 %d 已存在", gid)
 		}
 		if cm.ctl.ChangeConfigTo(newcfg) {
-			// 5. 迁移完成后，更新缓存
+			// 迁移完成后，更新缓存
 			cm.updateCachedCfg(newcfg)
 			cm.updateCachedNextCfg(newcfg)
 			log.Printf("[Cluster] 组 %d 已加入集群 (config #%d)", gid, newcfg.Num)
@@ -687,25 +679,31 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 
 // LeaveGroup 移除组
 func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
-	// 1. 检查进程是否存在
+	cm.lockGroup(gid) // 使用锁串行化对某个 gid 组的join/leave操作，防止进程创建/删除冲突
+	defer cm.unlockGroup(gid)
+
+	if cm.infra.Group(gid) == nil { // 如果本地已没有进程
+		log.Printf("[Cluster] LeaveGroup: 组 %d 已不存在于配置中，清理残留进程", gid)
+		if cm.groups[gid] == true {
+			panic("LeaveGroup 完成后没有正常清理进程")
+		}
+		return true, "早已离开集群"
+	}
+
 	cm.mu.Lock()
-	sg := cm.infra.Group(gid)
-	if sg == nil {
+	if len(cm.infra.Groups.Gids()) <= 1 {
 		cm.mu.Unlock()
-		log.Printf("[Cluster] LeaveGroup: 组 %d 已离开", gid)
-		return true, ""
+		return false, fmt.Sprintf("不能移除最后一个组 %d，集群中至少需要保留一个组", gid)
 	}
 	cm.mu.Unlock()
-
-	// 2. 循环执行：恢复未完成迁移（如果有）+ 分片配置变更（分片迁移）直到成功
+	// 2. 循环执行：分片配置变更（分片迁移）直到成功
 	for {
 		cm.ctl.InitController()
 		newcfg := cm.ctl.Query().Copy()
 
 		if _, ok := newcfg.Groups[gid]; !ok {
-			// 别的请求已经移除了这个组，幂等返回
-			log.Printf("[Cluster] LeaveGroup: 组 %d 已不存在于配置中", gid)
-			return true, ""
+			// 其他 Leave 已经完成。清理进程并返回。
+			break
 		}
 		if len(newcfg.Groups) <= 1 {
 			return false, fmt.Sprintf("不能移除最后一个组 %d，集群中至少需要保留一个组", gid)
@@ -724,12 +722,14 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 		}
 	}
 
-	// 3. 清理本地记录和进程
+	// 3. 清理进程和本地记录
 	cm.mu.Lock()
+	if sg := cm.infra.Group(gid); sg != nil {
+		sg.Shutdown()
+		cm.infra.ExitGroup(gid)
+	}
 	delete(cm.groups, gid)
-	cm.infra.ExitGroup(gid)
 	cm.mu.Unlock()
-	// 5. 停止混沌猴子
 	cm.StopChaos(gid)
 	return true, ""
 }
@@ -866,12 +866,23 @@ func (cm *ClusterManager) ChaosStatus() []ChaosState {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	states := make([]ChaosState, 0, len(cm.groups))
+	// 取所有已知组（knownGids + config 中的组）
+	allGids := make(map[tester.Tgid]struct{})
+	for gid := range cm.groups {
+		allGids[gid] = struct{}{}
+	}
+	if cm.cachedConfig != nil {
+		for gid := range cm.cachedConfig.Groups {
+			allGids[gid] = struct{}{}
+		}
+	}
+
+	states := make([]ChaosState, 0, len(allGids))
 	active := make(map[tester.Tgid]bool)
 	for _, m := range cm.chaosMonkeys {
 		active[m.gid] = true
 	}
-	for gid := range cm.groups {
+	for gid := range allGids {
 		sg := cm.infra.Group(gid)
 		if sg == nil {
 			continue
