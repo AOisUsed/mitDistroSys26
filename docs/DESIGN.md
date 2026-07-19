@@ -1,8 +1,9 @@
 # 详细设计
 
 ## Raft 共识算法实现
+> 💡 **提示：** 阅读此节要求对 Raft 算法有基本的了解，可以考虑快速扫一眼 [Raft 论文中文版](RAFT_PAPER_ZH.md)，或玩一下 [Raft 可视化](https://raft.github.io)。
 
-参考实现：[raft.go](../src/raft/raft.go), [raftapi.go](../src/raftapi/raftapi.go)
+参考实现：[raft.go](../src/raft/raft.go), [raftapi.go](../src/raftapi/raftapi.go)。算法原理的完整参考见 [Raft 论文中文翻译](RAFT_PAPER_ZH.md)（含领导者选举、日志复制、安全性论证、成员变更等）。
 
 ### 核心数据结构
 
@@ -25,8 +26,8 @@ Raft 节点的核心状态包括角色、任期、日志和投票信息等字段
 | 所有节点  | `commitIndex`  | `int`   | 已提交的最大日志索引（多数派已确认）                   |
 |       | `lastApplied`  | `int`   | 已应用到状态机的最大日志索引                       |
 |       | `state`        | `enum`  | 节点当前角色：Follower / Candidate / Leader |
-| 领导者节点 | `nextIndex[]`  | `[]int` | 各跟随者下一次要发送的日志索引                      |
-|       | `matchIndex[]` | `[]int` | 各跟随者已知已复制的最高的日志索引                    |
+| 领导者节点 | `nextIndex[]`  | `[]int` | 各追随者下一次要发送的日志索引                      |
+|       | `matchIndex[]` | `[]int` | 各追随者已知已复制的最高的日志索引                    |
 
 **功能性字段**（无需持久化）：
 
@@ -58,28 +59,61 @@ Raft 节点启动后创建 5 类常驻协程，协程间通过 channel 非阻塞
 
 ![RaftGoroutines](images/raft_goroutines.svg)
 
-**设计取舍**：
+**设计决策**：
 - **独立选举、心跳协程**：心跳和选举需要定时触发，独立运行可以避免被干扰，影响触发。
 - **独立 worker 协程**：针对每个 Follower，使用独立的 replicationWorker，慢节点不会阻塞其他节点的复制进度。replicationDispatcher 统一接收`logAppendedCh`信号并根据各个 Follower 情况分发任务，起到解耦的作用。
 - **单一 applier 协程**：状态应用必须严格按日志顺序串行执行，并发应用会破坏线性一致性，因此使用单一协程执行。状态机操作在内存中执行，耗时远小于需要网络通信的日志共识，因此单协程串行处理不会成为性能瓶颈。
-- **使用带缓冲 channel 实现异步操作**：使用容量为 1 的 channel 以非阻塞方式发送通知，以实现各个协程间通过异步通信高效驱动共识流程推进（日志追加→达成共识→应用状态），通用模式如下：
+- **使用带缓冲 channel 实现异步操作**：使用channel进行协程间通信，以实现 Raft 共识流程高效异步推进（日志追加→日志提交→应用状态），通用模式如下：
     ```go
-    // ch 是容量为 1 的 channel，实现“最多积压一个触发信号”的通知机制
-    // 多个触发请求会被合并，因为消费者仅基于 Raft 状态决定具体操作，不依赖信号触发次数
+    // ch 是容量为 1 的 channel，最多积压一个触发信号，以表达“当前有任务待完成”语义
+    // 多个触发请求会被合并，因为消费者行为与信号触发次数无关，而只依赖被唤醒时刻 Raft 状态
   
-    // 生产者：尝试发送触发信号，满则丢弃
+    // 生产者：尝试发送信号，满则丢弃
     select{
     case ch <- struct{}{}:
     default:
     }
     
-    // 消费者：持续监听触发信号，并依据当前 Raft 状态执行操作
+    // 消费者：持续监听信号，并依据当前 Raft 状态执行操作
     for {
         <- ch
-        // 执行具体操作
+        // 执行具体（耗时）操作
         // ...
     }
     ```
+    以下是一个时序图，有助于更好地理解通信机制和实现的效果：
+    ``` mermaid
+    sequenceDiagram
+    participant a as 生产者
+    participant b as Channel
+    participant c as 消费者
+    
+    
+    a->>b:发送信号 1
+    b->>c:唤醒
+    
+    activate c
+    c->>c:执行操作A ...
+    
+    a->>b:发送信号 2
+    b->>b:存储信号
+    
+    c->>c:执行操作A ...
+    
+    a->>b:发送信号 3
+    b->>b:通道已满，丢弃信号
+    
+    a->>b:发送信号 4
+    b->>b:通道已满，丢弃信号
+    
+    b->>c:唤醒
+    deactivate c
+    activate c
+    c->>c:执行操作B ...
+    deactivate c
+    ```
+  
+    信号2、3、4 被压缩为一个信号，当消费者完成当前任务后，被channel中缓存的信号唤醒，根据当前 Raft 状态自行判断应该进行的操作并执行。
 
 ### 领导选举与心跳
 
@@ -206,7 +240,7 @@ RequestVote(args, reply) {
 
 #### 心跳维持
 
-领导者当选后需定期发送心跳以维持领导权，防止跟随者超时触发新一轮选举：
+领导者当选后需定期发送心跳以维持领导权，防止追随者超时触发新一轮选举：
 
 ```pseudocode
 // 心跳 (sendHeartbeat)
@@ -225,15 +259,15 @@ sendHeartbeat() {
 
 | 作用     | 说明                                                                       |
 |--------|--------------------------------------------------------------------------|
-| 宣告领导权  | 跟随者收到心跳后更新 `lastHeardTime`，重置选举超时                                        |
-| 携带提交信息 | 心跳中携带 `LeaderCommit`，跟随者据此推进自己的 `commitIndex`（详见[提交推进与状态应用](#提交推进与状态应用)） |
+| 宣告领导权  | 追随者收到心跳后更新 `lastHeardTime`，重置选举超时                                        |
+| 携带提交信息 | 心跳中携带 `LeaderCommit`，追随者据此推进自己的 `commitIndex`（详见[提交推进与状态应用](#提交推进与状态应用)） |
 
-100ms 间隔的选择依据：远小于选举超时下限（300ms），即使网络有轻微抖动，跟随者也能连续收到至少 2-3 次心跳才会超时，有效防止误触发选举。
+100ms 间隔的选择依据：远小于选举超时下限（300ms），即使网络有轻微抖动，追随者也能连续收到至少 2-3 次心跳才会超时，有效防止误触发选举。
 
-当心跳 RPC 发现跟随者日志落后时（`nextIndex[i] <= lastLogIndex()`），`replicateToFollower()` 会使用携带日志条目的`AppendEntries RPC`或带有状态机快照的`InstallSnapshot RPC`，以保证在维持心跳的同时完成日志同步（详见[日志冲突快速回退](#日志冲突快速回退)）。
+当心跳 RPC 发现追随者日志落后时（`nextIndex[i] <= lastLogIndex()`），`replicateToFollower()` 会使用携带日志条目的`AppendEntries RPC`或带有状态机快照的`InstallSnapshot RPC`，以保证在维持心跳的同时完成日志同步（详见[日志冲突快速回退](#日志冲突快速回退)）。
 
 ### 日志复制
-领导者通过日志复制将上层命令分发给所有跟随者，以作为后续共识的基础
+领导者通过日志复制将上层命令分发给所有追随者，以作为后续共识的基础
 #### 整体流程
 日志复制从上层 RSM 调用 `Start(command)` 开始，逐步推进，完成目标是 Follower 日志与 Leader 完全一致。
 ![LogReplicationFlow](images/log_replication_flow.svg)
@@ -242,13 +276,13 @@ sendHeartbeat() {
 #### 冲突回退
 针对 Raft 论文中逐条回退的低效问题，实现了三种冲突情况的优化。核心思路是每次回复携带足够信息，使领导者一次回退跳过整个冲突任期，而非逐条尝试：
 
-| 冲突类型 | 跟随者回复 | 领导者处理 |
+| 冲突类型 | 追随者回复 | 领导者处理 |
 |---------|-----------|-----------|
 | PrevLogIndex 处 Term 不匹配 | `ConflictTerm=T, ConflictIndex=该任期第一条索引` | 跳到领导者日志中 ConflictTerm 最后一条的后一个位置 |
-| 跟随者日志过短 | `ConflictTerm=-1, ConflictIndex=LastLogIndex+1` | nextIndex = ConflictIndex |
+| 追随者日志过短 | `ConflictTerm=-1, ConflictIndex=LastLogIndex+1` | nextIndex = ConflictIndex |
 | 日志已被压缩 | `ConflictTerm=-1, ConflictIndex=LastIncludedIndex+1` | nextIndex = ConflictIndex → 触发 InstallSnapshot |
 
-第二、三种冲突实质都是领导者声明的 PrevLogIndex 处日志在跟随者中不存在，无法分辨 Term 是否匹配。跟随者通过合理的 RPC 回复引导领导者将这些不确定性冲突转化为可判断的第一种冲突，通过实证找到冲突点。
+第二、三种冲突实质都是领导者声明的 PrevLogIndex 处日志在追随者中不存在，无法分辨 Term 是否匹配。追随者通过合理的 RPC 回复引导领导者将这些不确定性冲突转化为可判断的第一种冲突，通过实证找到冲突点。
 
 日志压缩可能导致冲突回退无法使用 AppendEntries 解决（领导者需要发送的日志已被截断），此时转为发送 InstallSnapshot。
 
@@ -258,13 +292,13 @@ sendHeartbeat() {
 
 不同角色推进 commitIndex 的方式不同：
 
-- **领导者**：为每个跟随者维护 matchIndex[i]，追踪各节点的复制进度。某次 AppendEntries RPC 成功后，更新 matchIndex[i]，然后从后向前扫描日志，找到满足以下三个条件的最大索引 N：
+- **领导者**：为每个追随者维护 matchIndex[i]，追踪各节点的复制进度。某次 AppendEntries RPC 成功后，更新 matchIndex[i]，然后从后向前扫描日志，找到满足以下三个条件的最大索引 N：
   1. N > 当前 commitIndex
   2. Log[N].Term == CurrentTerm（仅提交当前任期的日志，防止提交已覆盖的旧任期条目）
   3. 超过半数的节点 matchIndex[i] >= N（多数派已复制）
   若找到，则 commitIndex = N。
 
-- **跟随者**：每次收到 AppendEntries RPC 时读取 LeaderCommit，若大于自身 commitIndex，则尽最大可能推进。收到 InstallSnapshot 时同样检查快照的 LastIncludedIndex。
+- **追随者**：每次收到 AppendEntries RPC 时读取 LeaderCommit，若大于自身 commitIndex，则尽最大可能推进。收到 InstallSnapshot 时同样检查快照的 LastIncludedIndex。
 
 **状态应用**：
 
@@ -367,7 +401,7 @@ Submit() 进入等待后，采用三路等待循环覆盖可能发生的不同�
 服务层配合 RSM 完成日志压缩与崩溃恢复，实现 Snapshot() 和 Restore() 两个方法。
 
 - **Snapshot 策略**：先加锁对必要数据进行深拷贝，然后释放锁，将拷贝数据编码为字节数组。深拷贝而非直接序列化的原因在于编码过程较耗时，若在锁内进行会显著降低系统吞吐量。快照包含两类数据：键值映射和去重表（去重表必须在快照中，否则节点重启后无法识别客户端重试，可能重复执行旧写操作）。
-- **Restore 场景**：①节点启动时从持久器读取快照恢复状态；②跟随者日志落后过多，收到 InstallSnapshot RPC 后更新状态机。
+- **Restore 场景**：①节点启动时从持久器读取快照恢复状态；②追随者日志落后过多，收到 InstallSnapshot RPC 后更新状态机。
 
 ### 分片迁移
 

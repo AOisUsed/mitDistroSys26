@@ -102,14 +102,14 @@ make shardkv          # 分片KV系统 全部测试
 
 ## 📚 技术文档
 
-| 文档                                      | 内容                    |
-|-----------------------------------------|-----------------------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、分层设计、模块职责        |
-| [DESIGN.md](docs/DESIGN.md)             | 各模块详细设计决策             |
-| [API.md](docs/API.md)                   | 模块接口定义、RPC 接口定义、错误码语义 |
-| [TESTING.md](docs/TESTING.md)           | 73 个测试的详细说明与覆盖分析      |
-| [WALKTHROUGH.md](docs/WALKTHROUGH.md)   | 控制面板分步操作指南            |
-| [CONSOLE.md](docs/CONSOLE.md)           | 控制台速查手册               |
+| 文档                                        | 内容                    |
+|-------------------------------------------|-----------------------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)   | 系统架构、分层设计、模块职责        |
+| [DESIGN.md](docs/DESIGN.md)               | 各模块详细设计决策             |
+| [API.md](docs/API.md)                     | 模块接口定义、RPC 接口定义、错误码语义 |
+| [TESTING.md](docs/TESTING.md)             | 73 个测试的详细说明与覆盖分析      |
+| [WALKTHROUGH.md](docs/WALKTHROUGH.md)     | 控制面板分步操作指南            |
+| [CONSOLE.md](docs/CONSOLE.md)             | 控制台速查手册               |
 
 ## 🙏 致谢
 
@@ -118,6 +118,7 @@ make shardkv          # 分片KV系统 全部测试
 ## 🔗 相关资源
 
 - [Raft 论文](https://raft.github.io/raft.pdf)
+- [Raft 论文（中文翻译）](docs/RAFT_PAPER_ZH.md)
 - [MIT 6.5840 Distributed Systems](https://pdos.csail.mit.edu/6.824/)
 - [Porcupine 线性一致性检验器](https://github.com/anishathalye/porcupine)
 
