@@ -30,7 +30,7 @@ func MakeClerk(clnt *tester.Clnt, servers []string, clientId uint64) *Clerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
 	ck.leader = 0
 	ck.clientId = clientId
-	ck.maxAttempts = len(ck.servers) * 2 //  try 2 round + one time
+	ck.maxAttempts = len(ck.servers) * 2 //  try 2 rounds
 	ck.backoffTime = 100 * time.Millisecond
 	return ck
 }
@@ -62,7 +62,7 @@ func (ck *Clerk) Get(key string) (string, rpcapi.Tversion, rpcapi.Err) {
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts <= maxAttempt {
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardgrpclerk %v -> %v: Get %s\n", ck.servers[leader], ck.clientId, key)
 		attempts++
 		var reply rpcapi.GetReply
@@ -110,7 +110,7 @@ func (ck *Clerk) Put(requestId uint64, key string, value string, version rpcapi.
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts <= maxAttempt {
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardgrpclerk %v -> %v: reqId:%5v, Put %s, value:%v \n", args.ClientId, ck.servers[leader], args.RequestId, key, value)
 		attempts++
 		reply := rpcapi.PutReply{}
@@ -158,7 +158,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpcap
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts <= maxAttempt {
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardgrpclerk -> %v: FreezeShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.FreezeShardReply
@@ -200,7 +200,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts <= maxAttempt {
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardgrpclerk -> %v: InstallShard(shard: %v, stateSize: %v,Num: %v) \n", ck.servers[leader], s, len(state), num)
 		attempts++
 		var reply shardrpc.InstallShardReply
@@ -241,7 +241,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpcapi.Err {
 	ck.mu.Unlock()
 
 	attempts := 0
-	for attempts <= maxAttempt {
+	for attempts < maxAttempt {
 		debug.D5APrintf("shardgrpclerk -> %v: DeleteShard (shard: %v, Num: %v) \n", ck.servers[leader], s, num)
 		attempts++
 		var reply shardrpc.DeleteShardReply
