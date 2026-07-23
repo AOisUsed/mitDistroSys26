@@ -42,8 +42,10 @@ func (ck *Clerk) Leader() int {
 // backoffWithJitter provides exponential backoff with jitter.
 // range between [backoff/2, backoff], where backoff = 2^round * ck.backoffTime (with a max of 1s)
 func (ck *Clerk) backoffWithJitter(round int) {
-	round = min(round, 5)
-	backoff := ck.backoffTime << round // !! caution: this may overflow (if backoffTime is EXTREMELY huge)
+	backoff := ck.backoffTime
+	for r := 0; r < round && backoff < 2*time.Second; r++ {
+		backoff *= 2
+	}
 	backoff = min(1*time.Second, backoff)
 	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
 	time.Sleep(backoff/2 + jitter)

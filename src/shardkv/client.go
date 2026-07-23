@@ -28,8 +28,10 @@ import (
 // backoffWithJitter provides exponential backoff with jitter to break thundering herd.
 // range between [backoff/2, backoff], where backoff = 2^retry * ck.backoffTime (with a max of 2s)
 func (ck *Clerk) backoffWithJitter(retry int) {
-	retry = min(retry, 5)
-	backoff := ck.backoffTime << retry // this may overflow (if backoffTime is EXTREMELY huge)
+	backoff := ck.backoffTime
+	for r := 0; r < retry && backoff < 2*time.Second; r++ {
+		backoff *= 2
+	}
 	backoff = min(2*time.Second, backoff)
 	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
 	time.Sleep(backoff/2 + jitter)

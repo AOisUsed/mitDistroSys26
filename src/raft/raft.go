@@ -9,7 +9,6 @@ package raft
 import (
 	"bytes"
 	"log"
-	//	"bytes"
 	"math/rand"
 	"sync"
 	"time"
@@ -49,8 +48,11 @@ type Raft struct {
 	me        int               // this peer's index into peers[]
 
 	//persistent state
-	CurrentTerm       int
-	VotedFor          int
+	CurrentTerm int
+	VotedFor    int
+
+	// Log[0] is a dummy entry standing for LastIncludedIndex, so
+	// sliceIndex(LastIncludedIndex) == 0; a logical index L maps to Log[L-LastIncludedIndex].
 	Log               []*LogEntry
 	SnapshotData      []byte
 	LastIncludedIndex int
@@ -169,7 +171,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	debug.D3DPrintf("%v: snapshot at %v, Is leader ? %v ", rf.me, index, rf.state == leader)
 
 	// truncate the log, after index (lastIncludedIndex)
-	truncatedLog := append([]*LogEntry{}, rf.Log[rf.physicalIndex(index):]...)
+	truncatedLog := append([]*LogEntry{}, rf.Log[rf.sliceIndex(index):]...)
 	rf.Log = truncatedLog
 	// update LastIncludedIndex,snapshotData
 	rf.LastIncludedIndex = index
@@ -184,6 +186,8 @@ func (rf *Raft) lastLogIndex() int {
 }
 
 func (rf *Raft) lastLogTerm() int {
+	// Log is never empty: it always holds the dummy entry for LastIncludedIndex
+	// (see invariant on Log above), so len(rf.Log)-1 is always valid.
 	return rf.Log[len(rf.Log)-1].Term
 }
 
@@ -277,17 +281,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		conflictIndex = rf.lastLogIndex() + 1
 	} else {
 		// prevLogIndex exists in the follower's log, so it can check and reply accordingly
-		if args.PrevLogTerm != rf.Log[rf.physicalIndex(args.PrevLogIndex)].Term {
+		if args.PrevLogTerm != rf.Log[rf.sliceIndex(args.PrevLogIndex)].Term {
 			// if the follower has an entry at PrevLogIndex, but not equal to that of the leader, reply false
 			// the conflic in term indicates that somewhere this follower has diverged from the majority
 			// therefore it needs to tell the leader where this term starts so that the current leader can find out where they diverge
 			success = false
-			conflictTerm = rf.Log[rf.physicalIndex(args.PrevLogIndex)].Term
+			conflictTerm = rf.Log[rf.sliceIndex(args.PrevLogIndex)].Term
 
 			// now need to find the first occurrence of the log at the conflicTerm:
 			// trace back until the term has changed
 			i := args.PrevLogIndex
-			for i > rf.LastIncludedIndex && rf.Log[rf.physicalIndex(i)].Term == conflictTerm {
+			for i > rf.LastIncludedIndex && rf.Log[rf.sliceIndex(i)].Term == conflictTerm {
 				i--
 			}
 			conflictIndex = i + 1
@@ -320,11 +324,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			if j > rf.lastLogIndex() {
 				break
 			}
-			if args.Entries[i].Term != rf.Log[rf.physicalIndex(j)].Term {
+			if args.Entries[i].Term != rf.Log[rf.sliceIndex(j)].Term {
 				break
 			}
 		}
-		rf.Log = rf.Log[:rf.physicalIndex(args.PrevLogIndex+1+i)] //truncate the conflicting entry and all following ones
+		rf.Log = rf.Log[:rf.sliceIndex(args.PrevLogIndex+1+i)] //truncate the conflicting entry and all following ones
 		for j := i; j < len(args.Entries); j++ {
 			debug.D3BPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
 		}
@@ -396,9 +400,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		// (but not yet to decide whether to apply to state machine
 		// because state machine could be more advanced from apply logs.)
 		rf.SnapshotData = args.Data
-		if rf.lastLogIndex() >= args.LastIncludedIndex && rf.Log[rf.physicalIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm { // case where log is at least up to date (twofold: whether log has LastIncluded, and whether they match) with the received snapshot
+		if rf.lastLogIndex() >= args.LastIncludedIndex && rf.Log[rf.sliceIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm { // case where log is at least up to date (twofold: whether log has LastIncluded, and whether they match) with the received snapshot
 			// remove logs that have been included in the snapshot (but retaining the LastIncluded as the dummy entry)
-			rf.Log = append([]*LogEntry{}, rf.Log[rf.physicalIndex(args.LastIncludedIndex):]...)
+			rf.Log = append([]*LogEntry{}, rf.Log[rf.sliceIndex(args.LastIncludedIndex):]...)
 			rf.LastIncludedIndex = args.LastIncludedIndex
 		} else { // case where this follower's log is behind or this follower has the log at LastIncludedIndex, but doesn't match, meaning its logs are all obsolete
 			// remove all the local logs, creating a dummy log at LastIncluded
@@ -442,8 +446,13 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
-// get real log index from the logical Index(exceeding boundary can still happen in this operation)
-func (rf *Raft) physicalIndex(i int) int {
+// sliceIndex converts a logical log index (the global index, including
+// entries that have already been snapshotted/truncated) into the in-slice
+// index: i - LastIncludedIndex.
+// Log[0] is always the dummy entry for LastIncludedIndex, so
+// sliceIndex(LastIncludedIndex) == 0.
+// MUST ensure i >= LastIncludedIndex, otherwise, this exceeds the slice boundary
+func (rf *Raft) sliceIndex(i int) int {
 	return i - rf.LastIncludedIndex
 }
 
@@ -602,7 +611,7 @@ func (rf *Raft) replicationDispatcher() {
 
 func (rf *Raft) newAppendEntriesArgsFor(svrIndex int) *AppendEntriesArgs {
 	// deep copy entries to avoid data race
-	entries := rf.Log[rf.physicalIndex(rf.nextIndex[svrIndex]):]
+	entries := rf.Log[rf.sliceIndex(rf.nextIndex[svrIndex]):]
 	entriesCopy := make([]*LogEntry, len(entries))
 	for i, e := range entries {
 		entriesCopy[i] = &LogEntry{Term: e.Term, Command: e.Command}
@@ -611,7 +620,7 @@ func (rf *Raft) newAppendEntriesArgsFor(svrIndex int) *AppendEntriesArgs {
 		Term:         rf.CurrentTerm,
 		LeaderId:     rf.me,
 		PrevLogIndex: rf.nextIndex[svrIndex] - 1,
-		PrevLogTerm:  rf.Log[rf.physicalIndex(rf.nextIndex[svrIndex]-1)].Term,
+		PrevLogTerm:  rf.Log[rf.sliceIndex(rf.nextIndex[svrIndex]-1)].Term,
 		Entries:      entriesCopy,
 		LeaderCommit: rf.commitIndex,
 	}
@@ -626,7 +635,7 @@ func (rf *Raft) newInstallSnapshotArgs() *InstallSnapshotArgs {
 		Term:              rf.CurrentTerm,
 		LeaderId:          rf.me,
 		LastIncludedIndex: rf.LastIncludedIndex,
-		LastIncludedTerm:  rf.Log[rf.physicalIndex(rf.LastIncludedIndex)].Term,
+		LastIncludedTerm:  rf.Log[rf.sliceIndex(rf.LastIncludedIndex)].Term,
 		Data:              dataCopy,
 	}
 	return args
@@ -635,7 +644,7 @@ func (rf *Raft) newInstallSnapshotArgs() *InstallSnapshotArgs {
 // advanceCommitIndex is for a leader to check whether commit can be advanced and to notify applyReadyCh if it is the case
 func (rf *Raft) advanceCommitIndex() {
 	for N := rf.lastLogIndex(); N > rf.commitIndex; N-- {
-		if rf.Log[rf.physicalIndex(N)].Term != rf.CurrentTerm { // this is to ensure never commit on terms other than its own
+		if rf.Log[rf.sliceIndex(N)].Term != rf.CurrentTerm { // this is to ensure never commit on terms other than its own
 			continue
 		}
 		count := 1
@@ -658,24 +667,34 @@ func (rf *Raft) advanceCommitIndex() {
 }
 
 // synchroniseFollower synchronises the log of the follower, meaning that it resends appendEntries/snapshot until the follower is in sync
+// back off exponentially when rpc constantly fails, but with a maximum of 2s
 func (rf *Raft) synchroniseFollower(i int) {
+	backoff := 100 * time.Millisecond // base backoff
 	rf.mu.Lock()
-	needReplicate := rf.nextIndex[i] <= rf.lastLogIndex()
+	needReplicate := rf.state == leader && rf.nextIndex[i] <= rf.lastLogIndex()
 	rf.mu.Unlock()
 	for needReplicate {
-		rf.replicateToFollower(i)
+		if rpcOK := rf.replicateToFollower(i); !rpcOK {
+			time.Sleep(backoff)
+			backoff *= 2
+			backoff = min(2*time.Second, backoff) // max backoff is 2s
+		} else {
+			backoff = 100 * time.Millisecond
+		}
 		rf.mu.Lock()
-		needReplicate = rf.nextIndex[i] <= rf.lastLogIndex()
+		needReplicate = rf.state == leader && rf.nextIndex[i] <= rf.lastLogIndex()
 		rf.mu.Unlock()
 	}
 }
 
-// replicateToFollower will try replicate Log or send Snapshot to follower i,
-func (rf *Raft) replicateToFollower(i int) {
+// replicateToFollower replicates Log (or Snapshot, when the follower is behind
+// the snapshot point) to follower i.
+// Returns false ONLY on RPC network failure
+func (rf *Raft) replicateToFollower(i int) bool {
 	rf.mu.Lock()
 	if rf.state != leader { // if this rf is no longer a leader, stop the whole process
 		rf.mu.Unlock()
-		return
+		return true
 	}
 	// case where the leader doesn't have the log to send to the follower, send InstallSnapshot instead
 	if rf.LastIncludedIndex >= rf.nextIndex[i] {
@@ -686,14 +705,14 @@ func (rf *Raft) replicateToFollower(i int) {
 		reply := &InstallSnapshotReply{}
 		ok := rf.sendInstallSnapshot(i, args, reply)
 		if !ok {
-			return
+			return false
 		}
 		rf.mu.Lock()
 		if reply.Term > rf.CurrentTerm {
 			rf.becomeFollowerWithTerm(reply.Term)
 			rf.persist()
 			rf.mu.Unlock()
-			return
+			return true
 		}
 		// case where the snapshot is accepted by the follower,
 		// if the reply is not stale, update nextIndex, matchIndex
@@ -702,7 +721,7 @@ func (rf *Raft) replicateToFollower(i int) {
 			rf.nextIndex[i] = args.LastIncludedIndex + 1
 		}
 		rf.mu.Unlock()
-		return // return false because usually appendEntries is needed after installing snapshot, as the snapshot point may be behind the leader's latest log
+		return true
 	}
 
 	// case where the leader has the log to send to the follower, send AppendEntries
@@ -714,7 +733,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	reply := &AppendEntriesReply{}
 	ok := rf.sendAppendEntries(i, args, reply)
 	if !ok {
-		return
+		return false
 	}
 	debug.D3BPrintf("%v-AppendEntries->%v, with LeaderCommit %v,PrevLogIndex %v,PrevLogTerm %v", rf.me, i, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm)
 	// check the term and leadership
@@ -724,7 +743,7 @@ func (rf *Raft) replicateToFollower(i int) {
 		rf.becomeFollowerWithTerm(reply.Term)
 		rf.persist()
 		rf.mu.Unlock()
-		return
+		return true
 	}
 
 	// if this raft is still the leader
@@ -736,7 +755,7 @@ func (rf *Raft) replicateToFollower(i int) {
 		if rf.matchIndex[i] >= newMatchIndex {
 			//D3BPrintf("%v-AppendEntries->%v till %v, without updating matchIndex", rf.me, i, rf.matchIndex[i])
 			rf.mu.Unlock()
-			return
+			return true
 		}
 		rf.matchIndex[i] = newMatchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
@@ -750,14 +769,14 @@ func (rf *Raft) replicateToFollower(i int) {
 		rf.advanceCommitIndex()
 		rf.persist()
 		rf.mu.Unlock()
-		return
+		return true
 	}
 	// case where the AppendEntries isn't successful, adjust nextIndex and retry
 	nextIndex := reply.ConflictIndex
 	if reply.ConflictTerm != -1 { //case where follower Log has an entry at PrevLogIndex
 		//search backwards until conflictIndex to see if the term exists
 		for j := rf.lastLogIndex(); j >= rf.LastIncludedIndex && j >= reply.ConflictIndex; j-- {
-			if rf.Log[rf.physicalIndex(j)].Term == reply.ConflictTerm { // term exists
+			if rf.Log[rf.sliceIndex(j)].Term == reply.ConflictTerm { // term exists
 				nextIndex = j + 1
 				break
 			}
@@ -767,7 +786,7 @@ func (rf *Raft) replicateToFollower(i int) {
 	// therefore leave out this condition
 	rf.nextIndex[i] = nextIndex
 	rf.mu.Unlock()
-	return
+	return true
 }
 
 // long-running routine. upon receiving of applyReadyCh, send apply committed log message to client until commitIndex
@@ -783,7 +802,7 @@ func (rf *Raft) applier() {
 					snapshotMsg := raftapi.ApplyMsg{
 						SnapshotValid: true,
 						Snapshot:      rf.SnapshotData,
-						SnapshotTerm:  rf.Log[rf.physicalIndex(rf.LastIncludedIndex)].Term,
+						SnapshotTerm:  rf.Log[rf.sliceIndex(rf.LastIncludedIndex)].Term,
 						SnapshotIndex: rf.LastIncludedIndex,
 					}
 					rf.snapshotPending = false
@@ -800,7 +819,7 @@ func (rf *Raft) applier() {
 				} else if rf.lastApplied < rf.lastLogIndex() { // need to apply log, added guard to prevent from accessing out of bound log
 					logMsg := raftapi.ApplyMsg{
 						CommandValid: true,
-						Command:      rf.Log[rf.physicalIndex(rf.lastApplied+1)].Command,
+						Command:      rf.Log[rf.sliceIndex(rf.lastApplied+1)].Command,
 						CommandIndex: rf.lastApplied + 1,
 					}
 					rf.mu.Unlock()
@@ -911,7 +930,7 @@ func (rf *Raft) startElection() {
 	}
 }
 
-// try to send replicateReady every 0.1 second to claim its leadership
+// heartbeat loop: every 0.1s, initiate replication to each follower to maintain its leadership
 func (rf *Raft) sendHeartbeat() {
 	for {
 		rf.mu.Lock()
