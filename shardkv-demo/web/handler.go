@@ -74,7 +74,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, req any) bool {
 
 // startTask 立即向客户端返回异步任务响应，并在后台 goroutine 中执行 work；
 // work 返回的 TaskDoneEvent 通过 SSE 推送给前端。goroutine 内带 recover，
-func (h *Handler) startTask(w http.ResponseWriter, immediate map[string]any, work func() TaskDoneEvent) {
+func (h *Handler) startTask(w http.ResponseWriter, immediate TaskAccepted, work func() TaskDoneEvent) {
 	writeJSON(w, immediate)
 	go func() {
 		defer func() {
@@ -85,4 +85,14 @@ func (h *Handler) startTask(w http.ResponseWriter, immediate map[string]any, wor
 		}()
 		h.PublishTaskDone(work())
 	}()
+}
+
+// marshalTaskData 将异步任务的结果载荷序列化为 TaskDoneEvent.Data（json.RawMessage）。
+func marshalTaskData(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("[web] marshalTaskData error: %v", err)
+		return json.RawMessage("null")
+	}
+	return b
 }

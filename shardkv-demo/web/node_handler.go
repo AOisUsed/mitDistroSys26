@@ -34,14 +34,14 @@ func (h *Handler) HandleKillNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	log.Printf("[KillNode] 组 %d Server-%d (%s) — 该组存活: %d/%d", req.GID, req.Srv, srvName, aliveCount, totalNodes)
-	writeJSON(w, map[string]any{
-		"success":    true,
-		"action":     "kill",
-		"gid":        req.GID,
-		"srv":        req.Srv,
-		"srvName":    srvName,
-		"aliveGroup": aliveCount,
-		"totalGroup": totalNodes,
+	writeJSON(w, NodeKillResult{
+		Success:    true,
+		Action:     "kill",
+		GID:        req.GID,
+		Srv:        req.Srv,
+		SRVName:    srvName,
+		AliveGroup: aliveCount,
+		TotalGroup: totalNodes,
 	})
 }
 
@@ -56,12 +56,12 @@ func (h *Handler) HandleStartNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.cm.StartServer(tester.Tgid(req.GID), req.Srv)
-	resp := map[string]any{"success": err == nil, "action": "start", "gid": req.GID, "srv": req.Srv}
+	result := NodeActionResult{Success: err == nil, Action: "start", GID: req.GID, Srv: req.Srv}
 	if err != nil {
-		resp["error"] = err.Error()
+		result.Error = err.Error()
 	}
 	log.Printf("[StartNode] 组 %d server-%d err=%v", req.GID, req.Srv, err)
-	writeJSON(w, resp)
+	writeJSON(w, result)
 }
 
 // HandleIsolateNode 隔离指定节点的网络（POST /api/node/isolate）。
@@ -76,7 +76,7 @@ func (h *Handler) HandleIsolateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cm.IsolateNode(tester.Tgid(req.GID), req.Srv)
 	log.Printf("[IsolateNode] 组 %d 节点 %d 已隔离", req.GID, req.Srv)
-	writeJSON(w, map[string]any{"success": true, "action": "isolate", "gid": req.GID, "srv": req.Srv})
+	writeJSON(w, NodeActionResult{Success: true, Action: "isolate", GID: req.GID, Srv: req.Srv})
 }
 
 // HandleRecoverNode 恢复单个节点的网络连接（POST /api/node/recover-node）。
@@ -91,5 +91,5 @@ func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cm.RecoverNode(tester.Tgid(req.GID), req.Srv)
 	log.Printf("[RecoverNode] 组 %d 节点 %d 网络已恢复", req.GID, req.Srv)
-	writeJSON(w, map[string]any{"success": true, "action": "recover-node", "gid": req.GID, "srv": req.Srv})
+	writeJSON(w, NodeActionResult{Success: true, Action: "recover-node", GID: req.GID, Srv: req.Srv})
 }

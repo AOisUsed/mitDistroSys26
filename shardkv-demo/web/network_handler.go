@@ -12,10 +12,10 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{
-			"reliable":       h.cm.IsReliable(),
-			"longReordering": h.cm.IsLongReordering(),
-			"longDelays":     h.cm.IsLongDelays(),
+		writeJSON(w, NetworkStatus{
+			Reliable:       h.cm.IsReliable(),
+			LongReordering: h.cm.IsLongReordering(),
+			LongDelays:     h.cm.IsLongDelays(),
 		})
 		return
 	}
@@ -26,16 +26,16 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 	if req.Reliable != nil {
 		h.cm.SetReliable(*req.Reliable)
 	}
-	writeJSON(w, map[string]any{"success": true, "action": "reliable", "reliable": h.cm.IsReliable()})
+	writeJSON(w, ReliableSetResult{Success: true, Action: "reliable", Reliable: h.cm.IsReliable()})
 }
 
 // HandleNetParams 查询/设置网络参数（GET/POST /api/network/params）。
 func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{
-			"dropRate":     h.cm.GetDropRate(),
-			"shortDelayMs": h.cm.GetShortDelayMs(),
-			"longDelayMs":  h.cm.GetLongDelayMs(),
+		writeJSON(w, NetParams{
+			DropRate:     h.cm.GetDropRate(),
+			ShortDelayMs: h.cm.GetShortDelayMs(),
+			LongDelayMs:  h.cm.GetLongDelayMs(),
 		})
 		return
 	}
@@ -53,11 +53,11 @@ func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
 		if req.LongDelayMs != nil {
 			h.cm.SetLongDelayMs(*req.LongDelayMs)
 		}
-		writeJSON(w, map[string]any{
-			"success":      true,
-			"dropRate":     h.cm.GetDropRate(),
-			"shortDelayMs": h.cm.GetShortDelayMs(),
-			"longDelayMs":  h.cm.GetLongDelayMs(),
+		writeJSON(w, NetParamsSetResult{
+			Success:      true,
+			DropRate:     h.cm.GetDropRate(),
+			ShortDelayMs: h.cm.GetShortDelayMs(),
+			LongDelayMs:  h.cm.GetLongDelayMs(),
 		})
 		return
 	}
@@ -71,7 +71,7 @@ func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"longReordering": h.cm.IsLongReordering()})
+		writeJSON(w, LongReorderingResult{LongReordering: h.cm.IsLongReordering()})
 		return
 	}
 	var req longReorderingRequest
@@ -82,5 +82,5 @@ func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
 		h.cm.SetLongReordering(*req.On)
 	}
 	log.Printf("[LongReordering] 开启=%v", h.cm.IsLongReordering())
-	writeJSON(w, map[string]any{"success": true, "longReordering": h.cm.IsLongReordering()})
+	writeJSON(w, LongReorderingResult{Success: true, LongReordering: h.cm.IsLongReordering()})
 }

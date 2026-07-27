@@ -12,12 +12,12 @@ import (
 func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]any{
-			"election":    debug.GetObserveElection(),
-			"migration":   debug.GetObserveMigration(),
-			"kvsubmit":    debug.GetObserveKVSubmit(),
-			"snapshot":    debug.GetObserveSnapshot(),
-			"replication": debug.GetObserveReplication(),
+		writeJSON(w, ObserveStatus{
+			Election:    debug.GetObserveElection(),
+			Migration:   debug.GetObserveMigration(),
+			KVSubmit:    debug.GetObserveKVSubmit(),
+			Snapshot:    debug.GetObserveSnapshot(),
+			Replication: debug.GetObserveReplication(),
 		})
 	case http.MethodPost:
 		var req observeSetRequest
@@ -40,7 +40,7 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[Observe] scene=%q on=%v", req.Scene, req.On)
-		writeJSON(w, map[string]any{"success": true, "scene": req.Scene, "on": req.On})
+		writeJSON(w, ObserveSetResult{Success: true, Scene: req.Scene, On: req.On})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -63,8 +63,8 @@ func (h *Handler) HandleObserveLogs(w http.ResponseWriter, r *http.Request) {
 
 	lines, nextId := debug.GetObserveLinesSince(since)
 	if lines == nil {
-		writeJSON(w, map[string]any{"lines": []debug.ObserveLine{}, "nextId": nextId})
+		writeJSON(w, ObserveLogsResult{Lines: []debug.ObserveLine{}, NextID: nextId})
 		return
 	}
-	writeJSON(w, map[string]any{"lines": lines, "nextId": nextId})
+	writeJSON(w, ObserveLogsResult{Lines: lines, NextID: nextId})
 }

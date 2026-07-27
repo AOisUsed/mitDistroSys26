@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -61,11 +60,11 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 
 	taskID := fmt.Sprintf("put-%s-%d", req.Key, h.taskSeq.Add(1))
 
-	h.startTask(w, map[string]any{
-		"taskId": taskID,
-		"async":  true,
-		"action": "put",
-		"key":    req.Key,
+	h.startTask(w, TaskAccepted{
+		TaskID: taskID,
+		Async:  true,
+		Action: "put",
+		Key:    req.Key,
 	}, func() TaskDoneEvent {
 		shard := shardcfg.Key2Shard(req.Key)
 		_, ver, e := h.cm.Get(req.Key)
@@ -78,11 +77,11 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		putErr := h.cm.Put(req.Key, req.Value, version)
 		if putErr == rpcapi.OK {
 			log.Printf("[Put] key=%q value=%q S%d version=%d OK (task=%s)", req.Key, req.Value, shard, version, taskID)
-			payload, _ := json.Marshal(map[string]any{
-				"key":    req.Key,
-				"value":  req.Value,
-				"shard":  int(shard),
-				"reqVer": int(version),
+			payload := marshalTaskData(PutResult{
+				Key:    req.Key,
+				Value:  req.Value,
+				Shard:  int(shard),
+				ReqVer: int(version),
 			})
 			return TaskDoneEvent{TaskID: taskID, Success: true, Action: "put", Data: payload}
 		}
@@ -99,19 +98,19 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskID := fmt.Sprintf("get-%s-%d", key, h.taskSeq.Add(1))
-	h.startTask(w, map[string]any{
-		"taskId": taskID,
-		"async":  true,
-		"action": "get",
-		"key":    key,
+	h.startTask(w, TaskAccepted{
+		TaskID: taskID,
+		Async:  true,
+		Action: "get",
+		Key:    key,
 	}, func() TaskDoneEvent {
 		v, ver, e := h.cm.Get(key)
 		if e == rpcapi.OK {
 			log.Printf("[Get] key=%q value=%q version=%d OK (task=%s)", key, v, ver, taskID)
-			payload, _ := json.Marshal(map[string]any{
-				"key":     key,
-				"value":   v,
-				"version": int(ver),
+			payload := marshalTaskData(GetResult{
+				Key:     key,
+				Value:   v,
+				Version: int(ver),
 			})
 			return TaskDoneEvent{TaskID: taskID, Success: true, Action: "get", Data: payload}
 		} else if e == rpcapi.ErrNoKey {
@@ -146,11 +145,11 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := fmt.Sprintf("batch-%d", h.taskSeq.Add(1))
 
-	h.startTask(w, map[string]any{
-		"taskId": taskID,
-		"async":  true,
-		"action": "batch-put",
-		"count":  req.Count,
+	h.startTask(w, TaskAccepted{
+		TaskID: taskID,
+		Async:  true,
+		Action: "batch-put",
+		Count:  req.Count,
 	}, func() TaskDoneEvent {
 		log.Printf("[BatchPut] 开始批量写入 (task=%s): count=%d shard=%s", taskID, req.Count, shardInfo)
 		start := time.Now()
@@ -210,10 +209,10 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 		elapsed := time.Since(start).Seconds()
 		log.Printf("[BatchPut] 完成 (task=%s): 成功=%d 失败=%d 用时=%.2fs", taskID, successCount, failCount, elapsed)
 
-		payload, _ := json.Marshal(map[string]any{
-			"successCount": successCount,
-			"failCount":    failCount,
-			"elapsed":      fmt.Sprintf("%.2fs", elapsed),
+		payload := marshalTaskData(BatchPutResult{
+			SuccessCount: successCount,
+			FailCount:    failCount,
+			Elapsed:      fmt.Sprintf("%.2fs", elapsed),
 		})
 		return TaskDoneEvent{
 			TaskID:  taskID,
@@ -247,12 +246,12 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 
 	taskID := fmt.Sprintf("cas-%d", h.taskSeq.Add(1))
 
-	h.startTask(w, map[string]any{
-		"taskId":  taskID,
-		"async":   true,
-		"action":  "cas-race",
-		"key":     req.Key,
-		"nClient": req.NClient,
+	h.startTask(w, TaskAccepted{
+		TaskID:  taskID,
+		Async:   true,
+		Action:  "cas-race",
+		Key:     req.Key,
+		NClient: req.NClient,
 	}, func() TaskDoneEvent {
 		shard := shardcfg.Key2Shard(req.Key)
 
@@ -305,14 +304,14 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("[CasRace] 完成 (task=%s): 成功=%d 冲突=%d 用时=%.2fs 最终=%q", taskID, successCount, versionErrCount, elapsed, finalValue)
 
-		payload, _ := json.Marshal(map[string]any{
-			"key":             req.Key,
-			"version":         int(curVer),
-			"nClient":         req.NClient,
-			"successCount":    successCount,
-			"versionErrCount": versionErrCount,
-			"finalValue":      finalValue,
-			"elapsed":         fmt.Sprintf("%.2fs", elapsed),
+		payload := marshalTaskData(CasRaceResult{
+			Key:             req.Key,
+			Version:         int(curVer),
+			NClient:         req.NClient,
+			SuccessCount:    successCount,
+			VersionErrCount: versionErrCount,
+			FinalValue:      finalValue,
+			Elapsed:         fmt.Sprintf("%.2fs", elapsed),
 		})
 		return TaskDoneEvent{
 			TaskID:  taskID,

@@ -20,7 +20,7 @@ func (h *Handler) HandleKillGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cm.KillGroup(tester.Tgid(req.GID))
 	log.Printf("[KillGroup] 组 %d 已停止", req.GID)
-	writeJSON(w, map[string]any{"success": true, "action": "kill-group", "gid": req.GID})
+	writeJSON(w, GroupActionResult{Success: true, Action: "kill-group", GID: req.GID})
 }
 
 // HandleStartGroup 启动指定组所有节点（POST /api/group/start）。
@@ -34,12 +34,12 @@ func (h *Handler) HandleStartGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.cm.StartGroup(tester.Tgid(req.GID))
-	resp := map[string]any{"success": err == nil, "action": "start-group", "gid": req.GID}
+	result := GroupActionResult{Success: err == nil, Action: "start-group", GID: req.GID}
 	if err != nil {
-		resp["error"] = err.Error()
+		result.Error = err.Error()
 	}
 	log.Printf("[StartGroup] 组 %d err=%v", req.GID, err)
-	writeJSON(w, resp)
+	writeJSON(w, result)
 }
 
 // HandleJoinGroup 加入新组（POST /api/group/join，异步 + SSE 推送）。
@@ -51,11 +51,11 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 	gid := h.cm.NewGid()
 	taskID := fmt.Sprintf("join-%d-%d", int(gid), h.taskSeq.Add(1))
 
-	h.startTask(w, map[string]any{
-		"taskId": taskID,
-		"async":  true,
-		"action": "join",
-		"gid":    int(gid),
+	h.startTask(w, TaskAccepted{
+		TaskID: taskID,
+		Async:  true,
+		Action: "join",
+		GID:    int(gid),
 	}, func() TaskDoneEvent {
 		ok, msg := h.cm.JoinGroup(gid)
 		ev := TaskDoneEvent{TaskID: taskID, Success: ok, Action: "join", GID: int(gid)}
@@ -83,11 +83,11 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 	gid := req.GID
 	taskID := fmt.Sprintf("leave-%d-%d", gid, h.taskSeq.Add(1))
 
-	h.startTask(w, map[string]any{
-		"taskId": taskID,
-		"async":  true,
-		"action": "leave",
-		"gid":    gid,
+	h.startTask(w, TaskAccepted{
+		TaskID: taskID,
+		Async:  true,
+		Action: "leave",
+		GID:    gid,
 	}, func() TaskDoneEvent {
 		ok, errMsg := h.cm.LeaveGroup(tester.Tgid(gid))
 		ev := TaskDoneEvent{TaskID: taskID, Success: ok, Action: "leave", GID: gid}

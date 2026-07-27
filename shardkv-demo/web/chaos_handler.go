@@ -19,11 +19,11 @@ func (h *Handler) HandleChaosStart(w http.ResponseWriter, r *http.Request) {
 	}
 	err := h.cm.StartChaos(tester.Tgid(req.GID))
 	if err != nil {
-		writeJSON(w, map[string]any{"success": false, "error": err.Error()})
+		writeJSON(w, ChaosActionResult{Success: false, Error: err.Error()})
 		return
 	}
 	log.Printf("[Chaos] GID %d 混沌已启动", req.GID)
-	writeJSON(w, map[string]any{"success": true, "action": "chaos-start", "gid": req.GID})
+	writeJSON(w, ChaosActionResult{Success: true, Action: "chaos-start", GID: req.GID})
 }
 
 // HandleChaosStop 停止指定组的混沌猴子（POST /api/chaos/stop）。
@@ -38,7 +38,7 @@ func (h *Handler) HandleChaosStop(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cm.StopChaos(tester.Tgid(req.GID))
 	log.Printf("[Chaos] GID %d 混沌已停止", req.GID)
-	writeJSON(w, map[string]any{"success": true, "action": "chaos-stop", "gid": req.GID})
+	writeJSON(w, ChaosActionResult{Success: true, Action: "chaos-stop", GID: req.GID})
 }
 
 // HandleChaosStatus 查询所有混沌猴子状态（GET /api/chaos/status）。
@@ -48,5 +48,5 @@ func (h *Handler) HandleChaosStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	states := h.cm.ChaosStatus()
-	writeJSON(w, map[string]any{"success": true, "states": states})
+	writeJSON(w, ChaosStatusResult{Success: true, States: states})
 }
