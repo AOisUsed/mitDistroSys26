@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,8 +15,7 @@ func (h *Handler) HandleKillGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req groupOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	h.cm.KillGroup(tester.Tgid(req.GID))
@@ -32,8 +30,7 @@ func (h *Handler) HandleStartGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req groupOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	err := h.cm.StartGroup(tester.Tgid(req.GID))
@@ -54,21 +51,14 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 	gid := h.cm.NewGid()
 	taskID := fmt.Sprintf("join-%d-%d", int(gid), h.taskSeq.Add(1))
 
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId": taskID,
 		"async":  true,
 		"action": "join",
 		"gid":    int(gid),
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		ok, msg := h.cm.JoinGroup(gid)
-		ev := TaskDoneEvent{
-			TaskID:  taskID,
-			Success: ok,
-			Action:  "join",
-			GID:     int(gid),
-		}
+		ev := TaskDoneEvent{TaskID: taskID, Success: ok, Action: "join", GID: int(gid)}
 		if ok {
 			ev.Message = msg
 			log.Printf("[JoinGroup] 新组 %d 已加入 (task=%s)", gid, taskID)
@@ -76,8 +66,8 @@ func (h *Handler) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 			ev.Error = msg
 			log.Printf("[JoinGroup] 加入新组失败 (task=%s): %s", taskID, msg)
 		}
-		h.PublishTaskDone(ev)
-	}()
+		return ev
+	})
 }
 
 // HandleLeaveGroup 移除指定组（POST /api/group/leave，异步 + SSE 推送）。
@@ -87,43 +77,26 @@ func (h *Handler) HandleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req groupOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if req.GID == 0 {
-		log.Printf("[LeaveGroup] 组 0 (配置仓库) 是系统核心组件，不能离开集群")
-		writeJSON(w, map[string]any{
-			"success": false, "action": "leave", "gid": 0,
-			"error":   "ConfigStore (组 0) 是系统配置仓库，不能离开集群",
-			"message": "配置仓库 (组 0) 是系统核心组件，不能离开集群",
-		})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	gid := req.GID
 	taskID := fmt.Sprintf("leave-%d-%d", gid, h.taskSeq.Add(1))
 
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId": taskID,
 		"async":  true,
 		"action": "leave",
 		"gid":    gid,
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		ok, errMsg := h.cm.LeaveGroup(tester.Tgid(gid))
-		ev := TaskDoneEvent{
-			TaskID:  taskID,
-			Success: ok,
-			Action:  "leave",
-			GID:     gid,
-		}
+		ev := TaskDoneEvent{TaskID: taskID, Success: ok, Action: "leave", GID: gid}
 		if ok {
 			log.Printf("[LeaveGroup] 组 %d 已离开 (task=%s)", gid, taskID)
 		} else {
 			ev.Error = errMsg
 			log.Printf("[LeaveGroup] 组 %d 离开失败 (task=%s): %s", gid, taskID, errMsg)
 		}
-		h.PublishTaskDone(ev)
-	}()
+		return ev
+	})
 }

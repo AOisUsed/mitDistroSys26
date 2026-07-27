@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 )
@@ -21,18 +20,11 @@ func (h *Handler) HandleReliable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req reliableRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Reliable != nil {
 		h.cm.SetReliable(*req.Reliable)
-		if !*req.Reliable {
-			h.cm.SetLongDelays(true)
-		} else {
-			h.cm.SetLongDelays(false)
-			h.cm.SetLongReordering(false)
-		}
 	}
 	writeJSON(w, map[string]any{"success": true, "action": "reliable", "reliable": h.cm.IsReliable()})
 }
@@ -49,8 +41,7 @@ func (h *Handler) HandleNetParams(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost {
 		var req netParamsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		if req.DropRate != nil {
@@ -84,16 +75,11 @@ func (h *Handler) HandleLongReordering(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req longReorderingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.On != nil {
 		h.cm.SetLongReordering(*req.On)
-		if *req.On {
-			h.cm.SetReliable(false)
-			h.cm.SetLongDelays(true)
-		}
 	}
 	log.Printf("[LongReordering] 开启=%v", h.cm.IsLongReordering())
 	writeJSON(w, map[string]any{"success": true, "longReordering": h.cm.IsLongReordering()})

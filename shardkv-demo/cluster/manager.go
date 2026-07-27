@@ -679,6 +679,9 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 
 // LeaveGroup 移除组
 func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
+	if gid == 0 {
+		return false, "配置仓库 (组 0) 是系统核心组件，不能离开集群"
+	}
 	cm.lockGroup(gid) // 使用锁串行化对某个 gid 组的join/leave操作，防止进程创建/删除冲突
 	defer cm.unlockGroup(gid)
 
@@ -735,9 +738,16 @@ func (cm *ClusterManager) LeaveGroup(gid tester.Tgid) (bool, string) {
 }
 
 // SetReliable 设置网络是否可靠（false 时随机延迟 + 可配置丢包率）
-func (cm *ClusterManager) SetReliable(yes bool) {
-	cm.infra.SetReliable(yes)
-	log.Printf("[Cluster] 网络可靠性: %v", yes)
+func (cm *ClusterManager) SetReliable(reliable bool) {
+	cm.infra.SetReliable(reliable)
+	// 不可靠时启用长延迟；恢复可靠时一并关闭长延迟与乱序，保持网络状态一致。
+	if !reliable {
+		cm.infra.SetLongDelays(true)
+	} else {
+		cm.infra.SetLongDelays(false)
+		cm.infra.SetLongReordering(false)
+	}
+	log.Printf("[Cluster] 网络可靠性: %v", reliable)
 }
 
 // IsReliable 返回当前网络是否可靠
@@ -792,6 +802,10 @@ func (cm *ClusterManager) IsLongDelays() bool {
 // SetLongReordering 设置是否长延迟重排序（67% 回复延迟 200ms~2.2s）
 func (cm *ClusterManager) SetLongReordering(yes bool) {
 	cm.infra.SetLongReordering(yes)
+	if yes {
+		cm.infra.SetReliable(false)
+		cm.infra.SetLongDelays(true)
+	}
 	log.Printf("[Cluster] 长延迟重排序: %v", yes)
 }
 

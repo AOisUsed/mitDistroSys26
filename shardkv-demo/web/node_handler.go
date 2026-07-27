@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,8 +15,7 @@ func (h *Handler) HandleKillNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req nodeOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	srvName := fmt.Sprintf("server-%d-%d", req.GID, req.Srv)
@@ -54,8 +52,7 @@ func (h *Handler) HandleStartNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req nodeOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	err := h.cm.StartServer(tester.Tgid(req.GID), req.Srv)
@@ -74,8 +71,7 @@ func (h *Handler) HandleIsolateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req nodeOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	h.cm.IsolateNode(tester.Tgid(req.GID), req.Srv)
@@ -90,8 +86,7 @@ func (h *Handler) HandleRecoverNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req nodeOpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	h.cm.RecoverNode(tester.Tgid(req.GID), req.Srv)

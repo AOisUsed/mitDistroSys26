@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 
@@ -15,8 +14,7 @@ func (h *Handler) HandleChaosStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req chaosRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	err := h.cm.StartChaos(tester.Tgid(req.GID))
@@ -35,8 +33,7 @@ func (h *Handler) HandleChaosStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req chaosRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	h.cm.StopChaos(tester.Tgid(req.GID))

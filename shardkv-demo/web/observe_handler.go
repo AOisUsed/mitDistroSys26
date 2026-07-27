@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -22,8 +21,7 @@ func (h *Handler) HandleObserve(w http.ResponseWriter, r *http.Request) {
 		})
 	case http.MethodPost:
 		var req observeSetRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		switch req.Scene {

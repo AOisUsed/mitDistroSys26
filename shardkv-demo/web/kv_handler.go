@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -14,24 +15,22 @@ import (
 
 // ========== Helpers ==========
 
-var randomSeed = uint64(time.Now().UnixNano())
-
 const batchChars = "abcdefghijklmnopqrstuvwxyz0123456789"
 
+// batchRandomKey 生成 8 位随机 key
 func batchRandomKey() string {
 	b := make([]byte, 8)
 	for i := range b {
-		randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
-		b[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+		b[i] = batchChars[rand.IntN(len(batchChars))]
 	}
 	return string(b)
 }
 
+// casRandomValue 生成 3 位随机 value
 func casRandomValue() string {
 	b := make([]byte, 3)
 	for i := range b {
-		randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
-		b[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+		b[i] = batchChars[rand.IntN(len(batchChars))]
 	}
 	return string(b)
 }
@@ -51,13 +50,8 @@ func (h *Handler) HandleKV(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req putRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Key == "" {
@@ -67,26 +61,17 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 
 	taskID := fmt.Sprintf("put-%s-%d", req.Key, h.taskSeq.Add(1))
 
-	// 立即返回 taskId，异步执行
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId": taskID,
 		"async":  true,
 		"action": "put",
 		"key":    req.Key,
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		shard := shardcfg.Key2Shard(req.Key)
 		_, ver, e := h.cm.Get(req.Key)
 		if e != rpcapi.OK && e != rpcapi.ErrNoKey {
 			log.Printf("[Put] key=%q S%d Get 失败 (task=%s): %s", req.Key, shard, taskID, e)
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: false,
-				Action:  "put",
-				Error:   string(e),
-			})
-			return
+			return TaskDoneEvent{TaskID: taskID, Success: false, Action: "put", Error: string(e)}
 		}
 		version := ver
 
@@ -99,29 +84,14 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 				"shard":  int(shard),
 				"reqVer": int(version),
 			})
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: true,
-				Action:  "put",
-				Data:    payload,
-			})
-		} else {
-			log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (task=%s, err=%s)", req.Key, req.Value, shard, version, taskID, putErr)
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: false,
-				Action:  "put",
-				Error:   string(putErr),
-			})
+			return TaskDoneEvent{TaskID: taskID, Success: true, Action: "put", Data: payload}
 		}
-	}()
+		log.Printf("[Put] key=%q value=%q S%d version=%d 失败 (task=%s, err=%s)", req.Key, req.Value, shard, version, taskID, putErr)
+		return TaskDoneEvent{TaskID: taskID, Success: false, Action: "put", Error: string(putErr)}
+	})
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	key := strings.TrimPrefix(r.URL.Path, "/api/kv/")
 	if key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
@@ -129,15 +99,12 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskID := fmt.Sprintf("get-%s-%d", key, h.taskSeq.Add(1))
-
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId": taskID,
 		"async":  true,
 		"action": "get",
 		"key":    key,
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		v, ver, e := h.cm.Get(key)
 		if e == rpcapi.OK {
 			log.Printf("[Get] key=%q value=%q version=%d OK (task=%s)", key, v, ver, taskID)
@@ -146,30 +113,14 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 				"value":   v,
 				"version": int(ver),
 			})
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: true,
-				Action:  "get",
-				Data:    payload,
-			})
+			return TaskDoneEvent{TaskID: taskID, Success: true, Action: "get", Data: payload}
 		} else if e == rpcapi.ErrNoKey {
 			log.Printf("[Get] key=%q 失败 (task=%s, err=ErrNoKey)", key, taskID)
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: false,
-				Action:  "get",
-				Error:   "ErrNoKey",
-			})
-		} else {
-			log.Printf("[Get] key=%q 失败 (task=%s, err=%s)", key, taskID, e)
-			h.PublishTaskDone(TaskDoneEvent{
-				TaskID:  taskID,
-				Success: false,
-				Action:  "get",
-				Error:   string(e),
-			})
+			return TaskDoneEvent{TaskID: taskID, Success: false, Action: "get", Error: "ErrNoKey"}
 		}
-	}()
+		log.Printf("[Get] key=%q 失败 (task=%s, err=%s)", key, taskID, e)
+		return TaskDoneEvent{TaskID: taskID, Success: false, Action: "get", Error: string(e)}
+	})
 }
 
 // ========== 批量随机写入 ==========
@@ -181,8 +132,7 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req batchPutRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Count <= 0 || req.Count > 10000 {
@@ -196,14 +146,12 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := fmt.Sprintf("batch-%d", h.taskSeq.Add(1))
 
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId": taskID,
 		"async":  true,
 		"action": "batch-put",
 		"count":  req.Count,
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		log.Printf("[BatchPut] 开始批量写入 (task=%s): count=%d shard=%s", taskID, req.Count, shardInfo)
 		start := time.Now()
 
@@ -221,8 +169,7 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for i := range valBuf {
-				randomSeed = randomSeed*6364136223846793005 + 1442695040888963407
-				valBuf[i] = batchChars[int((randomSeed>>33)%uint64(len(batchChars)))]
+				valBuf[i] = batchChars[rand.IntN(len(batchChars))]
 			}
 			pairs = append(pairs, kvPair{key: key, value: string(valBuf)})
 		}
@@ -268,13 +215,13 @@ func (h *Handler) HandleBatchPut(w http.ResponseWriter, r *http.Request) {
 			"failCount":    failCount,
 			"elapsed":      fmt.Sprintf("%.2fs", elapsed),
 		})
-		h.PublishTaskDone(TaskDoneEvent{
+		return TaskDoneEvent{
 			TaskID:  taskID,
 			Success: true,
 			Action:  "batch-put",
 			Data:    payload,
-		})
-	}()
+		}
+	})
 }
 
 // ========== CAS 竞赛 ==========
@@ -286,8 +233,7 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req casRaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Key == "" {
@@ -301,26 +247,23 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 
 	taskID := fmt.Sprintf("cas-%d", h.taskSeq.Add(1))
 
-	writeJSON(w, map[string]any{
+	h.startTask(w, map[string]any{
 		"taskId":  taskID,
 		"async":   true,
 		"action":  "cas-race",
 		"key":     req.Key,
 		"nClient": req.NClient,
-	})
-
-	go func() {
+	}, func() TaskDoneEvent {
 		shard := shardcfg.Key2Shard(req.Key)
 
 		_, curVer, getErr := h.cm.Get(req.Key)
 		if getErr != rpcapi.OK && getErr != rpcapi.ErrNoKey {
-			h.PublishTaskDone(TaskDoneEvent{
+			return TaskDoneEvent{
 				TaskID:  taskID,
 				Success: false,
 				Action:  "cas-race",
 				Error:   string(getErr),
-			})
-			return
+			}
 		}
 
 		log.Printf("[CasRace] 开始 (task=%s): key=%q S%d nClient=%d version=%d", taskID, req.Key, shard, req.NClient, curVer)
@@ -371,11 +314,11 @@ func (h *Handler) HandleCasRace(w http.ResponseWriter, r *http.Request) {
 			"finalValue":      finalValue,
 			"elapsed":         fmt.Sprintf("%.2fs", elapsed),
 		})
-		h.PublishTaskDone(TaskDoneEvent{
+		return TaskDoneEvent{
 			TaskID:  taskID,
 			Success: true,
 			Action:  "cas-race",
 			Data:    payload,
-		})
-	}()
+		}
+	})
 }
