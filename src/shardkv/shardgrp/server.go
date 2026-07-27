@@ -36,11 +36,11 @@ const (
 
 func statusToString(digit ShardStatus) string {
 	switch digit {
-	case 0:
+	case Absent:
 		return "Absent"
-	case 1:
+	case Serving:
 		return "Serving"
-	case 2:
+	case Frozen:
 		return "Frozen"
 	}
 	return "Unknown"
