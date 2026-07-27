@@ -102,6 +102,14 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isLeader
 }
 
+// notify sends a signal to a channel in a non-blocking way
+func (rf *Raft) notify(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
@@ -221,6 +229,7 @@ func (rf *Raft) becomeFollowerWithTerm(term int) {
 	rf.state = follower
 	rf.CurrentTerm = term
 	rf.VotedFor = -1
+	rf.persist()
 }
 
 // AppendEntries RPC handler
@@ -259,7 +268,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Term = rf.CurrentTerm
 		reply.Success = false
 		//log.Printf("[Raft %v+] %v <-AppendEntries- %v completed but not persist at %v", args.PrevLogIndex+1, rf.me, args.LeaderId, time.Now().Format("15:04:05.000"))
-		rf.persist()
 		//defer log.Printf("[Raft %v+] %v <-AppendEntries- %v finishes at %v", args.PrevLogIndex+1, rf.me, args.LeaderId, time.Now().Format("15:04:05.000"))
 		return
 	}
@@ -310,7 +318,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// this follower should not do anything to its Log if success is false,
 	if success == false {
-		rf.persist()
 		return
 	}
 	// get here only when this raft is a follower, and success is true,
@@ -333,8 +340,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			debug.D3BPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
 		}
 		rf.Log = append(rf.Log, args.Entries[i:]...) // append unvisited remaining logs from the leader entries to this raft's Log
+		rf.persist()
 	}
-	rf.persist()
 
 	// now check the leader commit,
 	// if leader has more commits than this follower, move ahead as much as it can
@@ -342,10 +349,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.lastLogIndex())
 	}
 	//trigger applier
-	select {
-	case rf.applyReadyCh <- struct{}{}:
-	default:
-	}
+	rf.notify(rf.applyReadyCh)
 }
 
 // sendAppendEntries RPC sender
@@ -418,10 +422,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			rf.commitIndex = max(args.LastIncludedIndex, rf.commitIndex)
 			rf.snapshotPending = true
 			// tell applier that it has new snapshot to apply
-			select {
-			case rf.applyReadyCh <- struct{}{}:
-			default:
-			}
+			rf.notify(rf.applyReadyCh)
 		} // else: the state machine is more advanced than this received snapshot, don't apply
 	} else if termChanged { // case when the term has changed but the snapshot in InstallSnapshot is behind the follower, need to persist the term change
 		rf.persist()
@@ -555,10 +556,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		isLeader = true
 		debug.D3BPrintf("%v Start(%v), CommandIndex: %v", rf.me, command, index)
 		// signal replicationDispatcher, or no when there exists already one pending request
-		select {
-		case rf.logAppendedCh <- struct{}{}:
-		default:
-		}
+		rf.notify(rf.logAppendedCh)
 	}
 	return index, term, isLeader
 }
@@ -599,10 +597,7 @@ func (rf *Raft) replicationDispatcher() {
 			}
 			//wake up goroutine only when the follower is out of date
 			if rf.nextIndex[i] <= rf.lastLogIndex() {
-				select {
-				case rf.replicateReadyChs[i] <- struct{}{}:
-				default:
-				}
+				rf.notify(rf.replicateReadyChs[i])
 			}
 		}
 		rf.mu.Unlock()
@@ -657,10 +652,7 @@ func (rf *Raft) advanceCommitIndex() {
 			rf.commitIndex = N
 			debug.D3BPrintf("%v Advancing commit index to %d", rf.me, rf.commitIndex)
 			//trigger applier
-			select {
-			case rf.applyReadyCh <- struct{}{}:
-			default:
-			}
+			rf.notify(rf.applyReadyCh)
 			break
 		}
 	}
@@ -710,7 +702,6 @@ func (rf *Raft) replicateToFollower(i int) bool {
 		rf.mu.Lock()
 		if reply.Term > rf.CurrentTerm {
 			rf.becomeFollowerWithTerm(reply.Term)
-			rf.persist()
 			rf.mu.Unlock()
 			return true
 		}
@@ -740,8 +731,7 @@ func (rf *Raft) replicateToFollower(i int) bool {
 	// if this raft knows that it's not the leader anymore, stop
 	rf.mu.Lock()
 	if reply.Term > rf.CurrentTerm {
-		rf.becomeFollowerWithTerm(reply.Term)
-		rf.persist()
+		rf.becomeFollowerWithTerm(reply.Term) // persists internally
 		rf.mu.Unlock()
 		return true
 	}
@@ -767,7 +757,6 @@ func (rf *Raft) replicateToFollower(i int) bool {
 		//set commitIndex = N
 
 		rf.advanceCommitIndex()
-		rf.persist()
 		rf.mu.Unlock()
 		return true
 	}
