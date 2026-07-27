@@ -664,8 +664,8 @@ func (cm *ClusterManager) JoinGroup(gid tester.Tgid) (bool, string) {
 		cm.ctl.InitController()
 		newcfg := cm.ctl.Query().Copy()
 		if ok := newcfg.JoinBalance(map[tester.Tgid][]string{gid: srvNames}); !ok {
-			log.Printf("[Cluster] JoinGroup: 组 %d 加入失败（JoinBalance 拒绝）", gid)
-			return false, fmt.Sprintf("组 %d 已存在", gid)
+			log.Printf("[Cluster] JoinGroup: 组 %d 已在集群中", gid)
+			return true, ""
 		}
 		if cm.ctl.ChangeConfigTo(newcfg) {
 			// 迁移完成后，更新缓存
