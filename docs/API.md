@@ -69,23 +69,23 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 
 #### Get
 
-| 方向     | 字段      | 类型     | 说明            |
-|--------|---------|--------|---------------|
-| **请求** | Key     | string | 要查询的键         |
-| **回复** | Value   | string | 键对应的值         |
-|        | Version | uint64 | 键当前版本号        |
-|        | Err     | rpcErr | OK / ErrNoKey |
+| 方向     | 字段      | 类型               | 说明            |
+|--------|---------|------------------|---------------|
+| **请求** | Key     | string           | 要查询的键         |
+| **回复** | Value   | string           | 键对应的值         |
+|        | Version | uint64           | 键当前版本号        |
+|        | Err     | [rpcErr](#错误码语义) | OK / ErrNoKey |
 
 #### Put
 
-| 方向     | 字段        | 类型     | 说明                         |
-|--------|-----------|--------|----------------------------|
-| **请求** | ClientId  | uint64 | 客户端唯一标识                    |
-|        | RequestId | uint64 | 请求序列号（单调递增）                |
-|        | Key       | string | 要写入的键                      |
-|        | Value     | string | 要写入的值                      |
-|        | Version   | uint64 | 客户端声明的预期版本号                |
-| **回复** | Err       | rpcErr | OK / ErrNoKey / ErrVersion |
+| 方向     | 字段        | 类型               | 说明                         |
+|--------|-----------|------------------|----------------------------|
+| **请求** | ClientId  | uint64           | 客户端唯一标识                    |
+|        | RequestId | uint64           | 请求序列号（单调递增）                |
+|        | Key       | string           | 要写入的键                      |
+|        | Value     | string           | 要写入的值                      |
+|        | Version   | uint64           | 客户端声明的预期版本号                |
+| **回复** | Err       | [rpcErr](#错误码语义) | OK / ErrNoKey / ErrVersion |
 
 ### 分片迁移 RPC 接口
 
@@ -99,7 +99,7 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 |        | Num   | int    | 配置号                      |
 | **回复** | State | []byte | 被冻结的分片数据                 |
 |        | Num   | int    | 配置号                      |
-|        | Err   | rpcErr | OK / ErrIllegalOperation |
+|        | Err   | [rpcErr](#错误码语义) | OK / ErrIllegalOperation |
 
 #### InstallShard
 
@@ -110,7 +110,7 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 | **请求** | Shard | int    | 分片号                      |
 |        | State | []byte | 分片数据（键值 + 去重元数据）         |
 |        | Num   | int    | 配置号                      |
-| **回复** | Err   | rpcErr | OK / ErrIllegalOperation |
+| **回复** | Err   | [rpcErr](#错误码语义) | OK / ErrIllegalOperation |
 
 #### DeleteShard
 
@@ -120,7 +120,7 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 |--------|-------|--------|--------------------------|
 | **请求** | Shard | int    | 分片号                      |
 |        | Num   | int    | 配置号                      |
-| **回复** | Err   | rpcErr | OK / ErrIllegalOperation |
+| **回复** | Err   | [rpcErr](#错误码语义) | OK / ErrIllegalOperation |
 
 ## 分片配置仓库接口
 通过 RPC 实现，此处以 `方法调用` 形式呈现
@@ -139,7 +139,7 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 | OK             | 操作成功   | 读写正常完成                             |
 | ErrNoKey       | 键不存在   | Get 时键不存在，或 Put 时键不存在且 version ≠ 0 |
 | ErrVersion     | 版本不匹配  | Put 时提供的版本号与当前版本不一致                |
-| ErrWrongGroup  | 分片不在本组 | 分片不在当前组内，已迁移到其他组                   |                           |
+| ErrWrongGroup  | 分片不在本组 | 分片不在当前组内，已迁移到其他组                   |
 | ErrWrongLeader | 非领导者   | 当前节点不是 Raft 领导者                    |
 
 
@@ -147,7 +147,7 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 
 | 错误码                 | 含义     | 说明                 |
 |---------------------|--------|--------------------|
-| OK                  | 操作成功   | 正常完成               |
+| OK                  | 操作成功   | 正常完成，或者已完成过        |
 | ErrIllegalOperation | 非法操作   | 分片状态跳转异常           |
 | ErrWrongLeader      | 非领导者   | 当前节点不是 Raft 领导者    |
 | ErrWrongGroup       | 分片不在本组 | 配置已变更，分片迁移到其他组     |
