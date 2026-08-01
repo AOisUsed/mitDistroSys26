@@ -736,13 +736,13 @@ func (rf *Raft) replicateToFollower(i int) bool {
 	if reply.Success {
 		// check whether the rpc reply is delayed
 		// if the reply of the rpc is out of date, meaning that the current matchIndex is greater, don't move backwards
-		newMatchIndex := args.PrevLogIndex + len(args.Entries)
-		if rf.matchIndex[i] >= newMatchIndex {
+		matchIndex := args.PrevLogIndex + len(args.Entries)
+		if rf.matchIndex[i] >= matchIndex {
 			//D3BPrintf("%v-AppendEntries->%v till %v, without updating matchIndex", rf.me, i, rf.matchIndex[i])
 			rf.mu.Unlock()
 			return true
 		}
-		rf.matchIndex[i] = newMatchIndex
+		rf.matchIndex[i] = matchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
 		debug.D3BPrintf("%v-updated AppendEntries->%v till %v", rf.me, i, rf.matchIndex[i])
 
@@ -755,7 +755,11 @@ func (rf *Raft) replicateToFollower(i int) bool {
 		rf.mu.Unlock()
 		return true
 	}
-	// case where the AppendEntries isn't successful, adjust nextIndex and retry
+	// case where the AppendEntries isn't successful, adjust nextIndex
+	if args.PrevLogIndex <= rf.matchIndex[i] { // case that this rpc reply is out-of-date
+		rf.mu.Unlock()
+		return true
+	}
 	nextIndex := reply.ConflictIndex
 	if reply.ConflictTerm != -1 { //case where follower Log has an entry at PrevLogIndex
 		//search backwards until conflictIndex to see if the term exists
@@ -768,7 +772,7 @@ func (rf *Raft) replicateToFollower(i int) bool {
 	} // else: nextIndex should be conflictIndex,
 	// but it has already been initialised as such,
 	// therefore leave out this condition
-	rf.nextIndex[i] = nextIndex
+	rf.nextIndex[i] = max(nextIndex, rf.matchIndex[i]+1) // guard to make sure that nextIndex won't be lower than matchIndex
 	rf.mu.Unlock()
 	return true
 }
