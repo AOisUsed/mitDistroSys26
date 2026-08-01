@@ -20,6 +20,12 @@ import (
 	"kvstore/tester"
 )
 
+const (
+	heartbeatInterval  = 100 * time.Millisecond
+	minElectionTimeout = 300
+	variationLimit     = 300 // maximum of Election Timeout variation
+)
+
 type LogEntry struct {
 	Term    int
 	Command any
@@ -48,12 +54,9 @@ type Raft struct {
 	me        int               // this peer's index into peers[]
 
 	//persistent state
-	CurrentTerm int
-	VotedFor    int
-
-	// Log[0] is a dummy entry standing for LastIncludedIndex, so
-	// sliceIndex(LastIncludedIndex) == 0; a logical index L maps to Log[L-LastIncludedIndex].
-	Log               []*LogEntry
+	CurrentTerm       int
+	VotedFor          int
+	Log               []*LogEntry // Log[0] is a dummy entry standing for LastIncludedIndex
 	SnapshotData      []byte
 	LastIncludedIndex int
 
@@ -258,7 +261,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		debug.D3APrintf("%v at %v resets VotedFor upon receiving AppendEntries", rf.me, rf.CurrentTerm)
 	} else if rf.CurrentTerm == args.Term { //if getting equal term AppendEntries,
 		if rf.state == candidate { // and is in election, step down to be a follower
-			rf.CurrentTerm = args.Term
 			rf.lastHeardTime = time.Now()
 			rf.state = follower
 			debug.D3APrintf("%v at %v candidate -> %v follower: for receiving equal term AppendEntries", rf.me, rf.CurrentTerm, rf.CurrentTerm)
@@ -324,25 +326,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// the follower needs to compare its Log and entries from the leader,
 	// and to find the conflicting point, truncating all following entries,
 	// then append unvisited remaining entries in the entries from the leader
-	if len(args.Entries) > 0 { //condition guard to make sure that when AppendEntries from the leader is empty, the follower doesn't truncate its log
-		i := 0
-		for ; i < len(args.Entries); i++ {
-			j := args.PrevLogIndex + 1 + i
-			if j > rf.lastLogIndex() {
-				break
-			}
-			if args.Entries[i].Term != rf.Log[rf.sliceIndex(j)].Term {
-				break
-			}
+	i := 0
+	for ; i < len(args.Entries); i++ {
+		j := args.PrevLogIndex + 1 + i
+		if j > rf.lastLogIndex() {
+			break
 		}
-		rf.Log = rf.Log[:rf.sliceIndex(args.PrevLogIndex+1+i)] //truncate the conflicting entry and all following ones
-		for j := i; j < len(args.Entries); j++ {
-			debug.D3BPrintf("%v appended log from %v at %v:\tcommand:%v\n", rf.me, args.LeaderId, args.PrevLogIndex+1+i+j, args.Entries[j])
+		if args.Entries[i].Term != rf.Log[rf.sliceIndex(j)].Term {
+			rf.Log = rf.Log[:rf.sliceIndex(j)]
+			break
 		}
-		rf.Log = append(rf.Log, args.Entries[i:]...) // append unvisited remaining logs from the leader entries to this raft's Log
+	}
+	if i < len(args.Entries) {
+		rf.Log = append(rf.Log, args.Entries[i:]...) // append remaining logs from conflict index to this raft's Log
 		rf.persist()
 	}
-
 	// now check the leader commit,
 	// if leader has more commits than this follower, move ahead as much as it can
 	if args.LeaderCommit > rf.commitIndex {
@@ -390,12 +388,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// update the lastHeartbeat time
 	rf.lastHeardTime = time.Now()
 
-	termChanged := false
 	// update raft state before preceding, common for all RPCs
 	if rf.CurrentTerm < args.Term {
 		rf.becomeFollowerWithTerm(args.Term)
 		reply.Term = rf.CurrentTerm
-		termChanged = true
 	}
 
 	// save snapshot file, discard any existing snapshot with a smaller index
@@ -424,7 +420,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			// tell applier that it has new snapshot to apply
 			rf.notify(rf.applyReadyCh)
 		} // else: the state machine is more advanced than this received snapshot, don't apply
-	} else if termChanged { // case when the term has changed but the snapshot in InstallSnapshot is behind the follower, need to persist the term change
 		rf.persist()
 	}
 }
@@ -787,7 +782,7 @@ func (rf *Raft) applier() {
 		for {
 			rf.mu.Lock()
 			if rf.snapshotPending || rf.lastApplied < rf.commitIndex {
-				if rf.snapshotPending { // need to apply snapshot
+				if rf.snapshotPending { // prioritise snapshot over log apply because snapshot brings about a leap of commitIndex
 					snapshotMsg := raftapi.ApplyMsg{
 						SnapshotValid: true,
 						Snapshot:      rf.SnapshotData,
@@ -805,7 +800,7 @@ func (rf *Raft) applier() {
 					rf.mu.Lock()
 					rf.lastApplied = snapshotMsg.SnapshotIndex
 					rf.mu.Unlock()
-				} else if rf.lastApplied < rf.lastLogIndex() { // need to apply log, added guard to prevent from accessing out of bound log
+				} else { // case that  rf.lastApplied < rf.commitIndex, i.e., need to apply log
 					logMsg := raftapi.ApplyMsg{
 						CommandValid: true,
 						Command:      rf.Log[rf.sliceIndex(rf.lastApplied+1)].Command,
@@ -837,7 +832,7 @@ func (rf *Raft) ticker() {
 
 		// pause for a random amount of time between 300 and 600
 		// milliseconds.
-		ms := 300 + (rand.Int63() % 300)
+		ms := minElectionTimeout + (rand.Int() % variationLimit)
 		rf.mu.Lock()
 		needElection := rf.state != leader && time.Since(rf.lastHeardTime) > time.Duration(ms)*time.Millisecond
 		rf.mu.Unlock()
@@ -887,7 +882,6 @@ func (rf *Raft) startElection() {
 			if reply.Term > rf.CurrentTerm {
 				rf.becomeFollowerWithTerm(reply.Term)
 				rf.lastHeardTime = time.Now()
-				rf.persist()
 				rf.mu.Unlock()
 				return
 			}
@@ -925,7 +919,7 @@ func (rf *Raft) sendHeartbeat() {
 		rf.mu.Lock()
 		if rf.state != leader {
 			rf.mu.Unlock()
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(heartbeatInterval)
 			continue
 		}
 		rf.mu.Unlock()
@@ -935,7 +929,7 @@ func (rf *Raft) sendHeartbeat() {
 			}
 			go rf.replicateToFollower(i)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(heartbeatInterval)
 	}
 }
 
