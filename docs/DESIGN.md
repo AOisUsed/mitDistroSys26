@@ -1,15 +1,27 @@
 # 详细设计
 
+## 项目定位与设计目标
+
+本系统是一个**高可用、强一致、可水平扩展的分布式分片键值存储**，核心由自实现的 Raft 共识算法驱动。设计目标：
+
+- **强一致性**：对外表现线性一致，所有操作如同在单机按顺序执行。
+- **高可用**：每组多副本，容忍少数节点宕机，多数派在线即可继续服务。
+- **水平扩展**：数据按哈希分片，多 Raft 组间解耦，扩容通过分片迁移重新分布。
+- **可观测与可运维**：快照压缩日志、在线分片迁移、故障恢复，并辅以 Web 控制台实时观测与故障注入演示。
+
+> 本文档聚焦各模块的详细设计；系统架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md)，功能导览见 [WALKTHROUGH.md](WALKTHROUGH.md)。
+
 ## Raft 共识算法实现
 具体实现：[raft.go](../src/raft/raft.go)
-> 📖 **阅读建议：** 推荐按 "先建立直觉、再查细节、看不懂先跳" 的方式阅读。
+
+> 📖 **阅读建议：** 推荐按 "先建立直觉、再查细节、自由跳过" 的方式阅读。
 > - 先读「Raft 速览」建立整体印象；
-> - 「核心数据结构」和各种表格不必详读，后续机制涉及到其中字段时查阅即可；
-> - 机制小节（选举 / 复制 / 提交 / 快照 / 恢复）可按顺序读，也可按需跳读。
+> - 「核心数据结构」和各种表格不必详读，作为参考后续查阅即可；
+> - 机制小节（选举 / 复制 / 提交 / 快照 / 恢复）等可顺序读，也可跳读；可跳过不关心的细节。
 
 ### Raft 速览
 
-> 💡 **提示：** 此小节是对 Raft 的最简介绍，算法细节可参考 [Raft 论文中文翻译](RAFT_PAPER_ZH.md)，或访问 [Raft 官网](https://raft.github.io)（包含一个可交互演示）
+> 💡 **提示：** 此小节是对 Raft 的最简介绍，算法细节可参考 [Raft 论文中文版](RAFT_PAPER_ZH.md)，或访问 [Raft 官网](https://raft.github.io)（包含一个可交互演示）
 
 Raft 解决一个问题：在分布式系统中，多个节点如何对命令的操作顺序达成一致，使其对外看起来像一台单机，即使面临网络延迟、分区和节点故障。
 
@@ -23,7 +35,7 @@ sequenceDiagram
     participant L as 领导者
     participant F1 as 追随者 1
     participant F2 as 追随者 2
-    
+
     C->>L: ① Get 请求
     L->>L: ② 以日志条目形式追加到本地 (本地记录请求)
     par 并发复制日志给追随者
@@ -33,12 +45,12 @@ sequenceDiagram
         L->>F2: ③ 日志条目
         F2-->>L: ④ 确认
     end
-    
+
     Note over L: 收到多数派（含自己）确认
     L->>L: ⑤ 标记日志已提交（请求获得了集群共识）
     L->>L: ⑥ 应用到状态机（执行请求）
     L-->>C: ⑦ 返回请求结果
-    
+
     note over C,F2:提交进度由领导者通过下一次「心跳 / 日志追加 RPC」顺带发送给追随者 —— 以下事件可发生在任一时刻
     par 并发发送
         L->>F1: 携带当前「提交进度」 的 RPC
@@ -57,6 +69,8 @@ sequenceDiagram
   1. **日志复制**：领导者将客户端请求按顺序复制给所有节点。
   2. **日志提交**：领导者依据多数派确认，推进提交进度(即共识进度)并同步给跟随者。
   3. **日志应用**：所有节点将已提交日志顺序应用到状态机。
+
+此外，日志无限制增长会造成存储压力，因此一般需要**快照机制**: 记录截止到某条日志时状态机的状态，并删除其此前的日志以释放存储。 
 
 后续小节会分别展开这些主题并详细说明。
 
@@ -81,8 +95,8 @@ Raft 节点的核心状态包括角色、任期、日志和投票信息等字段
 | 所有节点  | `commitIndex`  | `int`   | 已提交的最大日志索引（多数派已确认）                   |
 |       | `lastApplied`  | `int`   | 已应用到状态机的最大日志索引                       |
 |       | `state`        | `enum`  | 节点当前角色：Follower / Candidate / Leader |
-| 领导者节点 | `nextIndex[]`  | `[]int` | 下一次要发送给各追随者的日志索引                      |
-|       | `matchIndex[]` | `[]int` | 已知已复制到各追随者的最高的日志索引                    |
+| 领导者节点 | `nextIndex[]`  | `[]int` | 下一次要发送给各追随者的日志索引                     |
+|       | `matchIndex[]` | `[]int` | 已知已复制到各追随者的最高的日志索引                   |
 
 **功能性字段**（无需持久化）：
 
@@ -114,32 +128,33 @@ Raft 节点启动后创建 5 类常驻协程，协程间通过 channel 非阻塞
 ![Raft Goroutines](images/raft_goroutines.svg)
 
 - 选举超时、心跳机制各自独立运行，以实现 **领导者维持**：
-	- 领导者节点上，`sendHeartbeat` 每 100ms 广播一次心跳以维持领导权
-	- 非领导者节点上，`ticker` 每隔 300-600ms 间随机时长检查是否期间收到领导者心跳，未收到就重新选举
+    - 领导者节点上，`sendHeartbeat` 每 100ms 广播一次心跳以维持领导权
+  - 非领导者节点上，`ticker` 每隔 300-600ms 间随机时长检查是否期间收到领导者心跳，未收到就重新选举
 - 其余协程则按照「日志复制→日志提交→日志应用」的流程协同实现 **请求共识**：
-	1. 领导者节点上层收到客户端请求后包装为日志，追加到本地，并唤醒`replicateDispatcher` 分发日志给追随者
-	2. `replicateDispatcher` 被唤醒后，观察所有追随者节点日志的状况，如果节点日志落后于自身，则并发唤醒对应的 `replicateWorker` 以RPC形式发送日志给落后节点
-	3. RPC 返回时，观察日志是否获得多数派确认。如果是，则说明日志条目获得了集群共识，通知 `applier` 将日志中的命令投递给状态机
+  1. 领导者节点上层收到客户端请求后包装为日志，追加到本地，并唤醒`replicateDispatcher` 分发日志给追随者
+  2. `replicateDispatcher` 被唤醒后，观察所有追随者节点日志的状况，如果节点日志落后于自身，则并发唤醒对应的 `replicateWorker` 以RPC形式发送日志给落后节点
+  3. RPC 返回时，观察日志是否获得多数派确认。如果是，则说明日志条目获得了集群共识，通知 `applier` 将日志中的命令投递给状态机
 
 > 🌟 **设计决策**：
-> - **异步推进共识流程**：共识流程是线性的，理论上可以使用同步调用实现。但由于流程涉及网络通信、消息重传、文件I/O、状态机应用等耗时操作，在工程层面上，同步调用实现的系统是完全不可用的。因此系统使用了协程和异步通信来保证高效运转，协程也尽量保证单一职责，协程间低耦合。
-> - **协程生命周期管理**：常驻协程生命周期和节点进程绑定，与节点角色无关。若采用"角色强绑定"风格——成为领导者才创建需要的协程、退位即销毁——反而会因角色更替频繁创建/销毁协程，增加管理复杂度且易泄漏。另一方面，由于共识相关协程采用事件驱动，`replicationDispatcher` 与 `replicationWorker` 在追随者节点上长期阻塞、无 CPU 占用，常驻并不产生额外性能开销。
-> - **集中调度 + 独立 worker 协程**：由 `replicationDispatcher` 统一接收信号、判定哪些追随者落后，再精准唤醒对应 worker，是为了集中决策、分散执行，也能解耦了"本地日志追加"与"日志复制"两个子模块；针对每个追随者使用独立的 `replicationWorker`，可按各节点进度并发发送 RPC，落后节点不会阻塞其他节点的复制进度。
+> - **协程生命周期管理**：常驻协程生命周期和节点进程绑定，与节点角色无关，降低管理复杂度且不易泄漏。而由于共识相关协程采用事件驱动，`replicationDispatcher`与`replicationWorker`等与「领导者」角色相关的协程会在追随者节点上长期阻塞、无 CPU 占用，常驻并不产生额外性能开销。
+> - **集中调度 + 独立 worker 协程**：由 `replicationDispatcher` 统一接收信号、判定哪些追随者落后，再精准唤醒对应 worker，可以集中决策、分散执行；针对每个追随者使用独立的 `replicationWorker`，可按各节点进度并发发送 RPC，落后节点不会阻塞其他节点的复制进度。
 > - **单一 applier 协程**：状态应用必须严格按日志顺序串行执行，并发应用会破坏线性一致性，因此使用单一协程执行。
-> - **单一粗粒度锁**：所有共享状态共用一把互斥锁，未细分锁，可以降低死锁风险，减轻使用时的心智负担，代价是可能降低并发度。临界区中大部分操作 (状态读写，少量计算，发送信号) 都极快，只有唯一的慢操作「状态持久化」—— 须在锁内持久化 [Raft 状态](#核心数据结构) ，在日志过长的情况下耗时显著；但由于本系统实现了快照机制，可以控制日志长度上限，进而限制持久化耗时。因此相比细粒度锁，使用粗粒度锁性能损失极小，综合来说是更好的选择。
+> - **单一粗粒度锁**：所有共享状态共用一把互斥锁，未细分锁，可以降低死锁风险，代价是可能降低并发度。临界区中大部分操作 (状态读写，少量计算，发送信号) 都极快，只有唯一的慢操作「状态持久化」—— 须在锁内持久化 [Raft 状态](#核心数据结构) ，在日志过长的情况下耗时显著；但由于本系统实现了快照机制，可以控制日志长度上限，进而限制持久化耗时。因此相比细粒度锁，使用粗粒度锁性能损失极小，综合来说是更好的选择。
 
 在此模型之上，协程间信号传递采用了一套统一的通信模式，下文展开说明。
 
 #### 协程间异步通信
 
 协程间通过 channel 异步通信，表达 「有任务待完成」 语义：
-``` go
+
+```go
     // channel 定义：
     ch := make(chan struct{}, 1) // 最多积压一个信号
 ```
 
 消息生产者：
-``` go
+
+```go
     // 生产者：非阻塞式发送信号，满则丢弃
     select{
     case ch <- struct{}{}:
@@ -148,7 +163,8 @@ Raft 节点启动后创建 5 类常驻协程，协程间通过 channel 非阻塞
 ```
 
 消息消费者：
-``` go
+
+```go
     // 消费者：持续监听信号，并依据当前 Raft 状态执行操作
     for {
         <- ch
@@ -158,7 +174,7 @@ Raft 节点启动后创建 5 类常驻协程，协程间通过 channel 非阻塞
 
 以下以时序图来解释通信机制和实现的效果：
 
-``` mermaid
+```mermaid
 sequenceDiagram
 participant a as 生产者
 participant b as Channel
@@ -191,21 +207,24 @@ deactivate c
 图中信号2、3、4 被压缩为一个信号，因为这些信号传递的语义是相同的 —— 「有任务待完成」；消费者完成当前任务后被唤醒，自行决定行为。
 
 > 🌟 **设计决策**：
-> 此设计未使用经典「生产者-消费者」模型，以 channel 来传递具体任务，主要考虑有两点：
-> 1. **任务有强实效性**。设想一种场景：上游以领导者角色在本地追加了日志并通知下游；一段时间后，下游协程被唤醒，此时角色已不是领导者。若按照任务内容执行，给其他节点发送日志，将会被拒绝，产生不必要的网络通信。
-> 2. **具体任务可以通过 Raft 状态机推导获得，使用 channel 来传递是冗余，且可能造成不一致**。以日志 RPC 为例，`nextIndex[]` 字段记录了下一次应该发送的日志的索引，发送日志的 worker 访问该字段即可推导出任务内容。
 > 
-> 因此，本实现的并发哲学是 **共享内存为主、channel 为辅**：协程之间通过 channel 只传递「有任务待完成」的触发信号；任务内容则由协程被唤醒时 Raft 的状态来决定。
+> 此设计未使用经典「生产者-消费者」模型中以 channel 来传递具体任务，主要考虑有两点：
+> 1. **任务有强实效性**。设想一种场景：上游以领导者角色在本地追加了日志并通知下游；一段时间后，下游协程被唤醒，此时角色已不是领导者。若按照任务内容执行，给其他节点发送日志，将会被拒绝，产生不必要的网络通信。
+> 2. **具体任务可以通过 Raft 状态机推导获得，使用 channel 来传递是冗余，且可能产生不一致**。以日志 RPC 为例，`nextIndex[]` 字段记录了下一次应该发送的日志的索引，发送日志的 worker 访问该字段即可推导出接下来应该发送的日志块。
+> 
+> 因此，本实现的并发哲学仍是 **共享内存为主、channel 为辅**：协程之间通过 channel 只传递「有任务待完成」的触发信号；任务内容则由协程被唤醒时 Raft 的状态来决定。
 
 以上搭建了共识机制的并发骨架：5 类常驻协程通过 channel 信号协同推进「日志复制 → 日志提交 → 日志应用」的共识流程。下文将按此流程顺序逐一展开各机制的实现细节，每一节对应上述某类协程的具体行为：
-- **领导选举与心跳**：`ticker` 与 `sendHeartbeat` 如何维持领导权、超时触发选举；
+
+#todo: 后文完成后添加 link
+- [**领导选举与维持**](#领导选举与维持)：`ticker` 与 `sendHeartbeat` 如何维持领导权、超时触发选举；
 - **日志复制**：`replicationDispatcher` / `replicationWorker` 如何向追随者同步日志；
 - **提交推进与状态应用**：如何判定多数派确认并提交、交给 `applier` 应用；
 - **快照安装** / **故障恢复**：日志压缩与节点重启后的状态重建。
 
-### 领导选举与心跳
+### 领导选举与维持
 
-选举模块负责在集群启动或者领导者失效时，选举出一个新的领导者。其核心目标是保证任意任期内最多只有一个领导者，且经过有限轮投票后必能选出领导者。
+此模块负责在集群启动或者领导者失效时，选举出一个新的领导者；领导者上台后维持自身领导权。
 
 #### 选举触发
 
@@ -224,73 +243,49 @@ ticker(){
     }
 }
 ```
+
 - **随机超时范围 (300-600ms)**：避免多个节点同时检测到超时，发起选举，并平票导致无法迅速选出领导者。
-- **超时判定依据 `lastHeardTime`**：节点收到有效的 RPC 时或发起选举时更新此时间戳，因此只有长时间未与有效领导者通信的节点才会触发选举。
+- **超时判定依据 `lastHeardTime`**：节点收到**有效**的 RPC 时或发起选举时更新此时间戳，因此只有长时间未与有效领导者通信的节点才会触发选举。
 
 > 🌟 **设计决策**：
-> 超时上下限的设置与心跳间隔、网络状况密切相关。这里设为3-6倍心跳间隔，最低只可容忍连续2-3次心跳丢失，前提假设是网络状况较好，故障原因集中在机器宕机；使用低超时以追求更快的故障恢复。网络状况较差时应增大超时时间以保证领导权的稳定性，代价是更慢的故障恢复。
+>
+> 超时上下限的设置与心跳间隔、网络状况密切相关。这里设为3-6倍心跳间隔，最低只可容忍连续2-3次心跳丢失。此设置的前提假设是**网络状况较好，故障多由机器宕机产生**——使用低超时以追求更快的故障恢复。
+> 
+> 反之，如果**网络状况较差，机器宕机不是故障关键**，则应该设置较长的超时时间以避免网络震荡产生的领导权频繁变更，进而导致无法提供服务——代价是故障恢复更慢。
 
 #### 发起选举
 
-节点之间通过 [RequestVote RPC](API.md#requestvote) 来沟通——候选者向其他节点请求投票，携带任期与日志进度（`LastLogIndex` / `LastLogTerm`），回复是否同意（`VoteGranted`）。
-
-当 `ticker` 检测到超时后，调用 `startElection()` 发起选举：
+当 `ticker` 检测到超时后，调用 `startElection()` 发起选举。首先增加任期，转为候选人，为自己投票，并更新 `lastHeardTime` 以防止选举触发器立即再次触发选举。接下来给其他节点发送 [RequestVote RPC](API.md#requestvote) 获取选票；获得超过半数节点的投票则当选为领导者，并初始化每个跟随者的 `nextIndex` 和 `matchIndex`.
 
 ```pseudocode
 // 发起选举 (startElection)
 
-startElection() {
-    // 1. 自增当前任期，转换为候选者身份
-    CurrentTerm++, state = candidate, VotedFor = me, lastHeardTime = 当前时间
-    persist()
-
-    // 2. 构造投票请求，携带自己的日志信息
-    构造 args = RequestVoteArgs{
-        Term:         CurrentTerm,
-        CandidateId:  me,
-        LastLogIndex: lastLogIndex(),
-        LastLogTerm:  lastLogTerm(),
-    }
-
-    // 3. 先投自己一票
-    voteCount = 1
-
-    // 4. 向其他所有节点并发发送投票请求
-    对除自己外所有节点，并发执行 {
-        reply = sendRequestVote(args)
-
-        if 发送失败 { return }
-
-        if reply.Term > CurrentTerm {
-            转为follower, 更新lastHeardTime, persist()
-            return
-        }
-
-        if reply.VoteGranted && state == candidate && 任期未变 {
-            voteCount++
-            if voteCount > N/2 {
-                state = leader
-                nextIndex[] 都重置为 lastLogIndex() + 1
-                matchIndex[] 都重置为 0
-            }
-        }
-    }
+startElection() {  
+    CurrentTerm++, state = candidate, VotedFor = me, lastHeardTime = 当前时间  
+    persist()  
+    构造 args = RequestVoteArgs{  
+        Term: CurrentTerm,  
+        CandidateId: me,  
+        LastLogIndex: lastLogIndex(),  
+        LastLogTerm: lastLogTerm()  
+    }  
+    voteCount = 1  
+    对除自己外所有节点，并发执行 {  
+        reply = sendRequestVote(args)  
+        if 发送失败 { return }  
+        if reply.Term > CurrentTerm { 转为follower, 更新lastHeardTime, persist(); return }  
+        if reply.VoteGranted && state == candidate && 任期未变 {  
+            voteCount++  
+            if voteCount > N/2 { state = leader; nextIndex[] 都重置为 lastLogIndex() + 1; matchIndex[] 都重置为 0 }  
+        }  
+    }  
 }
 ```
 
-设计要点：
-
-| 步骤                     | 说明                                        |
-|------------------------|-------------------------------------------|
-| 先 `persist()` 再发 RPC   | 确保节点崩溃重启后不会忘记自己发起了选举，在一轮中多次投票             |
-| 携带 `LastLogIndex/Term` | 保证当选者包含全部已提交日志                            |
-| 并发发送 RPC               | 减少选举耗时，避免在选举期间错过下一轮心跳                     |
-| 收到更高任期立即降级             | 防止多个任期分裂，保证任期单调递增                         |
-| 收到过半节点投票即变为领导者         | 容忍少数节点宕机时仍能选出领导者                          |
-
 #### 应对投票请求
 
-节点收到 `RequestVote RPC` 后，按以下顺序判定是否投票：
+节点收到 `RequestVote RPC` 后，则比较候选人的日志长度和任期来决定是否要投票：
+只有候选人的日志至少与接收方一样新（即候选人的最后一条日志任期更大，或者任期相同但索引更大或相等）时才会同意投票。这一机制确保当选者的日志包含所有已提交的日志条目。
 
 ```pseudocode
 // 投票请求处理 (RequestVote)
@@ -299,7 +294,7 @@ RequestVote(args, reply) {
     // 1. 任期判定：收到更高任期则立即降级
     if args.Term > CurrentTerm { 转为follower }
 
-    // 2. 投票三条件（任期足够 且 未投票 且 日志不旧于自己）
+    // 2. 投票三条件（任期足够 && 此任期内未投票 && 候选者日志不旧于自己）
     if args.Term >= CurrentTerm
        && (VotedFor == -1 || VotedFor == args.CandidateId)
        && (args.LastLogTerm > lastLogTerm()
@@ -318,18 +313,15 @@ RequestVote(args, reply) {
 
 投票三条件含义：
 
-| 条件                                                 | 说明                        |
-|----------------------------------------------------|---------------------------|
-| `args.Term >= CurrentTerm`                         | 不能给任期更低的候选者投票（防止过期节点重新当选） |
-| `VotedFor == -1 \|\| VotedFor == args.CandidateId` | 同一任期内只投一票，防止脑裂            |
-| 候选者日志不旧于自己                                         | 日志最新的节点才能当选，保证已提交日志不丢失    |
+| 条件                                              | 说明                     |
+|-------------------------------------------------|------------------------|
+| `args.Term >= CurrentTerm`                      | 不能给任期更低的候选者投票          |
+| `VotedFor == -1 或 VotedFor == args.CandidateId` | 同一任期内只投一票，防止脑裂         |
+| 候选者日志不旧于自己                                      | 日志最新的节点才能当选，保证已提交日志不丢失 |
 
-日志比较规则（条件 3 的展开）：
-
-1. 先比较**最后一条日志的 Term**：任期更大的日志更新
-2. Term 相同时比较**最后一条日志的 Index**：Index 更大的日志更新
-
-此规则确保：若某节点拥有已提交的日志，它不会投票给**不包含该日志**的候选者，从而保证已提交日志永远不丢失。
+其中，日志新旧通过比较两个节点的**最后一条日志**来判定：
+1. 先比较 Term：任期更大的日志为新
+2. Term 相同时比较 Index：index 更大的日志为新
 
 #### 心跳维持
 
@@ -341,39 +333,110 @@ RequestVote(args, reply) {
 sendHeartbeat() {
     循环执行 {
         if 当前是leader {
-            对除自己外所有节点 并发执行 replicateToFollower()
+            对除自己外所有节点并发执行 replicateToFollower()
         }
         休眠 100ms
     }
 }
 ```
 
-心跳在 Raft 中的作用：
-
-| 作用     | 说明                                                                       |
-|--------|--------------------------------------------------------------------------|
-| 宣告领导权  | 追随者收到心跳后更新 `lastHeardTime`，重置选举超时                                        |
-| 携带提交信息 | 心跳中携带 `LeaderCommit`，追随者据此推进自己的 `commitIndex`（详见[提交推进与状态应用](#提交推进与状态应用)） |
-
-100ms 间隔的选择依据：远小于选举超时下限（300ms），即使网络有轻微抖动，追随者也能连续收到至少 2-3 次心跳才会超时，有效防止误触发选举。
-
-当心跳 RPC 发现追随者日志落后时（`nextIndex[i] <= lastLogIndex()`），`replicateToFollower()` 会使用携带日志条目的 [AppendEntries RPC](API.md#appendentries)（携带 `PrevLogIndex` / `PrevLogTerm` 做一致性检查、`LeaderCommit` 推进提交）或带有状态机快照的 [InstallSnapshot RPC](API.md#installsnapshot)（向日志过短的追随者发送完整快照以快速追上），以保证在维持心跳的同时完成日志同步（详见[日志冲突快速回退](#日志冲突快速回退)）。
+这里 `replicateToFollower()` 内部会根据追随者节点日志的情况发送不同的 RPC:
+- 如果领导者有追随者缺少的日志，则使用 [AppendEntries RPC](API.md#appendentries) 发送日志
+- 如果领导者本地已清理追随者需要的日志，则使用 [InstallSnapshot RPC](API.md#installsnapshot) 发送快照（某一时刻的全量数据状态）
 
 ### 日志复制
-领导者通过日志复制将上层命令分发给所有追随者，以作为后续共识的基础
+
+领导者通过日志复制将上层命令分发给所有追随者，作为共识的基础。
+
 #### 整体流程
-日志复制从上层 RSM 调用 `Start(command)` 开始，逐步推进，完成目标是 Follower 日志与 Leader 完全一致。
-![LogReplicationFlow](images/log_replication_flow.svg)
-1. `Start(command)` 本地追加日志
+
+以三节点 Raft 为例 (此刻节点 1、2 是追随者)，以下是日志复制的流程:
+
+```mermaid
+sequenceDiagram
+    participant RSM as Raft 上层
+    participant D as 协程 replicationDispatcher
+    participant W1 as 协程 replicationWorker 1
+    participant W2 as 协程 replicationWorker 2
+    RSM->>D: Start(command) 追加日志
+    D-->>RSM: 立即返回（异步，不阻塞）
+    D->>W1: 通知 follower 1 日志待同步
+    D->>W2: 通知 follower 2 日志待同步
+    par 并发执行 synchroniseFollower 同步日志
+        W1->>W1: synchroniseFollower(1)
+    and 
+        W2->>W2: synchroniseFollower(2)
+    end
+```
+
+第一阶段：上层调用 Raft 的 [Start (command)](API.md#raft-共识模块接口) 在「领导者」节点本地追加日志
+
+```pseudocode
+// 第一阶段：Start() 本地日志追加 
+
+Start(command) {  
+    if 节点是leader { 
+        Log.append({Term: CurrentTerm, Command: command})
+        persist()
+        notify(logAppendedCh) // 通知 replicationDispatcher 分发日志
+        return lastLogIndex, CurrentTerm, true  
+    }else { // 非领导者节点不会接受日志
+	    return -1, -1, false
+    }
+}
+```
+
+第二阶段：将「追加日志」的消息传递到链路末端，触发日志复制
+
+```pseudocode
+// 第二阶段：replicationDispatcher 分发信号；replicationWorker 接受信号，调用 synchroniseFollower 方法
+
+replicationDispatcher() {
+循环等待 logAppendedCh 信号 {
+        if 不再是leader { continue }
+        遍历所有节点 {
+            if nextIndex[i] <= lastLogIndex() {  // 若该节点日志落后
+                notify(replicateReadyChs[i] // 通知对应 replicationWorker 复制
+            }
+        }
+    }
+}
+
+replicationWorker(i) {  
+    循环等待 replicateReadyCh[i] 信号{
+	    收到信号后执行 synchroniseFollower(i) 
+    }  
+}
+```
+
+第三阶段：通过 RPC 同步「追随者」日志到与「领导者」一致
+
+```pseudocode
+// 第三阶段：synchroniseFollower 循环同步节点日志
+
+synchroniseFollower(i) {
+    needReplicate = nextIndex[i] <= lastLogIndex() && 此节点当前是 Leader // 检查节点是否需要同步
+    while needReplicate {
+        rpcOK = replicateToFollower(i)  // 发送 AppendEntries 或 InstallSnapshot，推进 nextIndex[i] 和 matchIndex[i]
+        if !rpcOK { // 如果 RPC 失败
+            backoff  // 退避 (指数级) 
+        }
+        检查并更新 needReplicate // 完成后继续检查是否还需推进
+    }
+}
+```
+
+> 🌟 **设计决策**：`replicateToFollower(i)` 失败时不立即重试，而采用指数退避（以 100ms 为基准、2s 为上限，RPC 成功则回正退避时间），可以防止因节点宕机产生重试风暴，造成网络拥塞。
 
 #### 冲突回退
+
 针对 Raft 论文中逐条回退的低效问题，实现了三种冲突情况的优化。核心思路是每次回复携带足够信息，使领导者一次回退跳过整个冲突任期，而非逐条尝试：
 
-| 冲突类型 | 追随者回复 | 领导者处理 |
-|---------|-----------|-----------|
-| PrevLogIndex 处 Term 不匹配 | `ConflictTerm=T, ConflictIndex=该任期第一条索引` | 跳到领导者日志中 ConflictTerm 最后一条的后一个位置 |
-| 追随者日志过短 | `ConflictTerm=-1, ConflictIndex=LastLogIndex+1` | nextIndex = ConflictIndex |
-| 日志已被压缩 | `ConflictTerm=-1, ConflictIndex=LastIncludedIndex+1` | nextIndex = ConflictIndex → 触发 InstallSnapshot |
+| 冲突类型                    | 追随者回复                                                | 领导者处理                                          |
+|-------------------------|------------------------------------------------------|------------------------------------------------|
+| PrevLogIndex 处 Term 不匹配 | `ConflictTerm=T, ConflictIndex=该任期第一条索引`             | 跳到领导者日志中 ConflictTerm 最后一条的后一个位置               |
+| 追随者日志过短                 | `ConflictTerm=-1, ConflictIndex=LastLogIndex+1`      | nextIndex = ConflictIndex                      |
+| 日志已被压缩                  | `ConflictTerm=-1, ConflictIndex=LastIncludedIndex+1` | nextIndex = ConflictIndex → 触发 InstallSnapshot |
 
 第二、三种冲突实质都是领导者声明的 PrevLogIndex 处日志在追随者中不存在，无法分辨 Term 是否匹配。追随者通过合理的 RPC 回复引导领导者将这些不确定性冲突转化为可判断的第一种冲突，通过实证找到冲突点。
 
@@ -386,10 +449,11 @@ sendHeartbeat() {
 不同角色推进 commitIndex 的方式不同：
 
 - **领导者**：为每个追随者维护 matchIndex[i]，追踪各节点的复制进度。某次 AppendEntries RPC 成功后，更新 matchIndex[i]，然后从后向前扫描日志，找到满足以下三个条件的最大索引 N：
+  
   1. N > 当前 commitIndex
   2. Log[N].Term == CurrentTerm（仅提交当前任期的日志，防止提交已覆盖的旧任期条目）
   3. 超过半数的节点 matchIndex[i] >= N（多数派已复制）
-  若找到，则 commitIndex = N。
+     若找到，则 commitIndex = N。
 
 - **追随者**：每次收到 AppendEntries RPC 时读取 LeaderCommit，若大于自身 commitIndex，则尽最大可能推进。收到 InstallSnapshot 时同样检查快照的 LastIncludedIndex。
 
@@ -450,11 +514,11 @@ RSM 将服务层抽象为 StateMachine 接口（DoOp / Snapshot / Restore），�
 
 Submit() 进入等待后，采用三路等待循环覆盖可能发生的不同情况：
 
-| 等待条件 | 触发方式 | 处理 |
-|---------|---------|------|
-| 领导权变化 | 每 100ms 检查 GetState() | 不再是领导者 → 返回 ErrWrongLeader |
-| 共识结果返回 | 结果通道收到 applyResult | 检查 opId 匹配 → 返回结果；不匹配 → 返回 ErrWrongLeader |
-| Raft 终止 | Raft 节点关闭信号 | 立即退出，返回 ErrWrongLeader |
+| 等待条件    | 触发方式                  | 处理                                        |
+| ------- | --------------------- | ----------------------------------------- |
+| 领导权变化   | 每 100ms 检查 GetState() | 不再是领导者 → 返回 ErrWrongLeader                |
+| 共识结果返回  | 结果通道收到 applyResult    | 检查 opId 匹配 → 返回结果；不匹配 → 返回 ErrWrongLeader |
+| Raft 终止 | Raft 节点关闭信号           | 立即退出，返回 ErrWrongLeader                    |
 
 **保守返回 ErrWrongLeader 的合理性**：当旧领导者发现领导权丢失时，它无法区分两种情况：①日志尚未复制到多数节点，必然无法提交；②日志已复制到多数节点，但旧领导者尚未观察到共识。旧领导者只能保守地返回 ErrWrongLeader，由客户端重试和新领导者的去重机制修复。
 
@@ -513,11 +577,11 @@ Absent ──Install──→ Serving ──Freeze──→ Frozen ──Delete�
   └────────────────────────────────────────────────────────┘
 ```
 
-| 状态 | 含义 | 可接受操作 |
-|------|------|-----------|
-| Absent | 分片不在此组 | 无 |
-| Serving | 正常服务 | Get, Put |
-| Frozen | 已冻结等待迁出 | Get（只读） |
+| 状态      | 含义      | 可接受操作    |
+| ------- | ------- | -------- |
+| Absent  | 分片不在此组  | 无        |
+| Serving | 正常服务    | Get, Put |
+| Frozen  | 已冻结等待迁出 | Get（只读）  |
 
 Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多次读取同一键不会返回不同值）。
 
@@ -535,6 +599,7 @@ Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多�
 **冗余传输权衡**：筛选策略可能携带部分与当前分片无关的去重记录（因客户端串行写入，只有最后一次写操作的记录有去重价值，其余是陈旧的），但选择此冗余策略避免了维护"客户端-分片精确定位"的复杂索引结构。在分片数较多时，冗余数据会累积，但不会影响系统正确性。
 
 新组收到数据后的合并策略：
+
 - 键值数据：直接覆盖本地对应分片（前提是新组本地无该分片数据）
 - 去重记录：以"保留更大 ReqId"的原则合并至本地，防止旧记录覆盖新记录；同时将客户端编号加入本地 `shardClients[shid]`
 
@@ -548,10 +613,10 @@ Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多�
 
 **请求分类哲学**：
 
-| 类别 | 判定 | 处理 |
-|------|------|------|
-| 新请求 | 配置号等于当前状态 + 推进值 | 正常执行，返回 OK |
-| 旧请求 | 配置号小于等于当前状态对应值 | 幂等执行，返回 OK |
+| 类别   | 判定                   | 处理                         |
+| ---- | -------------------- | -------------------------- |
+| 新请求  | 配置号等于当前状态 + 推进值      | 正常执行，返回 OK                 |
+| 旧请求  | 配置号小于等于当前状态对应值       | 幂等执行，返回 OK                 |
 | 非法请求 | 配置号大于当前状态 + 推进值，或跳状态 | 不执行，返回 ErrIllegalOperation |
 
 整体哲学：唯一能按规则将当前状态推动至下一状态的请求是新请求；所有能将分片带入当前状态或其前驱状态的请求是旧请求；其他均是非法请求。
@@ -620,3 +685,23 @@ Frozen 状态下分片不接受任何写操作，但读操作仍可执行（多�
 采用"缓存 + 按需刷新"的原因：配置变更频率远低于数据读写请求，若每次请求都查询最新配置会增加不必要的延迟。
 
 **去重的位置设计**：去重机制放在外层的分片调度员而非底层的组内调度员，因为去重是**跨分片语义**。当键因分片迁移移动到新组时，只有外层分片调度员能感知这一变化，使用同一序列号向新组重试请求。底层组内调度员无法跨组行为，无法分辨一个请求是全新还是重试。
+
+---
+
+## 正确性验证
+
+分布式系统的价值取决于其正确性是否可证。本项目通过三层手段保证并验证正确性：
+
+1. **线性一致性检验器（kvtest）**：基于模型检查，将客户端并发操作历史回放，与单副本顺序语义比对，确认系统对外表现线性一致（参考 [Porcupine](https://github.com/anishathalye/porcupine) 思路）。
+2. **仿真故障注入（labrpc Network）**：支持丢包、乱序、延迟、网络分区，且故障模型比真实机房网络更恶劣，使共识逻辑在确定性环境中经受超额考验。
+3. **73 个测试用例（TESTING.md）**：覆盖选举、日志复制、快照、配置变更、分片迁移、客户端去重等关键路径。
+4. **可视化演示（shardkv-demo）**：Web 控制台实时展示节点状态与分片分布，支持 kill 节点、网络分区、混沌猴子，用于交互式观察系统行为。
+
+## 已知限制与边界
+
+为聚焦共识与分片核心逻辑，本项目在以下方面做了有意简化（面试中可坦诚说明边界）：
+
+- **传输层**：使用课程框架 labrpc（进程内 RPC + 故障注入），非生产级 gRPC；生产部署需替换传输层并引入真实磁盘持久化（`FilePersister` 已实现 crash-safe 落盘与崩溃恢复测试，待接入部署路径）。
+- **副本配置**：单分片组固定 3 副本，未实现动态扩缩副本数。
+- **部署形态**：当前以单机构建 / 容器内多进程方式运行，未做跨机 / 跨数据中心部署。
+- **配置仓库**：为单 Raft 组，存在理论单点；因配置变更频率极低，实践中可接受。

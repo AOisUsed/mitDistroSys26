@@ -27,12 +27,12 @@
 
 ## Raft 共识模块接口
 
-| 接口                                         | 说明                                     |
-|--------------------------------------------|----------------------------------------|
-| `Start(command) → (index, term, isLeader)` | 尝试对命令进行集群共识，返回 命令在日志中索引，对应任期，此节点是否为领导者 |
-| `GetState() → (term, isLeader)`            | 获取当前任期和角色                              |
-| `Snapshot(index, snapshot)`                | 向 Raft 传递快照，触发日志压缩                     |
-| `PersistBytes() → size`                    | 获取日志和 Raft 状态占用字节数                     |
+| 接口                                         | 说明                                       |
+|--------------------------------------------|------------------------------------------|
+| `Start(command) → (index, term, isLeader)` | 尝试对命令进行集群共识，返回 (命令在日志中索引，对应任期，此节点是否为领导者) |
+| `GetState() → (term, isLeader)`            | 获取当前任期和角色                                |
+| `Snapshot(index, snapshot)`                | 向 Raft 传递快照，触发日志压缩                       |
+| `PersistBytes() → size`                    | 获取日志和 Raft 状态占用字节数                       |
 
 ## RSM 层接口
 
