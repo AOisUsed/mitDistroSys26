@@ -274,8 +274,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// at this point, this raft would be a follower
-	// case leader: doesn't care AppenEntries from out-of-term leaders, reply with success=false
-	// start framing AppenEntries reply
+	// start structuring AppenEntries reply
 	var success bool
 	var conflictTerm, conflictIndex int
 
@@ -763,7 +762,7 @@ func (rf *Raft) replicateToFollower(i int) bool {
 	nextIndex := reply.ConflictIndex
 	if reply.ConflictTerm != -1 { //case where follower Log has an entry at PrevLogIndex
 		//search backwards until conflictIndex to see if the term exists
-		for j := rf.lastLogIndex(); j >= rf.LastIncludedIndex && j >= reply.ConflictIndex; j-- {
+		for j := args.PrevLogIndex; j >= rf.LastIncludedIndex && j >= reply.ConflictIndex; j-- {
 			if rf.Log[rf.sliceIndex(j)].Term == reply.ConflictTerm { // term exists
 				nextIndex = j + 1
 				break

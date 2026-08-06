@@ -180,18 +180,18 @@ RSM 层通过 ApplyMsg channel 从 Raft 接收已提交的日志命令或快照�
 
 ### AppendEntries
 
-| 方向     | 字段            | 类型         | 说明          |
-|--------|---------------|------------|-------------|
-| **请求** | Term          | int        | 领导者任期       |
-|        | LeaderId      | int        | 领导者节点 ID    |
-|        | PrevLogIndex  | int        | 新日志前一条日志的索引 |
-|        | PrevLogTerm   | int        | 新日志前一条日志的任期 |
-|        | Entries       | []LogEntry | 待追加的日志条目    |
-|        | LeaderCommit  | int        | 领导者的已提交索引   |
-| **回复** | Success       | bool       | 是否接受日志追加    |
-|        | Term          | int        | 接收方当前任期     |
-|        | ConflictTerm  | int        | 冲突位置日志的任期   |
-|        | ConflictIndex | int        | 冲突位置日志索引    |
+| 方向     | 字段            | 类型         | 说明            |
+|--------|---------------|------------|---------------|
+| **请求** | Term          | int        | 领导者任期         |
+|        | LeaderId      | int        | 领导者节点 ID      |
+|        | PrevLogIndex  | int        | 新日志前一条日志的索引   |
+|        | PrevLogTerm   | int        | 新日志前一条日志的任期   |
+|        | Entries       | []LogEntry | 待追加的日志条目      |
+|        | LeaderCommit  | int        | 领导者的最大已提交日志索引 |
+| **回复** | Success       | bool       | 是否接受日志追加      |
+|        | Term          | int        | 接收方当前任期       |
+|        | ConflictTerm  | int        | 冲突位置日志的任期     |
+|        | ConflictIndex | int        | 冲突任期内第一条日志索引  |
 
 #### 日志条目 LogEntry
 

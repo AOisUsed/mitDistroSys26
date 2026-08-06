@@ -7,7 +7,7 @@
 - **强一致性**：对外表现线性一致，所有操作如同在单机按顺序执行。
 - **高可用**：每组多副本，容忍少数节点宕机，多数派在线即可继续服务。
 - **水平扩展**：数据按哈希分片，多 Raft 组间解耦，扩容通过分片迁移重新分布。
-- **可观测与可运维**：快照压缩日志、在线分片迁移、故障恢复，并辅以 Web 控制台实时观测与故障注入演示。
+- **可观测与可操控**：快照压缩日志、在线分片迁移、故障恢复，并辅以 Web 控制台实时观测与故障注入演示。
 
 > 本文档聚焦各模块的详细设计；系统架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md)，功能导览见 [WALKTHROUGH.md](WALKTHROUGH.md)。
 
@@ -70,7 +70,7 @@ sequenceDiagram
   2. **日志提交**：领导者依据多数派确认，推进提交进度(即共识进度)并同步给跟随者。
   3. **日志应用**：所有节点将已提交日志顺序应用到状态机。
 
-此外，日志无限制增长会造成存储压力，因此一般需要**快照机制**: 记录截止到某条日志时状态机的状态，并删除其此前的日志以释放存储。 
+此外，日志无限制增长会造成存储压力，因此一般需要**快照机制**: 记录截止到某条日志时状态机的状态，并删除其此前的日志以释放存储。
 
 后续小节会分别展开这些主题并详细说明。
 
@@ -80,13 +80,14 @@ Raft 节点的核心状态包括角色、任期、日志和投票信息等字段
 
 **持久化状态**（每次修改需持久化，否则崩溃重启后会丢失，产生数据一致性问题或集群脑裂）：
 
-| 字段                  | 类型           | 说明                            |
-|---------------------|--------------|-------------------------------|
-| `CurrentTerm`       | `int`        | 节点当前已知的最新任期，防止同一任期重复投票        |
-| `VotedFor`          | `int`        | 当前任期已投票的候选者编号，-1 表示未投票        |
-| `Log[]`             | `[]LogEntry` | 日志数组，每个条目包含 Term 和 Command    |
-| `LastIncludedIndex` | `int`        | 快照中包含的最大日志索引（日志压缩后日志数组的起始偏移量） |
-| `SnapshotData`      | `[]byte`     | 快照数据（日志压缩时保存的状态机状态）           |
+| 字段                  | 类型           | 说明                                                                                                         |
+|---------------------|--------------|------------------------------------------------------------------------------------------------------------|
+| `CurrentTerm`       | `int`        | 节点当前已知的最新任期，防止同一任期重复投票                                                                                     |
+| `VotedFor`          | `int`        | 当前任期已投票的候选者编号，-1 表示未投票                                                                                     |
+| `Log[]`             | `[]LogEntry` | 日志数组，每个条目包含 `Term` 和 `Command`                                                                             |
+| `LastIncludedIndex` | `int`        | 快照中包含的最大日志索引（日志压缩后日志数组的起始偏移量）                                                                              |
+| `LastIncludedTerm`  | `int`        | `LastIncludedIndex`处日志的`Term` (注：本实现中在日志数组中保留一个 dummy entry 作为`LastIncludedIndex`处的日志，所以此信息通过推导获得，不单独存储字段） |
+| `SnapshotData`      | `[]byte`     | 快照数据（日志压缩时保存的状态机状态）                                                                                        |
 
 **易失状态**（可恢复，无需持久化）：
 
@@ -235,14 +236,17 @@ deactivate c
 
 ticker(){
     循环执行 {
-        electionTimeout = 300-600 ms
-        if 当前为follower/candidate 且 lastHeardTime-当前时间 > electionTimeout { 
+        electionTimeout = 300-600 ms // 超时时间
+        if 当前为follower/candidate 且 
+        lastHeardTime-当前时间 > electionTimeout { 
             startElection()
         }
         休眠 electionTimeout
     }
 }
 ```
+
+`ticker` 醒来发现没有收到领导者 RPC 就会触发选举。
 
 - **随机超时范围 (300-600ms)**：避免多个节点同时检测到超时，发起选举，并平票导致无法迅速选出领导者。
 - **超时判定依据 `lastHeardTime`**：节点收到**有效**的 RPC 时或发起选举时更新此时间戳，因此只有长时间未与有效领导者通信的节点才会触发选举。
@@ -320,8 +324,8 @@ RequestVote(args, reply) {
 | 候选者日志不旧于自己                                      | 日志最新的节点才能当选，保证已提交日志不丢失 |
 
 其中，日志新旧通过比较两个节点的**最后一条日志**来判定：
-1. 先比较 Term：任期更大的日志为新
-2. Term 相同时比较 Index：index 更大的日志为新
+1. 先比较 `Term`：任期更大的日志为新
+2. `Term` 相同时比较 `Index`：`Index` 更大的日志为新
 
 #### 心跳维持
 
@@ -333,16 +337,14 @@ RequestVote(args, reply) {
 sendHeartbeat() {
     循环执行 {
         if 当前是leader {
-            对除自己外所有节点并发执行 replicateToFollower()
+            对除自己外所有节点并发执行 replicateToFollower() 
         }
         休眠 100ms
     }
 }
 ```
 
-这里 `replicateToFollower()` 内部会根据追随者节点日志的情况发送不同的 RPC:
-- 如果领导者有追随者缺少的日志，则使用 [AppendEntries RPC](API.md#appendentries) 发送日志
-- 如果领导者本地已清理追随者需要的日志，则使用 [InstallSnapshot RPC](API.md#installsnapshot) 发送快照（某一时刻的全量数据状态）
+其中，`replicateToFollower()` 内部会根据追随者节点日志的情况发送不同的 RPC，但都可起到维持节点领导权的作用。方法内部详见下方 [日志复制](#日志复制) 小节。
 
 ### 日志复制
 
@@ -386,7 +388,7 @@ Start(command) {
 }
 ```
 
-第二阶段：将「追加日志」的消息传递到链路末端，触发日志复制
+第二阶段：将「追加日志」的消息传递到链路末端，触发节点日志同步
 
 ```pseudocode
 // 第二阶段：replicationDispatcher 分发信号；replicationWorker 接受信号，调用 synchroniseFollower 方法
@@ -396,7 +398,7 @@ replicationDispatcher() {
         if 不再是leader { continue }
         遍历所有节点 {
             if nextIndex[i] <= lastLogIndex() {  // 若该节点日志落后
-                notify(replicateReadyChs[i] // 通知对应 replicationWorker 复制
+                notify(replicateReadyChs[i]) // 通知对应 replicationWorker 复制
             }
         }
     }
@@ -412,35 +414,106 @@ replicationWorker(i) {
 第三阶段：通过 RPC 同步「追随者」日志到与「领导者」一致
 
 ```pseudocode
-// 第三阶段：synchroniseFollower 循环同步节点日志
+// 第三阶段：synchroniseFollower 循环，同步节点日志
 
 synchroniseFollower(i) {
     needReplicate = nextIndex[i] <= lastLogIndex() && 此节点当前是 Leader // 检查节点是否需要同步
     while needReplicate {
-        rpcOK = replicateToFollower(i)  // 发送 AppendEntries 或 InstallSnapshot，推进 nextIndex[i] 和 matchIndex[i]
+        rpcOK = replicateToFollower(i) 
         if !rpcOK { // 如果 RPC 失败
             backoff  // 退避 (指数级) 
         }
         检查并更新 needReplicate // 完成后继续检查是否还需推进
     }
 }
+
+// 发送 RPC 
+replicateToFollower(i){
+	if nextIndex[i] > LastIncludedIndex {
+		发送 AppendEntries RPC
+	}else {
+		发送 InstallSnapshot RPC
+	}
+}
 ```
+这里 `replicateToFollower()` 内部会根据追随者节点日志的情况发送不同的 RPC:
+- 如果领导者有追随者缺少的日志，则使用 [AppendEntries RPC](API.md#appendentries) 发送日志 （详见 [日志复制与冲突修复](#日志复制与冲突修复)）
+- 如果领导者本地已清理追随者需要的日志，则使用 [InstallSnapshot RPC](API.md#installsnapshot) 发送快照（）
 
-> 🌟 **设计决策**：`replicateToFollower(i)` 失败时不立即重试，而采用指数退避（以 100ms 为基准、2s 为上限，RPC 成功则回正退避时间），可以防止因节点宕机产生重试风暴，造成网络拥塞。
+> 🌟 **设计决策**：`replicateToFollower(i)` RPC 失败时不立即重试，而采用指数退避（以 100ms 为基准、2s 为上限，RPC 成功则回正退避时间），可以防止因目标节点宕机大量重试，造成网络拥塞。
 
-#### 冲突回退
+#### 日志复制与冲突修复
 
-针对 Raft 论文中逐条回退的低效问题，实现了三种冲突情况的优化。核心思路是每次回复携带足够信息，使领导者一次回退跳过整个冲突任期，而非逐条尝试：
+##### 日志复制
 
-| 冲突类型                    | 追随者回复                                                | 领导者处理                                          |
-|-------------------------|------------------------------------------------------|------------------------------------------------|
-| PrevLogIndex 处 Term 不匹配 | `ConflictTerm=T, ConflictIndex=该任期第一条索引`             | 跳到领导者日志中 ConflictTerm 最后一条的后一个位置               |
-| 追随者日志过短                 | `ConflictTerm=-1, ConflictIndex=LastLogIndex+1`      | nextIndex = ConflictIndex                      |
-| 日志已被压缩                  | `ConflictTerm=-1, ConflictIndex=LastIncludedIndex+1` | nextIndex = ConflictIndex → 触发 InstallSnapshot |
+领导者通过 [AppendEntries RPC](API.md#appendentries) 来进行批量日志复制。
 
-第二、三种冲突实质都是领导者声明的 PrevLogIndex 处日志在追随者中不存在，无法分辨 Term 是否匹配。追随者通过合理的 RPC 回复引导领导者将这些不确定性冲突转化为可判断的第一种冲突，通过实证找到冲突点。
+领导者节点上为每个追随者分别记录了`nextIndex` 和 `matchIndex`。每次发送日志时，以`nextIndex` 作为作为日志起始位置。`matchIndex` 记录了最后一个匹配日志的位置，日志复制成功后单调递增更新 `matchIndex`. 此外，`nextIndex` 始终大于 `matchIndex`
 
-日志压缩可能导致冲突回退无法使用 AppendEntries 解决（领导者需要发送的日志已被截断），此时转为发送 InstallSnapshot。
+`AppendEntries RPC` 中附带字段 `PrevLogIndex`, `PrevLogTerm`, 记录了待发送日志前一条的信息。追随者收到 RPC 后利用此信息检查，只有本地日志中 `PrevLogIndex` 处的 `Term` 与`PrevLogTerm`一致，才接受这条 RPC 中的全部日志，如下图所示：
+
+![接受日志复制](images/appendEntries_accept.svg)
+
+Raft 的 [**日志匹配性质**](RAFT_PAPER_ZH.md#5-raft-共识算法) 保证这一点：如果跟随者与领导者在同一位置日志条目的 `Term` 匹配，则此日志及此前的所有日志都匹配。
+##### 冲突的类型与修复
+
+但日志复制并非都能成功。领导者可能会因崩溃而更替，新领导者当选时，并不保证所有追随者的日志与它完全一致。因此，某次 `AppendEntries RPC` 到达时，追随者在 `PrevLogIndex` 处可能**没有日志**，或**这条日志的 Term 与领导者不同**，即「日志冲突」。
+
+修复冲突的方式是：追随者找到与新领导者**最后一条匹配日志**的位置，把该位置之后的日志整体覆盖为领导者的。问题的关键由此转变为了「如何找到**最后一条匹配日志**的位置」。最朴素的做法是，每次 RPC 回退一条日志，直到发现匹配点。本实现则使用优化：通过让追随者在 RPC 回复中携带额外信息(`ConflictTerm` / `ConflictIndex`), 使领导者能一次最多跳过一个任期内所有日志，加快消除冲突。
+
+首先来看冲突类型。在收到一条 `AppendEntries RPC`时，追随者在 `PrevLogIndex` 处的日志有三种典型状态，对应**三类冲突**，如下图所示：
+
+![日志复制冲突](images/appendEntries_conflicts.svg)
+
+- **冲突 1 · 有日志但任期不匹配**：追随者有 12 号日志，但 `Term` 与领导者不同。典型场景——旧领导者（任期 5）曾向它复制大量日志，其中仅 9、10 号最终获得集群共识；新领导者上任后，该节点 12 号日志遂与领导者冲突。
+- **冲突 2 · 无日志（日志过短）**：追随者最高只有 9 号日志，连 `PrevLogIndex` 都未达到。典型场景——该节点曾被网络分区，直到此刻才恢复，因而整体落后。
+- **冲突 3 · 无日志（已被压缩）**：`PrevLogIndex` 处日志已被快照截断，无法追溯。典型场景——一条 `AppendEntries` 因网络延迟未及时送达，领导者超时重发并成功推进共识，随后追随者拍摄了含 1–14 号日志的快照；当延迟的那条 RPC 终于到达时，12 号日志已不存在。
+
+针对三类冲突，追随者有不同回复；领导者则根据回复修改 `nextIndex`, 以调整下一次 `AppendEntries RPC` 中发送日志的起始位置，如下表所示：
+
+| 冲突类型    | 追随者回复 `ConflictTerm` | 追随者回复 `ConflictIndex`    | 领导者设置 `nextIndex`                                                |
+|---------|----------------------|--------------------------|------------------------------------------------------------------|
+| 日志任期不匹配 | `PrevLogIndex` 处日志任期 | `ConflictTerm` 内第一条日志的索引 | 如果本地有`ConflictTerm` 任期内日志，设为该任期最后一条日志的后一个位置；否则设为 `ConflictIndex` |
+| 日志过短    | -1                   | `LastLogIndex` + 1       | `ConflictIndex`                                                  |
+| 日志已被压缩  | -1                   | `LastIncludedIndex` + 1  | `ConflictIndex`                                                  |
+
+接下来以例说明。
+
+**冲突 1：**
+
+![日志复制冲突1](images/appendEntries_conflict_1.svg)
+
+上图按时间顺序展示了情况 1 的处理方法，可与上表 **「日志任期不匹配」** 一行对照阅读：
+1. **发送**：领导者发出 `AppendEntries`（`PrevLogIndex=12, PrevLogTerm=6`）。追随者在 12 号处的日志任期为 5，与声明不符，拒绝。
+2. **回复**：追随者找到 12 号日志所属任期（Term=5）的**第一条**索引，将其信息 `ConflictTerm=5, ConflictIndex=9` 连同 `Success=false` 返回——语义是 "冲突日志属于任期 5，请在该任期内找到匹配日志"。
+3. **回退**：领导者据此回复将 `nextIndex` 回退到 11，即日志分歧起点。
+
+**冲突 2：**
+
+![日志复制冲突2](images/appendEntries_conflict_2.svg)
+
+上图按时间顺序展示了情况 2 的处理方法，可与上表 **「日志过短」** 一行对照阅读：
+1. **发送**：领导者发出 `AppendEntries`（`PrevLogIndex=12, PrevLogTerm=6`）。追随者最高只有 9 号日志，未达到 `PrevLogIndex=12` ，拒绝。
+2. **回复**：追随者发现自己日志过短，于是将 `ConflictTerm=-1, ConflictIndex=10`（`10` 即 `LastLogIndex+1`）连同 `Success=false` 返回——语义是 "该位置无日志，请从我最后一条日志（9 号）之后开始发送"。
+3. **回退**：领导者据此回复将 `nextIndex` 回退到 10。
+
+**冲突 3：**
+
+![日志复制冲突3](images/appendEntries_conflict_3.svg)
+
+上图按时间顺序展示了情况 3 的处理方法，可与上表 **「日志已被压缩」** 一行对照阅读：
+1. **发送**：领导者发出 `AppendEntries`（`PrevLogIndex=12, PrevLogTerm=6`）。追随者中 `PrevLogIndex=12` 已被压缩，无法判断此处 `Term` 是否匹配，拒绝。
+2. **回复**：追随者发现日志已被压缩，于是将 `ConflictTerm=-1, ConflictIndex=15`（`15` 即 `LastIncludedIndex+1`）连同 `Success=false` 返回——语义是 "该位置日志被压缩无法判断，请从我快照之后开始发送"。
+3. **回退**：领导者据此回复将 `nextIndex` 推后到 15。
+
+冲突 2、3 实质都是领导者声明的 `PrevLogIndex` 处日志在追随者中不存在，无法分辨 `Term` 是否匹配。因此跟随者需要通过合理的回复引导领导者将不确定的冲突转化为确定。
+
+日志冲突可能需要多轮 RPC 才能解决，其状态流转如下图所示：
+
+![日志复制冲突转化](images/appendEntries_conflict_transition.svg)
+
+
+日志压缩可能导致冲突无法使用 AppendEntries 解决（领导者需要发送的日志已被截断），此时转为发送 InstallSnapshot。
 
 ### 提交推进与状态应用
 
