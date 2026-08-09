@@ -632,9 +632,13 @@ func (rf *Raft) newInstallSnapshotArgs() *InstallSnapshotArgs {
 
 // advanceCommitIndex is for a leader to check whether commit can be advanced and to notify applyReadyCh if it is the case
 func (rf *Raft) advanceCommitIndex() {
+	//if there exists an N such that N > commitIndex,
+	//a majority of matchIndex[i]>=N,
+	//and Log[N].term == CurrentTerm
+	//set commitIndex = N
 	for N := rf.lastLogIndex(); N > rf.commitIndex; N-- {
 		if rf.Log[rf.sliceIndex(N)].Term != rf.CurrentTerm { // this is to ensure never commit on terms other than its own
-			continue
+			break
 		}
 		count := 1
 		for j := 0; j < len(rf.peers); j++ {
@@ -741,15 +745,9 @@ func (rf *Raft) replicateToFollower(i int) bool {
 			rf.mu.Unlock()
 			return true
 		}
+		debug.D3BPrintf("%v-updated AppendEntries->%v till %v", rf.me, i, rf.matchIndex[i])
 		rf.matchIndex[i] = matchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
-		debug.D3BPrintf("%v-updated AppendEntries->%v till %v", rf.me, i, rf.matchIndex[i])
-
-		//if there exists an N such that N > commitIndex,
-		//a majority of matchIndex[i]>=N,
-		//and Log[N].term == CurrentTerm
-		//set commitIndex = N
-
 		rf.advanceCommitIndex()
 		rf.mu.Unlock()
 		return true
