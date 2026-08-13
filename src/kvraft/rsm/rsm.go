@@ -224,8 +224,8 @@ func (rsm *RSM) Submit(req any) (rpcapi.Err, any) {
 		case <-time.After(time.Millisecond * 100):
 			// if the server finds out that it's no longer the leader, it should reply ErrWrongLeader. But the semantics is twofold.
 			// the server doesn't know whether the Command actually will get committed or not, and cannot differentiate the two cases:
-			// case 1: it loses leadership before log getting duplicated to the majority and the log has no chance to get committed.
-			// case 2: it loses leadership before log getting committed, but the log has the potential to be committed (this refers to the case where the log has been duplicated to the majority, and this server loses leadership. the new leader then commits it indirectly in its own new term).
+			// case 1: it loses leadership before log getting replicated to the majority and the log has no chance to get committed.
+			// case 2: it loses leadership before log getting committed, but the log has the potential to be committed (this refers to the case where the log has been replicated to the majority, and this server loses leadership. the new leader then commits it indirectly in its own new term).
 			//
 			// so the two cases are different, but from the perspective of the ex-leader, it cannot know which is the case and could only reply ErrWrongLeader
 			// in case 1: this server replies ErrWrongLeader, because the operation wasn't successful and it's no longer a leader

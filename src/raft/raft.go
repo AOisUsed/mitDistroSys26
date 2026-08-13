@@ -708,6 +708,7 @@ func (rf *Raft) replicateToFollower(i int) bool {
 		if args.LastIncludedIndex > rf.matchIndex[i] {
 			rf.matchIndex[i] = args.LastIncludedIndex
 			rf.nextIndex[i] = args.LastIncludedIndex + 1
+			rf.advanceCommitIndex()
 		}
 		rf.mu.Unlock()
 		return true
